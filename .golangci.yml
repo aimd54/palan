@@ -1,0 +1,30 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - copyloopvar
+    - errorlint
+    - gosec
+    - misspell
+    - unconvert
+    - whitespace
+  exclusions:
+    generated: lax
+    rules:
+      # Tests may exec helper binaries, use fixed temp paths, etc.
+      - path: _test\.go
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/aimd54/moci

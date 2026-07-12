@@ -1,0 +1,22 @@
+# Build artifacts
+/bin/
+/dist/
+/moci
+
+# Test and coverage output
+coverage.out
+coverage.html
+*.test
+
+# Local tool caches (e2e model/runtime downloads)
+/hack/cache/
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
