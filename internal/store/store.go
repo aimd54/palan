@@ -172,9 +172,38 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 	return nil
 }
 
-// GC removes all blobs not reachable from a tagged manifest.
+// GC removes all blobs not reachable from a tagged manifest, plus any
+// leftover partial downloads in the ingest directory. GC callers hold the
+// exclusive lock, so no in-flight pull can lose its partials to GC.
 func (s *Store) GC(ctx context.Context) error {
-	return s.oci.GC(ctx)
+	if err := s.oci.GC(ctx); err != nil {
+		return err
+	}
+	ingest := filepath.Join(s.root, "ingest")
+	entries, err := os.ReadDir(ingest)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("reading ingest dir: %w", err)
+	}
+	for _, e := range entries {
+		if err := os.Remove(filepath.Join(ingest, e.Name())); err != nil {
+			return fmt.Errorf("removing stale partial %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// IngestDir returns (creating if needed) the directory holding partial
+// blob downloads, keyed by digest so interrupted pulls resume across
+// process restarts.
+func (s *Store) IngestDir() (string, error) {
+	p := filepath.Join(s.root, "ingest")
+	if err := os.MkdirAll(p, 0o750); err != nil {
+		return "", fmt.Errorf("creating ingest dir: %w", err)
+	}
+	return p, nil
 }
 
 // FetchJSON fetches a JSON blob from any fetcher (local store or remote
