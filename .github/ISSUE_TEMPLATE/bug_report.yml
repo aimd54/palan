@@ -1,0 +1,37 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Bug report
+description: Something misbehaves
+labels: ["kind/bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. moci pack …
+        2. moci push …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `moci version`, OS/arch, registry (zot/Harbor/…) and version.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text

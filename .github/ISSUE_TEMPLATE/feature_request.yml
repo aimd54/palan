@@ -1,0 +1,25 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Feature request
+description: Propose an enhancement
+labels: ["kind/feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including existing tools (oras, modctl, RamaLama, Ollama, …) and why they don't cover it.
