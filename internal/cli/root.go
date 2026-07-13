@@ -61,6 +61,7 @@ func New() *cobra.Command {
 	root.AddCommand(
 		newPullCmd(v),
 		newPushCmd(v),
+		newPackCmd(v),
 		newLsCmd(v),
 		newRmCmd(),
 		newGCCmd(),
