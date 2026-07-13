@@ -73,6 +73,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install interop tools (oras, modctl, cosign)
+        env:
+          # setup-go pins GOTOOLCHAIN=local to our go.mod minimum; these
+          # tools may require newer patch releases — let go auto-fetch them.
+          GOTOOLCHAIN: auto
         run: |
           go install oras.land/oras/cmd/oras@v1.3.3
           go install github.com/modelpack/modctl@v0.2.2
@@ -94,7 +98,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          # Scan with current stable Go: govulncheck checks the *standard
+          # library* of the toolchain in use, and our go.mod minimum
+          # (1.25.0) has stdlib CVEs fixed in later patch releases.
+          go-version: stable
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
