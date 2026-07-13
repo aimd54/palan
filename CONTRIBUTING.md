@@ -19,7 +19,7 @@ your git identity. Unsigned commits cannot be merged.
 
 We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
 
-```
+```text
 <type>(<optional scope>): <imperative subject>
 
 <body: what and why, wrapped at ~72 columns>
@@ -40,6 +40,7 @@ mismatch, rebuild it against your toolchain:
 make build      # build bin/moci
 make check      # gofmt, go vet, golangci-lint, tidy check, race-enabled unit tests
 make e2e        # end-to-end tests against a local zot registry (requires Docker)
+make lint-docs  # markdownlint over the docs (requires Node)
 make help       # list all targets
 ```
 

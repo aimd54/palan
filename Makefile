@@ -64,6 +64,10 @@ check: fmt-check vet lint tidy-check test ## All local gates (run before every c
 docs: ## Regenerate the CLI reference under docs/reference
 	go run ./hack/gendocs
 
+.PHONY: lint-docs
+lint-docs: ## Lint markdown files (requires Node; config in .markdownlint-cli2.yaml)
+	npx --yes markdownlint-cli2 "**/*.md"
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin dist coverage.out coverage.html

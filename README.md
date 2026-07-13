@@ -76,8 +76,8 @@ Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
 
 ## Documentation
 
-| | |
-|---|---|
+| Document | What it covers |
+| --- | --- |
 | [Quickstart](docs/quickstart.md) | zero to served model in ~5 minutes |
 | [Air-gap guide](docs/guides/air-gap.md) | sneakernet bundles, mirroring, offline verification |
 | [Kubernetes guide](docs/guides/kubernetes.md) | init puller, image volumes, KServe |

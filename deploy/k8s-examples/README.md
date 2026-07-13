@@ -9,7 +9,7 @@ fits your cluster:
 | [Image volume](image-volume.yaml) | K8s ≥ 1.36 (GA), containerd ≥ 2.1 | car (`…-car` tag) | kubelet-managed caching and dedup per node; no init container; digest-pinnable in GitOps | needs a recent runtime; car profile only |
 | [KServe modelcar](kserve.yaml) | KServe ≥ 0.12 | car | full serving platform (scaling, canary) | brings all of KServe |
 
-**Rules of thumb**
+## Rules of thumb
 
 - Starting out or on an older cluster → init-container puller.
 - K3s/containerd new enough and models change rarely → image volumes;

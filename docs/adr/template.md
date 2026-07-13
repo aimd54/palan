@@ -2,7 +2,7 @@
 
 - Status: proposed | accepted | superseded by ADR-YYYY
 - Date: YYYY-MM-DD
-- Deciders: <names>
+- Deciders: `<names>`
 
 ## Context
 

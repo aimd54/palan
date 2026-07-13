@@ -35,7 +35,7 @@ re-packing on both sides of the gap yields verifiable equality.
 
 Pick per your topology:
 
-**Sneakernet (no path at all)**
+### Sneakernet (no path at all)
 
 ```sh
 # Connected side — one bundle can carry several refs, blobs deduplicated:
@@ -54,7 +54,7 @@ The bundle is a tar of a standard OCI image layout — inspectable with
 host inside the bundle; re-tag on import side with a pull/push pair or use
 `moci cp` when a one-way path exists.
 
-**One-way network path (DMZ → inside)**
+### One-way network path (DMZ → inside)
 
 ```sh
 moci cp dmz.example/llm/qwen3:8b-instruct-q4_k_m \
