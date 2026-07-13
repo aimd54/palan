@@ -60,6 +60,10 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 .PHONY: check
 check: fmt-check vet lint tidy-check test ## All local gates (run before every commit; mirrored in CI)
 
+.PHONY: docs
+docs: ## Regenerate the CLI reference under docs/reference
+	go run ./hack/gendocs
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin dist coverage.out coverage.html
