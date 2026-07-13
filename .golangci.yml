@@ -27,6 +27,13 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      # The GGUF parser bound-checks every length before converting
+      # (maxKeyLen/maxStringLen/maxArrayLen); G115 cannot see those guards
+      # and its #nosec handling is unreliable.
+      - path: internal/gguf/
+        linters:
+          - gosec
+        text: "G115"
 
 formatters:
   enable:
