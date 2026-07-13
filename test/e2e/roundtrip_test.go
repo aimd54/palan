@@ -102,6 +102,39 @@ func TestPushPullRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveLoadAcrossStores: the sneakernet path — save on a connected
+// machine, load on an air-gapped one, byte-identical (M5 acceptance).
+func TestSaveLoadAcrossStores(t *testing.T) {
+	fx := writeFixtures(t, 512<<10)
+	ref := "registry.internal/llm/offline:v1"
+
+	homeA := t.TempDir()
+	packOut := moci(t, homeA, "pack", fx.ggufPath, "-t", ref)
+	packedDigest := firstDigest(t, packOut)
+	bundle := filepath.Join(t.TempDir(), "bundle.tar")
+	moci(t, homeA, "save", ref, "-o", bundle)
+
+	homeB := t.TempDir()
+	moci(t, homeB, "load", "-i", bundle)
+	var rows []struct {
+		Ref    string `json:"ref"`
+		Digest string `json:"digest"`
+	}
+	if err := json.Unmarshal([]byte(moci(t, homeB, "ls", "--json")), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Ref != ref || rows[0].Digest != packedDigest {
+		t.Errorf("loaded store rows wrong: %+v (want %s @ %s)", rows, ref, packedDigest)
+	}
+
+	sum := sha256.Sum256(fx.ggufBytes)
+	blob := filepath.Join(homeB, "blobs", "sha256", hex.EncodeToString(sum[:]))
+	got, err := os.ReadFile(blob)
+	if err != nil || !bytes.Equal(got, fx.ggufBytes) {
+		t.Errorf("weights corrupted through the bundle (%v)", err)
+	}
+}
+
 // TestRmAndGC: after rm + gc on a pulled model, the ref and its blobs are
 // gone; a re-pull restores them from the registry.
 func TestRmAndGC(t *testing.T) {

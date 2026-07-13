@@ -10,7 +10,6 @@ import (
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/registry"
 
 	"github.com/aimd54/moci/internal/store"
@@ -44,7 +43,7 @@ func (c *Client) Push(ctx context.Context, st *store.Store, ref registry.Referen
 		},
 	}
 
-	src := &progressSource{Store: st.OCI(), ev: ev}
+	src := &fetchCounter{ReadOnlyTarget: st.OCI(), ev: ev}
 	desc, err := oras.Copy(ctx, src, local, repo, ref.Reference, copyOpts)
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("pushing %s: %w", ref, err)
@@ -77,15 +76,14 @@ func mountCandidates(ctx context.Context, st *store.Store, ref registry.Referenc
 	return out, nil
 }
 
-// progressSource wraps the local store so blob reads during push report
-// byte progress.
-type progressSource struct {
-	*oci.Store
+// fetchCounter wraps a copy source so blob reads report byte progress.
+type fetchCounter struct {
+	oras.ReadOnlyTarget
 	ev Events
 }
 
-func (p *progressSource) Fetch(ctx context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
-	rc, err := p.Store.Fetch(ctx, desc)
+func (p *fetchCounter) Fetch(ctx context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
+	rc, err := p.ReadOnlyTarget.Fetch(ctx, desc)
 	if err != nil || isManifestMediaType(desc.MediaType) {
 		return rc, err
 	}
