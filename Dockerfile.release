@@ -4,6 +4,9 @@
 # Release image built by goreleaser from the prebuilt static binary
 # (the source-building Dockerfile at the repo root serves local builds).
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY moci /usr/local/bin/moci
+# goreleaser dockers_v2 lays the context out per platform (linux/amd64/moci,
+# linux/arm64/moci), so the copy source must be platform-qualified.
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/moci /usr/local/bin/moci
 ENV MOCI_HOME=/tmp/moci
 ENTRYPOINT ["/usr/local/bin/moci"]
