@@ -6,17 +6,17 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/aimd54/moci/internal/version"
+	"github.com/aimd54/moci/internal/cli"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(version.String())
-		return
-	}
-	fmt.Fprintln(os.Stderr, "moci: command surface not implemented yet; see docs/design/oci-llm-distribution.md")
-	os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := cli.Execute(ctx)
+	stop()
+	os.Exit(code)
 }

@@ -12,6 +12,14 @@ linters:
     - misspell
     - unconvert
     - whitespace
+  settings:
+    errcheck:
+      # Human-facing terminal output; a failed write to stdout/stderr is
+      # not actionable for a CLI.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
   exclusions:
     generated: lax
     rules:

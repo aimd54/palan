@@ -9,6 +9,7 @@
 package transfer
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -112,6 +113,48 @@ func (c *Client) Repository(ref registry.Reference) (*remote.Repository, error) 
 	repo.Client = c.authClient
 	repo.PlainHTTP = c.opts.PlainHTTP
 	return repo, nil
+}
+
+// Registry opens a handle on a whole registry (catalog and tag listing).
+func (c *Client) Registry(host string) (*remote.Registry, error) {
+	reg, err := remote.NewRegistry(host)
+	if err != nil {
+		return nil, fmt.Errorf("opening registry %s: %w", host, err)
+	}
+	reg.Client = c.authClient
+	reg.PlainHTTP = c.opts.PlainHTTP
+	return reg, nil
+}
+
+// Login validates credentials against host (ping) and saves them in the
+// Docker credentials store — a configured credential helper when present,
+// plaintext config.json otherwise.
+func (c *Client) Login(ctx context.Context, host, username, password string) error {
+	credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{AllowPlaintextPut: true})
+	if err != nil {
+		return fmt.Errorf("opening Docker credentials store: %w", err)
+	}
+	reg, err := remote.NewRegistry(host)
+	if err != nil {
+		return fmt.Errorf("opening registry %s: %w", host, err)
+	}
+	reg.PlainHTTP = c.opts.PlainHTTP
+	cred := auth.Credential{Username: username, Password: password}
+	reg.Client = &auth.Client{
+		Client:     c.authClient.Client,
+		Cache:      auth.NewCache(),
+		Credential: auth.StaticCredential(host, cred),
+	}
+	return credentials.Login(ctx, credStore, reg, cred)
+}
+
+// Logout removes stored credentials for host.
+func Logout(ctx context.Context, host string) error {
+	credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{})
+	if err != nil {
+		return fmt.Errorf("opening Docker credentials store: %w", err)
+	}
+	return credentials.Logout(ctx, credStore, host)
 }
 
 // concurrency returns the effective parallel stream count.
