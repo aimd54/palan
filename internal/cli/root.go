@@ -67,6 +67,7 @@ func New() *cobra.Command {
 		newGCCmd(),
 		newLoginCmd(v),
 		newLogoutCmd(),
+		newRuntimeCmd(v),
 		newVersionCmd(),
 	)
 	return root
