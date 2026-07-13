@@ -11,6 +11,7 @@
 //
 //	FAKELLAMA_STARTUP_DELAY  duration before /health flips to 200 (default 0)
 //	FAKELLAMA_EXIT_AFTER     duration after which the process exits 7 (crash)
+//	FAKELLAMA_RESPONSE_DELAY duration each completion waits before answering
 package main
 
 import (
@@ -89,6 +90,13 @@ func main() {
 		})
 	})
 	complete := func(w http.ResponseWriter, r *http.Request) {
+		if d, err := time.ParseDuration(os.Getenv("FAKELLAMA_RESPONSE_DELAY")); err == nil && d > 0 {
+			select {
+			case <-time.After(d):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		var req struct {
 			Model    string `json:"model"`
 			Stream   bool   `json:"stream"`
