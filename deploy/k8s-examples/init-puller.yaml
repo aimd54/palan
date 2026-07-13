@@ -1,0 +1,86 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pattern 1 (design §10.1): an init container pulls the model into an
+# emptyDir with moci (digest-verified, resumable), then any llama-server
+# image serves it. Works on every Kubernetes version.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen3-8b
+  labels:
+    app.kubernetes.io/name: qwen3-8b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qwen3-8b
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qwen3-8b
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: pull-model
+          # Published by this repo's release pipeline; digest-pin in GitOps.
+          image: ghcr.io/aimd54/moci:latest
+          args:
+            - pull
+            - registry.internal/llm/qwen3:8b-instruct-q4_k_m
+            - --output=/models
+          env:
+            - name: MOCI_HOME
+              value: /work
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: work
+              mountPath: /work
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      containers:
+        - name: llama-server
+          image: ghcr.io/ggml-org/llama.cpp:server
+          args:
+            - -m
+            - /models/qwen3-8b-instruct-q4_k_m.gguf
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "2", memory: 6Gi }
+            limits: { memory: 8Gi }
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: work
+          emptyDir: {}

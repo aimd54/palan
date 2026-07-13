@@ -1,0 +1,107 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Helm values for the upstream zot chart (https://zotregistry.dev,
+# chart repo https://project-zot.github.io/helm-charts). Keys below track
+# the upstream chart; run `helm show values project-zot/zot` against your
+# pinned chart version before applying (see README.md in this directory).
+#
+# Design references: docs/design/oci-llm-distribution.md §6, ADR-0002.
+
+image:
+  repository: ghcr.io/project-zot/zot-linux-amd64
+  # Pin and bump deliberately; keep in sync with the e2e pin.
+  tag: "v2.1.18"
+
+service:
+  type: ClusterIP
+  port: 5000
+
+# zot reads one config file; the chart mounts it from this block.
+mountConfig: true
+configFiles:
+  config.json: |-
+    {
+      "distSpecVersion": "1.1.1",
+      "storage": {
+        "rootDirectory": "/var/lib/zot",
+        "gc": true,
+        "dedupe": true,
+        "storageDriver": {
+          "name": "s3",
+          "region": "main",
+          "regionendpoint": "https://minio.internal:9000",
+          "bucket": "zot-models",
+          "secure": true,
+          "forcepathstyle": true
+        },
+        "redirectBlobURL": true
+      },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "5000",
+        "auth": {
+          "openid": {
+            "providers": {
+              "oidc": {
+                "issuer": "https://sso.internal",
+                "scopes": ["openid", "profile", "email", "groups"],
+                "credentialsFile": "/secret/oidc-credentials.json"
+              }
+            }
+          }
+        },
+        "accessControl": {
+          "repositories": {
+            "llm/**":      { "policies": [], "anonymousPolicy": ["read"], "defaultPolicy": ["read"] },
+            "runtimes/**": { "policies": [], "defaultPolicy": ["read"] }
+          },
+          "adminPolicy": { "users": ["admin"], "actions": ["read", "create", "update", "delete"] }
+        }
+      },
+      "extensions": {
+        "search": { "enable": true },
+        "ui":     { "enable": true },
+        "metrics": { "enable": true, "prometheus": { "path": "/metrics" } }
+      }
+    }
+
+# S3 credentials: provide via an existing Secret and env, never inline
+# (pair with your secrets tooling — SOPS, sealed-secrets, external-secrets…).
+env:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef: { name: zot-s3-credentials, key: access-key }
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef: { name: zot-s3-credentials, key: secret-key }
+
+extraVolumes:
+  - name: oidc-credentials
+    secret:
+      secretName: zot-oidc-credentials
+extraVolumeMounts:
+  - name: oidc-credentials
+    mountPath: /secret
+    readOnly: true
+
+# Blob data lives in MinIO; no PVC needed beyond zot's small local state.
+persistence: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false # zot writes /var/lib/zot local state
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+# TLS: terminate at your ingress with the internal CA, or add zot-level
+# TLS via extraVolumes + http.tls in config.json (see README.md).

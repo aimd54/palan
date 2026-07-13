@@ -1,0 +1,23 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pattern 3 (design §10.3): KServe modelcars — the storageUri points at the
+# car-profile image. Requires KServe ≥ 0.12 with modelcars enabled
+# (`enableModelcar: true` in the inferenceservice-config ConfigMap).
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen3-8b
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: gguf
+      # KServe mounts the image and exposes its content to the runtime.
+      storageUri: oci://registry.internal/llm/qwen3:8b-instruct-q4_k_m-car
+      # Runtime wiring (which ServingRuntime serves GGUF) is cluster-
+      # specific; a llama.cpp ServingRuntime definition is a natural
+      # companion but out of scope for this example.
+      resources:
+        requests: { cpu: "2", memory: 6Gi }
+        limits: { memory: 8Gi }
