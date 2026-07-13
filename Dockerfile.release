@@ -1,0 +1,9 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release image built by goreleaser from the prebuilt static binary
+# (the source-building Dockerfile at the repo root serves local builds).
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY moci /usr/local/bin/moci
+ENV MOCI_HOME=/tmp/moci
+ENTRYPOINT ["/usr/local/bin/moci"]

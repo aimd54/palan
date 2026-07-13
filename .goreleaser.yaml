@@ -1,0 +1,101 @@
+# Copyright The moci Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release pipeline: static binaries for linux/amd64, linux/arm64, and
+# darwin/arm64 (design §13), SBOMs, checksums signed keylessly with cosign
+# in CI, and the distroless puller image.
+
+version: 2
+
+project_name: moci
+
+builds:
+  - id: moci
+    main: ./cmd/moci
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/aimd54/moci/internal/version.version={{ .Version }}
+      - -X github.com/aimd54/moci/internal/version.commit={{ .ShortCommit }}
+      - -X github.com/aimd54/moci/internal/version.date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: amd64 # v0.x targets Linux + macOS arm64 (design §3)
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+signs:
+  # Keyless signature over the checksum file (CI provides the OIDC token);
+  # verify with:
+  #   cosign verify-blob --certificate checksums.txt.pem \
+  #     --signature checksums.txt.sig \
+  #     --certificate-identity-regexp 'github.com/aimd54/moci' \
+  #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  #     checksums.txt
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --yes
+      - --output-certificate=${certificate}
+      - --output-signature=${signature}
+      - ${artifact}
+    artifacts: checksum
+    output: true
+
+dockers_v2:
+  - id: puller
+    ids: [moci]
+    dockerfile: Dockerfile.release
+    images:
+      - ghcr.io/aimd54/moci
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.source: https://github.com/aimd54/moci
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.description: Distribute and serve GGUF models as OCI artifacts
+
+changelog:
+  use: git
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Documentation
+      regexp: '^docs'
+      order: 2
+    - title: Other
+      order: 999
+
+release:
+  footer: |
+    ---
+    Binaries are static (CGO disabled). The checksum file is signed with
+    cosign (keyless); see `.goreleaser.yaml` for the verify command.
