@@ -1,9 +1,10 @@
 // Copyright The moci Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package transfer
+package registrytest
 
-// A minimal in-process OCI Distribution registry for hermetic tests:
+// Package registrytest provides a minimal in-process OCI Distribution
+// registry for hermetic tests:
 // manifests, blobs with HTTP Range support (via http.ServeContent),
 // monolithic POST+PUT uploads, cross-repo mounts, request logging, and
 // mid-stream connection-failure injection for resume tests.
@@ -29,21 +30,21 @@ type manifestEntry struct {
 	data      []byte
 }
 
-type reqRecord struct {
+type ReqRecord struct {
 	Method string
 	Path   string
 	Range  string
 }
 
-type testRegistry struct {
-	t *testing.T
+type Registry struct {
+	t testing.TB
 
 	mu        sync.Mutex
 	blobs     map[string]map[digest.Digest][]byte // repo → digest → content
 	manifests map[string]map[string]manifestEntry // repo → tag|digest → entry
 	uploads   map[string]string                   // upload id → repo
 	nextID    int
-	requests  []reqRecord
+	requests  []ReqRecord
 
 	// failBlobReads[d] > 0 makes the next GET of blob d serve only
 	// failAfterBytes bytes and then drop the connection.
@@ -57,9 +58,9 @@ type testRegistry struct {
 	srv *httptest.Server
 }
 
-func newTestRegistry(t *testing.T) *testRegistry {
+func New(t testing.TB) *Registry {
 	t.Helper()
-	r := &testRegistry{
+	r := &Registry{
 		t:             t,
 		blobs:         map[string]map[digest.Digest][]byte{},
 		manifests:     map[string]map[string]manifestEntry{},
@@ -72,11 +73,11 @@ func newTestRegistry(t *testing.T) *testRegistry {
 }
 
 // host returns the registry host:port (no scheme).
-func (r *testRegistry) host() string {
+func (r *Registry) Host() string {
 	return strings.TrimPrefix(r.srv.URL, "http://")
 }
 
-func (r *testRegistry) putBlob(repo string, content []byte) digest.Digest {
+func (r *Registry) PutBlob(repo string, content []byte) digest.Digest {
 	d := digest.FromBytes(content)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -87,7 +88,7 @@ func (r *testRegistry) putBlob(repo string, content []byte) digest.Digest {
 	return d
 }
 
-func (r *testRegistry) putManifest(repo, ref, mediaType string, data []byte) digest.Digest {
+func (r *Registry) PutManifest(repo, ref, mediaType string, data []byte) digest.Digest {
 	d := digest.FromBytes(data)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -100,7 +101,7 @@ func (r *testRegistry) putManifest(repo, ref, mediaType string, data []byte) dig
 	return d
 }
 
-func (r *testRegistry) hasBlob(repo string, d digest.Digest) bool {
+func (r *Registry) HasBlob(repo string, d digest.Digest) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.blobs[repo][d]
@@ -109,7 +110,7 @@ func (r *testRegistry) hasBlob(repo string, d digest.Digest) bool {
 
 // countRequests returns how many logged requests match method and a path
 // substring.
-func (r *testRegistry) countRequests(method, pathPart string) int {
+func (r *Registry) CountRequests(method, pathPart string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := 0
@@ -122,7 +123,7 @@ func (r *testRegistry) countRequests(method, pathPart string) int {
 }
 
 // rangeRequests returns the Range header values seen on GETs of the blob.
-func (r *testRegistry) rangeRequests(d digest.Digest) []string {
+func (r *Registry) RangeRequests(d digest.Digest) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []string
@@ -141,9 +142,9 @@ var (
 	reManifest   = regexp.MustCompile(`^/v2/(.+)/manifests/([^/]+)$`)
 )
 
-func (r *testRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
-	r.requests = append(r.requests, reqRecord{Method: req.Method, Path: req.URL.Path, Range: req.Header.Get("Range")})
+	r.requests = append(r.requests, ReqRecord{Method: req.Method, Path: req.URL.Path, Range: req.Header.Get("Range")})
 	r.mu.Unlock()
 
 	path := req.URL.Path
@@ -171,7 +172,7 @@ func (r *testRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (r *testRegistry) handleUploadStart(w http.ResponseWriter, req *http.Request, repo string) {
+func (r *Registry) handleUploadStart(w http.ResponseWriter, req *http.Request, repo string) {
 	q := req.URL.Query()
 	if mount, from := q.Get("mount"), q.Get("from"); mount != "" && from != "" {
 		d, err := digest.Parse(mount)
@@ -201,7 +202,7 @@ func (r *testRegistry) handleUploadStart(w http.ResponseWriter, req *http.Reques
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (r *testRegistry) handleUploadPut(w http.ResponseWriter, req *http.Request, repo string) {
+func (r *Registry) handleUploadPut(w http.ResponseWriter, req *http.Request, repo string) {
 	dq := req.URL.Query().Get("digest")
 	want, err := digest.Parse(dq)
 	if err != nil {
@@ -223,7 +224,7 @@ func (r *testRegistry) handleUploadPut(w http.ResponseWriter, req *http.Request,
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (r *testRegistry) handleManifest(w http.ResponseWriter, req *http.Request, repo, ref string) {
+func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request, repo, ref string) {
 	switch req.Method {
 	case http.MethodPut:
 		body, err := io.ReadAll(req.Body)
@@ -231,7 +232,7 @@ func (r *testRegistry) handleManifest(w http.ResponseWriter, req *http.Request, 
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
 		}
-		d := r.putManifest(repo, ref, req.Header.Get("Content-Type"), body)
+		d := r.PutManifest(repo, ref, req.Header.Get("Content-Type"), body)
 		w.Header().Set("Docker-Content-Digest", d.String())
 		w.WriteHeader(http.StatusCreated)
 
@@ -255,7 +256,7 @@ func (r *testRegistry) handleManifest(w http.ResponseWriter, req *http.Request, 
 	}
 }
 
-func (r *testRegistry) handleBlob(w http.ResponseWriter, req *http.Request, repo, dg string) {
+func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request, repo, dg string) {
 	d, err := digest.Parse(dg)
 	if err != nil {
 		http.Error(w, "bad digest", http.StatusBadRequest)
@@ -317,5 +318,55 @@ func (r *testRegistry) handleBlob(w http.ResponseWriter, req *http.Request, repo
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// SetFailBlobReads makes the next n GETs of blob d serve only afterBytes
+// bytes and then drop the connection.
+func (r *Registry) SetFailBlobReads(d digest.Digest, n int, afterBytes int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failBlobReads[d] = n
+	r.failAfterBytes = afterBytes
+}
+
+// SetIgnoreRange makes blob GETs disregard Range headers.
+func (r *Registry) SetIgnoreRange(v bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ignoreRange = v
+}
+
+// SetCorruptBlob serves flipped bytes for this digest.
+func (r *Registry) SetCorruptBlob(d digest.Digest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.corruptBlob = d
+}
+
+// HasManifest reports whether repo has a manifest under ref.
+func (r *Registry) HasManifest(repo, ref string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.manifests[repo][ref]
+	return ok
+}
+
+// Requests returns a snapshot of the request log.
+func (r *Registry) Requests() []ReqRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]ReqRecord, len(r.requests))
+	copy(out, r.requests)
+	return out
+}
+
+// CopyManifest republished the manifest stored under srcRef in repo under
+// dstRef — used to simulate signature-substitution attacks in tests.
+func (r *Registry) CopyManifest(repo, srcRef, dstRef string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.manifests[repo][srcRef]; ok {
+		r.manifests[repo][dstRef] = e
 	}
 }

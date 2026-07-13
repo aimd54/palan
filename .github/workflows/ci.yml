@@ -72,10 +72,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-      - name: Install interop tools (oras, modctl)
+      - name: Install interop tools (oras, modctl, cosign)
         run: |
           go install oras.land/oras/cmd/oras@v1.3.3
           go install github.com/modelpack/modctl@v0.2.2
+          go install github.com/sigstore/cosign/v2/cmd/cosign@v2.6.3
       - name: Run e2e suite
         env:
           E2E_REGISTRY: localhost:5000

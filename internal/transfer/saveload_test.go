@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aimd54/moci/internal/registrytest"
 )
 
 // TestSaveLoadRoundTrip: two refs sharing blobs export to one bundle and
@@ -90,14 +92,14 @@ func TestLoadRejectsEmptyBundle(t *testing.T) {
 
 // TestCpRegistryToRegistry: direct registry→registry streaming.
 func TestCpRegistryToRegistry(t *testing.T) {
-	regA := newTestRegistry(t)
-	regB := newTestRegistry(t)
+	regA := registrytest.New(t)
+	regB := registrytest.New(t)
 	weights := randomBytes(t, 512<<10)
 	mDesc, wDesc := seedRegistryModel(t, regA, "llm/tiny", "q4", weights)
 
 	c := newTestClient(t)
-	src := mustParse(t, regA.host()+"/llm/tiny:q4")
-	dst := mustParse(t, regB.host()+"/llm/mirrored:q4")
+	src := mustParse(t, regA.Host()+"/llm/tiny:q4")
+	dst := mustParse(t, regB.Host()+"/llm/mirrored:q4")
 
 	got, err := c.Copy(context.Background(), src, dst, Events{})
 	if err != nil {
@@ -106,13 +108,10 @@ func TestCpRegistryToRegistry(t *testing.T) {
 	if got.Digest != mDesc.Digest {
 		t.Errorf("copied digest %s, want %s", got.Digest, mDesc.Digest)
 	}
-	if !regB.hasBlob("llm/mirrored", wDesc.Digest) {
+	if !regB.HasBlob("llm/mirrored", wDesc.Digest) {
 		t.Error("weights did not arrive at destination registry")
 	}
-	regB.mu.Lock()
-	_, ok := regB.manifests["llm/mirrored"]["q4"]
-	regB.mu.Unlock()
-	if !ok {
+	if !regB.HasManifest("llm/mirrored", "q4") {
 		t.Error("manifest did not arrive at destination registry")
 	}
 }

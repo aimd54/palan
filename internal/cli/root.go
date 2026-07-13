@@ -70,6 +70,8 @@ func New() *cobra.Command {
 		newGCCmd(),
 		newLoginCmd(v),
 		newLogoutCmd(),
+		newSignCmd(v),
+		newVerifyCmd(v),
 		newRuntimeCmd(v),
 		newRunCmd(v),
 		newServeCmd(v),

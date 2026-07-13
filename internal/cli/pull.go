@@ -21,7 +21,11 @@ import (
 )
 
 func newPullCmd(v *viper.Viper) *cobra.Command {
-	var outputDir string
+	var (
+		outputDir string
+		doVerify  bool
+		verifyKey string
+	)
 	cmd := &cobra.Command{
 		Use:   "pull REF",
 		Short: "Pull a model from a registry into the local store",
@@ -54,6 +58,25 @@ llama-server image.`,
 			if err != nil {
 				return err
 			}
+
+			// Signature gate (design §11): verify the manifest signature
+			// BEFORE any weight bytes move, when asked or when the config
+			// enforces verify.required.
+			if doVerify || v.GetBool(keyVerifyRequired) {
+				repo, err := client.Repository(ref)
+				if err != nil {
+					return err
+				}
+				desc, err := repo.Resolve(ctx, ref.Reference)
+				if err != nil {
+					return err
+				}
+				if err := verifyDigest(ctx, v, verifyKey, client, ref, desc.Digest); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)
+			}
+
 			pr := newProgress(v.GetBool("quiet"))
 			desc, err := client.Pull(ctx, st, ref, pr.events())
 			pr.close(err)
@@ -76,6 +99,8 @@ llama-server image.`,
 		},
 	}
 	cmd.Flags().StringVarP(&outputDir, "output", "o", "", "also materialize the model files into this directory")
+	cmd.Flags().BoolVar(&doVerify, "verify", false, "verify the artifact's signature before downloading (always on when verify.required is set)")
+	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
 	return cmd
 }
 
