@@ -66,6 +66,7 @@ func New() *cobra.Command {
 		newSaveCmd(),
 		newLoadCmd(),
 		newLsCmd(v),
+		newDescribeCmd(v),
 		newRmCmd(),
 		newGCCmd(),
 		newLoginCmd(v),

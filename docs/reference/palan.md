@@ -23,6 +23,7 @@ against any OCI 1.1 registry — daemonless, in one binary.
 ### SEE ALSO
 
 * [palan cp](palan_cp.md)	 - Copy a model between registries
+* [palan describe](palan_describe.md)	 - Show a model's metadata, annotations, and layer digests
 * [palan gc](palan_gc.md)	 - Reclaim disk space from unreferenced blobs
 * [palan load](palan_load.md)	 - Import models from a tar bundle
 * [palan login](palan_login.md)	 - Log in to a registry

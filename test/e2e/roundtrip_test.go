@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aimd54/palan/internal/gguf/gguftest"
@@ -157,5 +158,68 @@ func TestRmAndGC(t *testing.T) {
 	palan(t, home, "pull", ref)
 	if _, err := os.Stat(blobPath); err != nil {
 		t.Errorf("re-pull did not restore the blob: %v", err)
+	}
+}
+
+// TestDescribe: metadata questions are answered without weights moving —
+// locally right after a pack, and remotely (manifest + config blob only)
+// from a store that never pulled the model.
+func TestDescribe(t *testing.T) {
+	host := registryHost(t)
+	fx := writeFixtures(t, 256<<10)
+	ref := host + "/llm/describe-check:v1"
+
+	type detail struct {
+		Ref    string `json:"ref"`
+		Kind   string `json:"kind"`
+		Family string `json:"family"`
+		Size   int64  `json:"size"`
+		Digest string `json:"digest"`
+		Source string `json:"source"`
+		Layers []struct {
+			MediaType string `json:"mediaType"`
+			Size      int64  `json:"size"`
+			Digest    string `json:"digest"`
+		} `json:"layers"`
+	}
+
+	homeA := t.TempDir()
+	packOut := palan(t, homeA, "pack", fx.ggufPath, "-t", ref)
+	packedDigest := firstDigest(t, packOut)
+	palan(t, homeA, "push", ref)
+
+	var local detail
+	if err := json.Unmarshal([]byte(palan(t, homeA, "describe", ref, "--json")), &local); err != nil {
+		t.Fatalf("describe --json: %v", err)
+	}
+	if local.Source != "local" || local.Kind != "model" || local.Digest != packedDigest {
+		t.Errorf("local describe wrong: %+v", local)
+	}
+	if len(local.Layers) == 0 {
+		t.Fatal("describe shows no layers")
+	}
+	var layerSum int64
+	for _, l := range local.Layers {
+		if !strings.HasPrefix(l.Digest, "sha256:") {
+			t.Errorf("layer digest %q not sha256-addressed", l.Digest)
+		}
+		layerSum += l.Size
+	}
+	if layerSum != local.Size {
+		t.Errorf("layer sizes sum to %d, size reports %d", layerSum, local.Size)
+	}
+
+	// A fresh store answers from the registry without pulling weights.
+	homeB := t.TempDir()
+	var remote detail
+	if err := json.Unmarshal([]byte(palan(t, homeB, "describe", ref, "--json")), &remote); err != nil {
+		t.Fatalf("remote describe --json: %v", err)
+	}
+	if remote.Source != "remote" || remote.Kind != "model" || remote.Family != "llama" || remote.Digest != packedDigest {
+		t.Errorf("remote describe wrong: %+v", remote)
+	}
+	sum := sha256.Sum256(fx.ggufBytes)
+	if _, err := os.Stat(filepath.Join(homeB, "blobs", "sha256", hex.EncodeToString(sum[:]))); err == nil {
+		t.Error("describe pulled weight bytes into the store")
 	}
 }
