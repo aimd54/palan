@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package signing
@@ -22,7 +22,7 @@ import (
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 
-	"github.com/aimd54/moci/internal/registrytest"
+	"github.com/aimd54/palan/internal/registrytest"
 )
 
 func testKeypair(t *testing.T) (*ecdsa.PrivateKey, []byte, []byte) {

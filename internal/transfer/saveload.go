@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -20,7 +20,7 @@ import (
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/registry"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // Copy transfers an artifact between two registries without touching the
@@ -49,10 +49,10 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 }
 
 // Save exports refs from the local store into a tar stream containing a
-// standard OCI image layout — readable by any OCI tool, not just moci
+// standard OCI image layout — readable by any OCI tool, not just palan
 // (design §8.1: sneakernet bundles).
 func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) error {
-	tmp, err := os.MkdirTemp("", "moci-save-*")
+	tmp, err := os.MkdirTemp("", "palan-save-*")
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) erro
 // Load imports every tagged reference from a tar'd OCI image layout into
 // the local store and returns the imported refs.
 func Load(ctx context.Context, st *store.Store, r io.Reader) ([]string, error) {
-	tmp, err := os.MkdirTemp("", "moci-load-*")
+	tmp, err := os.MkdirTemp("", "palan-load-*")
 	if err != nil {
 		return nil, err
 	}

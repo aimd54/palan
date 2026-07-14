@@ -1,4 +1,4 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 
 name: CI
@@ -65,7 +65,7 @@ jobs:
       - name: Build and smoke-test the binary
         run: |
           make build
-          ./bin/moci version
+          ./bin/palan version
 
   e2e:
     name: End-to-end and interop

@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -10,9 +10,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/pack"
-	"github.com/aimd54/moci/internal/refname"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/pack"
+	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 func newPackCmd(v *viper.Viper) *cobra.Command {
@@ -129,8 +129,8 @@ modelcars; tagged REF-car), or "both".`,
 	cmd.Flags().StringVar(&profile, "profile", "artifact", "output profile: artifact|car|both")
 	cmd.Flags().StringVar(&sourceURL, "source", "", "upstream source URL (org.opencontainers.image.source)")
 	cmd.Flags().StringVar(&license, "license", "", "SPDX license expression (default: the GGUF header's general.license)")
-	cmd.Flags().IntVar(&ctxSize, "ctx", 0, "default context size for serving (io.moci.serve.defaults)")
-	cmd.Flags().IntVar(&ngl, "ngl", 0, "default GPU layer count for serving (io.moci.serve.defaults)")
+	cmd.Flags().IntVar(&ctxSize, "ctx", 0, "default context size for serving (io.palan.serve.defaults)")
+	cmd.Flags().IntVar(&ngl, "ngl", 0, "default GPU layer count for serving (io.palan.serve.defaults)")
 	cmd.Flags().StringVar(&originSHA, "origin-sha256", "", "SHA-256 of the original upstream file (default: the weight digest)")
 	cmd.Flags().BoolVar(&doPush, "push", false, "push to the registry after packing")
 	must(cmd.MarkFlagRequired("tag"))

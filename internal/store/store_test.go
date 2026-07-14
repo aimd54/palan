@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package store
@@ -18,7 +18,7 @@ import (
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
 
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -225,13 +225,13 @@ func TestExclusiveLockBlocks(t *testing.T) {
 }
 
 func TestDefaultRootPrecedence(t *testing.T) {
-	t.Setenv(EnvHome, "/custom/moci-home")
-	if got, _ := DefaultRoot(); got != "/custom/moci-home" {
-		t.Errorf("MOCI_HOME not honored: %s", got)
+	t.Setenv(EnvHome, "/custom/palan-home")
+	if got, _ := DefaultRoot(); got != "/custom/palan-home" {
+		t.Errorf("PALAN_HOME not honored: %s", got)
 	}
 	t.Setenv(EnvHome, "")
 	t.Setenv("XDG_DATA_HOME", "/xdg/data")
-	if got, _ := DefaultRoot(); got != filepath.Join("/xdg/data", "moci") {
+	if got, _ := DefaultRoot(); got != filepath.Join("/xdg/data", "palan") {
 		t.Errorf("XDG_DATA_HOME not honored: %s", got)
 	}
 }

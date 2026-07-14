@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package pack builds ModelPack artifacts from GGUF files.
@@ -33,9 +33,9 @@ import (
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 
-	"github.com/aimd54/moci/internal/gguf"
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/gguf"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // File is one input to pack.
@@ -55,10 +55,10 @@ type Options struct {
 	SourceURL string
 	// License (SPDX expression) overrides the GGUF header's general.license.
 	License string
-	// ServeDefaults, when non-nil, is embedded as io.moci.serve.defaults.
+	// ServeDefaults, when non-nil, is embedded as io.palan.serve.defaults.
 	ServeDefaults *modelspec.ServeDefaults
 	// OriginSHA256 records the SHA-256 of the original upstream file
-	// (io.moci.origin.sha256); defaults to the primary weight digest, which
+	// (io.palan.origin.sha256); defaults to the primary weight digest, which
 	// is identical for raw packing.
 	OriginSHA256 string
 }

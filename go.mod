@@ -1,4 +1,4 @@
-module github.com/aimd54/moci
+module github.com/aimd54/palan
 
 go 1.25.0
 

@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package runtime
@@ -32,7 +32,7 @@ type Spec struct {
 	// CtxSize and NGL map to --ctx-size / --n-gpu-layers when > 0.
 	CtxSize int
 	NGL     int
-	// ExtraArgs are appended last (io.moci.serve.defaults flags, overrides).
+	// ExtraArgs are appended last (io.palan.serve.defaults flags, overrides).
 	ExtraArgs []string
 	// LogDir receives <alias>-<port>.log; empty discards logs.
 	LogDir string

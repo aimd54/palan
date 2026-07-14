@@ -1,4 +1,4 @@
-## moci runtime
+## palan runtime
 
 Manage inference runtimes distributed as OCI artifacts
 
@@ -19,7 +19,7 @@ hosts receive inference engines through the already-established channel.
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -28,8 +28,8 @@ hosts receive inference engines through the already-established channel.
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
-* [moci runtime ls](moci_runtime_ls.md)	 - List runtime artifacts in the local store
-* [moci runtime pack](moci_runtime_pack.md)	 - Pack a llama-server build as a runtime artifact
-* [moci runtime pull](moci_runtime_pull.md)	 - Pull a runtime artifact and materialize its executable
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan runtime ls](palan_runtime_ls.md)	 - List runtime artifacts in the local store
+* [palan runtime pack](palan_runtime_pack.md)	 - Pack a llama-server build as a runtime artifact
+* [palan runtime pull](palan_runtime_pull.md)	 - Pull a runtime artifact and materialize its executable
 

@@ -1,16 +1,19 @@
-## moci verify
+## palan rm
 
-Verify a model's signature against a public key
+Unlink model references from the local store
+
+### Synopsis
+
+rm removes references; blob content stays on disk until `palan gc` reclaims it.
 
 ```
-moci verify REF --key FILE [flags]
+palan rm REF... [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help         help for verify
-      --key string   public key file (cosign.pub; default: verify.key from the config)
+  -h, --help   help for rm
 ```
 
 ### Options inherited from parent commands
@@ -18,7 +21,7 @@ moci verify REF --key FILE [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -27,5 +30,5 @@ moci verify REF --key FILE [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -10,8 +10,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
 
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // modelRow is one listing entry, shared by local and remote ls.

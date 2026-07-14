@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package pack
@@ -16,7 +16,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // carPrefix is the in-image directory holding the model files, following

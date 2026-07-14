@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -23,10 +23,10 @@ import (
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote/auth"
 
-	"github.com/aimd54/moci/internal/refname"
-	"github.com/aimd54/moci/internal/registrytest"
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/internal/registrytest"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 const testConfigJSON = `{"descriptor":{"name":"tiny"},"modelfs":{"type":"layers","diffIds":[]},"config":{"format":"gguf"}}`
@@ -36,7 +36,7 @@ func newTestClient(t *testing.T) *Client {
 	c, err := New(Options{
 		PlainHTTP:  true,
 		Credential: auth.StaticCredential("", auth.EmptyCredential),
-		UserAgent:  "moci-test",
+		UserAgent:  "palan-test",
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)

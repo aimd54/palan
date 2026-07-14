@@ -5,7 +5,7 @@ fits your cluster:
 
 | Pattern | Works on | Profile served | Pros | Cons |
 |---|---|---|---|---|
-| [Init-container puller](init-puller.yaml) | any Kubernetes | artifact | works everywhere today; moci handles auth/resume/verification | model copied into an emptyDir per pod |
+| [Init-container puller](init-puller.yaml) | any Kubernetes | artifact | works everywhere today; palan handles auth/resume/verification | model copied into an emptyDir per pod |
 | [Image volume](image-volume.yaml) | K8s ≥ 1.36 (GA), containerd ≥ 2.1 | car (`…-car` tag) | kubelet-managed caching and dedup per node; no init container; digest-pinnable in GitOps | needs a recent runtime; car profile only |
 | [KServe modelcar](kserve.yaml) | KServe ≥ 0.12 | car | full serving platform (scaling, canary) | brings all of KServe |
 
@@ -26,6 +26,6 @@ profile's future, design §16.4 — run on the actual cluster):
 
 **Auth without static secrets**: zot accepts OIDC bearer tokens; give pods a
 projected ServiceAccount token whose issuer zot trusts, and set
-`MOCI_REGISTRY_…` env or a mounted config accordingly. Fallback: a pull
-secret consumed as `~/.docker/config.json` (moci reads the Docker
+`PALAN_REGISTRY_…` env or a mounted config accordingly. Fallback: a pull
+secret consumed as `~/.docker/config.json` (palan reads the Docker
 credentials store).

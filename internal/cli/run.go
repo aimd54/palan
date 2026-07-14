@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -16,10 +16,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/refname"
-	mociruntime "github.com/aimd54/moci/internal/runtime"
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/refname"
+	palanruntime "github.com/aimd54/palan/internal/runtime"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // keyRuntimeRef configures the default runtime artifact used by run/serve.
@@ -59,7 +59,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			}
 
 			// Serve parameters: pack-time defaults, overridden by flags.
-			spec := mociruntime.Spec{
+			spec := palanruntime.Spec{
 				ModelPath: model.blobPath,
 				Alias:     ref.String(),
 				CtxSize:   model.defaults.Ctx,
@@ -76,12 +76,12 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
-			if spec.Bin, err = mociruntime.Resolve(ctx, st, runtimeRef); err != nil {
+			if spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef); err != nil {
 				return err
 			}
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s on %s…\n", filepath.Base(spec.Bin), ref)
-			srv, err := mociruntime.Start(ctx, spec)
+			srv, err := palanruntime.Start(ctx, spec)
 			if err != nil {
 				return err
 			}

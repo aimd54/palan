@@ -1,23 +1,15 @@
-## moci login
+## palan runtime ls
 
-Log in to a registry
-
-### Synopsis
-
-Login validates credentials against the registry and saves them in the
-Docker credentials store (a configured credential helper, or
-~/.docker/config.json otherwise).
+List runtime artifacts in the local store
 
 ```
-moci login REGISTRY [flags]
+palan runtime ls [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help              help for login
-      --password-stdin    read the password from stdin
-  -u, --username string   registry username
+  -h, --help   help for ls
 ```
 
 ### Options inherited from parent commands
@@ -25,7 +17,7 @@ moci login REGISTRY [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -34,5 +26,5 @@ moci login REGISTRY [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan runtime](palan_runtime.md)	 - Manage inference runtimes distributed as OCI artifacts
 

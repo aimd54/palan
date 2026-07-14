@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build e2e
@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aimd54/moci/internal/gguf/gguftest"
+	"github.com/aimd54/palan/internal/gguf/gguftest"
 )
 
 // fixtures holds the on-disk inputs for one packed model.
@@ -57,13 +57,13 @@ func TestPushPullRoundTrip(t *testing.T) {
 	ref := host + "/llm/tiny:q4"
 
 	homeA := t.TempDir()
-	packOut := moci(t, homeA, "pack", fx.ggufPath, fx.licPath, "-t", ref, "--profile", "both", "--ctx", "2048")
+	packOut := palan(t, homeA, "pack", fx.ggufPath, fx.licPath, "-t", ref, "--profile", "both", "--ctx", "2048")
 	packedDigest := firstDigest(t, packOut)
-	moci(t, homeA, "push", ref)
-	moci(t, homeA, "push", ref+"-car")
+	palan(t, homeA, "push", ref)
+	palan(t, homeA, "push", ref+"-car")
 
 	homeB := t.TempDir()
-	pullOut := moci(t, homeB, "pull", ref)
+	pullOut := palan(t, homeB, "pull", ref)
 	if got := firstDigest(t, pullOut); got != packedDigest {
 		t.Errorf("pulled digest %s, want %s", got, packedDigest)
 	}
@@ -73,7 +73,7 @@ func TestPushPullRoundTrip(t *testing.T) {
 		Kind   string `json:"kind"`
 		Digest string `json:"digest"`
 	}
-	if err := json.Unmarshal([]byte(moci(t, homeB, "ls", "--json")), &rows); err != nil {
+	if err := json.Unmarshal([]byte(palan(t, homeB, "ls", "--json")), &rows); err != nil {
 		t.Fatalf("ls --json: %v", err)
 	}
 	found := false
@@ -109,18 +109,18 @@ func TestSaveLoadAcrossStores(t *testing.T) {
 	ref := "registry.internal/llm/offline:v1"
 
 	homeA := t.TempDir()
-	packOut := moci(t, homeA, "pack", fx.ggufPath, "-t", ref)
+	packOut := palan(t, homeA, "pack", fx.ggufPath, "-t", ref)
 	packedDigest := firstDigest(t, packOut)
 	bundle := filepath.Join(t.TempDir(), "bundle.tar")
-	moci(t, homeA, "save", ref, "-o", bundle)
+	palan(t, homeA, "save", ref, "-o", bundle)
 
 	homeB := t.TempDir()
-	moci(t, homeB, "load", "-i", bundle)
+	palan(t, homeB, "load", "-i", bundle)
 	var rows []struct {
 		Ref    string `json:"ref"`
 		Digest string `json:"digest"`
 	}
-	if err := json.Unmarshal([]byte(moci(t, homeB, "ls", "--json")), &rows); err != nil {
+	if err := json.Unmarshal([]byte(palan(t, homeB, "ls", "--json")), &rows); err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Ref != ref || rows[0].Digest != packedDigest {
@@ -143,10 +143,10 @@ func TestRmAndGC(t *testing.T) {
 	ref := host + "/llm/gc-check:v1"
 
 	home := t.TempDir()
-	moci(t, home, "pack", fx.ggufPath, "-t", ref)
-	moci(t, home, "push", ref)
-	moci(t, home, "rm", ref)
-	moci(t, home, "gc")
+	palan(t, home, "pack", fx.ggufPath, "-t", ref)
+	palan(t, home, "push", ref)
+	palan(t, home, "rm", ref)
+	palan(t, home, "gc")
 
 	sum := sha256.Sum256(fx.ggufBytes)
 	blobPath := filepath.Join(home, "blobs", "sha256", hex.EncodeToString(sum[:]))
@@ -154,7 +154,7 @@ func TestRmAndGC(t *testing.T) {
 		t.Error("weight blob survived rm+gc")
 	}
 
-	moci(t, home, "pull", ref)
+	palan(t, home, "pull", ref)
 	if _, err := os.Stat(blobPath); err != nil {
 		t.Errorf("re-pull did not restore the blob: %v", err)
 	}

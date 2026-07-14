@@ -1,19 +1,15 @@
-## moci rm
+## palan logout
 
-Unlink model references from the local store
-
-### Synopsis
-
-rm removes references; blob content stays on disk until `moci gc` reclaims it.
+Remove stored credentials for a registry
 
 ```
-moci rm REF... [flags]
+palan logout REGISTRY [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for rm
+  -h, --help   help for logout
 ```
 
 ### Options inherited from parent commands
@@ -21,7 +17,7 @@ moci rm REF... [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -30,5 +26,5 @@ moci rm REF... [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

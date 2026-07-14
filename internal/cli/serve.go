@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -17,11 +17,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/refname"
-	"github.com/aimd54/moci/internal/router"
-	mociruntime "github.com/aimd54/moci/internal/runtime"
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/internal/router"
+	palanruntime "github.com/aimd54/palan/internal/runtime"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // Config keys for serve.
@@ -69,7 +69,7 @@ fills up. Prometheus metrics are on /metrics.`,
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
-			bin, err := mociruntime.Resolve(ctx, st, runtimeRef)
+			bin, err := palanruntime.Resolve(ctx, st, runtimeRef)
 			if err != nil {
 				return err
 			}
@@ -124,7 +124,7 @@ fills up. Prometheus metrics are on /metrics.`,
 			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.ListenAndServe() }()
-			fmt.Fprintf(cmd.OutOrStdout(), "moci serve listening on %s (runtime: %s)\n", addr, bin)
+			fmt.Fprintf(cmd.OutOrStdout(), "palan serve listening on %s (runtime: %s)\n", addr, bin)
 
 			select {
 			case err := <-errCh:
@@ -179,7 +179,7 @@ func (b *storeBackend) List(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-func (b *storeBackend) Spec(ctx context.Context, ref string) (mociruntime.Spec, int64, error) {
+func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec, int64, error) {
 	if len(b.refs) > 0 {
 		allowed := false
 		for _, r := range b.refs {
@@ -189,23 +189,23 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (mociruntime.Spec, 
 			}
 		}
 		if !allowed {
-			return mociruntime.Spec{}, 0, errors.New("not among the served references")
+			return palanruntime.Spec{}, 0, errors.New("not among the served references")
 		}
 	}
 	desc, err := b.st.Resolve(ctx, ref)
 	if err != nil {
-		return mociruntime.Spec{}, 0, err
+		return palanruntime.Spec{}, 0, err
 	}
 	info, err := loadModelInfo(ctx, b.st, ref, desc)
 	if err != nil {
-		return mociruntime.Spec{}, 0, err
+		return palanruntime.Spec{}, 0, err
 	}
 	fi, err := os.Stat(info.blobPath)
 	if err != nil {
-		return mociruntime.Spec{}, 0, err
+		return palanruntime.Spec{}, 0, err
 	}
 	memory := int64(float64(fi.Size())*memoryFactor) + memoryOverhead
-	return mociruntime.Spec{
+	return palanruntime.Spec{
 		Bin:       b.bin,
 		ModelPath: info.blobPath,
 		Alias:     ref,

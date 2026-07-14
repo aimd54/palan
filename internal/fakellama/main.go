@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Command fakellama mimics llama-server's CLI and HTTP surface for tests:

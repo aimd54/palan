@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -13,7 +13,7 @@ func newRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rm REF...",
 		Short: "Unlink model references from the local store",
-		Long:  "rm removes references; blob content stays on disk until `moci gc` reclaims it.",
+		Long:  "rm removes references; blob content stays on disk until `palan gc` reclaims it.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -33,7 +33,7 @@ func newRmCmd() *cobra.Command {
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", ref)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Run `moci gc` to reclaim disk space.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Run `palan gc` to reclaim disk space.")
 			return nil
 		},
 	}

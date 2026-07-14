@@ -1,4 +1,4 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Release pipeline: static binaries for linux/amd64, linux/arm64, and
@@ -7,20 +7,20 @@
 
 version: 2
 
-project_name: moci
+project_name: palan
 
 builds:
-  - id: moci
-    main: ./cmd/moci
+  - id: palan
+    main: ./cmd/palan
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/aimd54/moci/internal/version.version={{ .Version }}
-      - -X github.com/aimd54/moci/internal/version.commit={{ .ShortCommit }}
-      - -X github.com/aimd54/moci/internal/version.date={{ .Date }}
+      - -X github.com/aimd54/palan/internal/version.version={{ .Version }}
+      - -X github.com/aimd54/palan/internal/version.commit={{ .ShortCommit }}
+      - -X github.com/aimd54/palan/internal/version.date={{ .Date }}
     goos:
       - linux
       - darwin
@@ -48,7 +48,7 @@ signs:
   # verify with:
   #   cosign verify-blob --certificate checksums.txt.pem \
   #     --signature checksums.txt.sig \
-  #     --certificate-identity-regexp 'github.com/aimd54/moci' \
+  #     --certificate-identity-regexp 'github.com/aimd54/palan' \
   #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   #     checksums.txt
   - cmd: cosign
@@ -64,10 +64,10 @@ signs:
 
 dockers_v2:
   - id: puller
-    ids: [moci]
+    ids: [palan]
     dockerfile: Dockerfile.release
     images:
-      - ghcr.io/aimd54/moci
+      - ghcr.io/aimd54/palan
     tags:
       - "{{ .Version }}"
       - latest
@@ -75,7 +75,7 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     labels:
-      org.opencontainers.image.source: https://github.com/aimd54/moci
+      org.opencontainers.image.source: https://github.com/aimd54/palan
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.description: Distribute and serve GGUF models as OCI artifacts
 

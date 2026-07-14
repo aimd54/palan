@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package transfer moves model artifacts between OCI registries and the
@@ -38,7 +38,7 @@ type Options struct {
 	// Credential overrides credential resolution; nil uses the Docker
 	// credentials store (~/.docker/config.json and credential helpers).
 	Credential auth.CredentialFunc
-	// UserAgent identifies moci to registries.
+	// UserAgent identifies palan to registries.
 	UserAgent string
 	// Concurrency bounds parallel blob streams; <=0 means DefaultConcurrency.
 	Concurrency int

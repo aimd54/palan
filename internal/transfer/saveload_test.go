@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aimd54/moci/internal/registrytest"
+	"github.com/aimd54/palan/internal/registrytest"
 )
 
 // TestSaveLoadRoundTrip: two refs sharing blobs export to one bundle and

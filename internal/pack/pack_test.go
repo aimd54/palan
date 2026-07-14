@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package pack
@@ -15,9 +15,9 @@ import (
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/aimd54/moci/internal/gguf/gguftest"
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/pkg/modelspec"
+	"github.com/aimd54/palan/internal/gguf/gguftest"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // writeFixtures materializes a tiny GGUF + template + license in dir.
@@ -76,7 +76,7 @@ func TestModelPackDeterministic(t *testing.T) {
 
 // TestModelPackShape verifies the ModelPack wire format: artifact type,
 // media types, layer ordering, filepath annotations, config content, and
-// moci annotations.
+// palan annotations.
 func TestModelPackShape(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

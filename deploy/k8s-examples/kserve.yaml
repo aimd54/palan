@@ -1,4 +1,4 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Pattern 3 (design §10.3): KServe modelcars — the storageUri points at the

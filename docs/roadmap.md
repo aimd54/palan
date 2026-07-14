@@ -21,14 +21,14 @@ These cannot be validated from CI and carry checklists in the repo:
 - zot with an S3 backend and OIDC on a real cluster
   ([deploy/zot/README.md](../deploy/zot/README.md))
 - CUDA serving on a GPU host (runtime artifact with a cuda flavor;
-  `moci runtime pack … --flavor cuda12`)
+  `palan runtime pack … --flavor cuda12`)
 - K8s image volumes on a containerd-based cluster — decides whether the
   car profile stays (design §16.4,
   [deploy/k8s-examples/README.md](../deploy/k8s-examples/README.md))
 
 ## Planned / open
 
-- **Rename before wide release** — `moci` is a codename (design §16.1).
+- **Rename before wide release** — `palan` is a codename (design §16.1).
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.
 - `verify.required` as the default posture once signing pipelines are

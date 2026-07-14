@@ -4,7 +4,7 @@ Goal: from nothing to a served model in about five minutes, on one machine.
 
 ## Prerequisites
 
-- A `moci` binary (release download, `go install github.com/aimd54/moci/cmd/moci@latest`, or `make build`)
+- A `palan` binary (release download, `go install github.com/aimd54/palan/cmd/palan@latest`, or `make build`)
 - Docker (only for the throwaway registry)
 - A GGUF model file (any quantization; for a small test try a
   SmolLM/stories-class model of a few hundred MB or less)
@@ -20,7 +20,7 @@ docker run -d --rm --name zot -p 5000:5000 \
 
 Everything below uses `--plain-http` because this registry has no TLS; with
 a real registry, drop the flag. To avoid repeating flags, create
-`~/.config/moci/config.yaml`:
+`~/.config/palan/config.yaml`:
 
 ```yaml
 registry:
@@ -31,24 +31,24 @@ registry:
 ## 2. Pack and push
 
 ```sh
-moci pack my-model.gguf -t llm/mymodel:q4 --ctx 8192 --push
+palan pack my-model.gguf -t llm/mymodel:q4 --ctx 8192 --push
 ```
 
 `pack` reads the GGUF header and fills the ModelPack config (architecture,
 quantization, size, license) — check with:
 
 ```sh
-moci ls
-moci ls --remote localhost:5000
+palan ls
+palan ls --remote localhost:5000
 ```
 
 ## 3. Pull and run
 
 ```sh
-moci rm llm/mymodel:q4 && moci gc     # simulate a second machine
-moci pull llm/mymodel:q4
-moci run llm/mymodel:q4               # interactive chat; /bye to quit
-moci run llm/mymodel:q4 -p "One-line haiku about registries"
+palan rm llm/mymodel:q4 && palan gc     # simulate a second machine
+palan pull llm/mymodel:q4
+palan run llm/mymodel:q4               # interactive chat; /bye to quit
+palan run llm/mymodel:q4 -p "One-line haiku about registries"
 ```
 
 `run` spawns `llama-server` directly on the store's blob — the model is
@@ -57,7 +57,7 @@ never copied or unpacked.
 ## 4. Serve several models
 
 ```sh
-moci serve
+palan serve
 ```
 
 - OpenAI-compatible endpoint on `:11500` (`/v1/models`,
@@ -80,4 +80,4 @@ curl -s localhost:11500/v1/chat/completions -d '{
 - Sign your models and enforce verification: [security guide](guides/security.md)
 - Move models across an air gap: [air-gap guide](guides/air-gap.md)
 - Serve from Kubernetes: [Kubernetes guide](guides/kubernetes.md)
-- Distribute llama-server itself through the registry: `moci runtime --help`
+- Distribute llama-server itself through the registry: `palan runtime --help`

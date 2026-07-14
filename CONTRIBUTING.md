@@ -1,4 +1,4 @@
-# Contributing to moci
+# Contributing to palan
 
 Thank you for your interest in contributing! The conventions below keep
 the project easy to review, audit, and maintain.
@@ -37,7 +37,7 @@ mismatch, rebuild it against your toolchain:
 `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.1`.
 
 ```sh
-make build      # build bin/moci
+make build      # build bin/palan
 make check      # gofmt, go vet, golangci-lint, tidy check, race-enabled unit tests
 make e2e        # end-to-end tests against a local zot registry (requires Docker)
 make lint-docs  # markdownlint over the docs (requires Node)
@@ -49,11 +49,11 @@ Run `make check` before every commit — CI runs the same gates.
 ## Code conventions
 
 - Go code is formatted with `gofmt` and `goimports`
-  (local prefix `github.com/aimd54/moci`).
+  (local prefix `github.com/aimd54/palan`).
 - Every source file starts with the SPDX header:
 
   ```go
-  // Copyright The moci Authors
+  // Copyright The palan Authors
   // SPDX-License-Identifier: Apache-2.0
   ```
 
@@ -66,6 +66,6 @@ Run `make check` before every commit — CI runs the same gates.
 
 - Use the issue templates for bugs and feature requests.
 - PRs should reference the issue they address and describe testing performed.
-- Interoperability is a contract: artifacts packed by moci must remain
+- Interoperability is a contract: artifacts packed by palan must remain
   pullable by `oras` and `modctl` (see the interop test suite) — changes that
   break this will not be accepted.

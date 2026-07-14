@@ -1,7 +1,7 @@
 # zot registry deployment (self-hosted reference)
 
-zot is moci's reference registry (ADR-0002): CNCF, single binary, OCI-native,
-S3 storage driver, OIDC, sync/mirroring, referrers support. moci itself works
+zot is palan's reference registry (ADR-0002): CNCF, single binary, OCI-native,
+S3 storage driver, OIDC, sync/mirroring, referrers support. palan itself works
 against **any** OCI 1.1 registry — nothing here is required by the client.
 
 ## Install
@@ -41,10 +41,10 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
 
 Options, in increasing automation:
 
-1. **Sneakernet**: `moci save llm/qwen3:8b-q4 -o bundle.tar` on the
-   connected side; carry; `moci load -i bundle.tar && moci push …` inside.
+1. **Sneakernet**: `palan save llm/qwen3:8b-q4 -o bundle.tar` on the
+   connected side; carry; `palan load -i bundle.tar && palan push …` inside.
 2. **Direct copy** when a one-way path exists:
-   `moci cp dmz.example/llm/qwen3:8b-q4 registry.internal/llm/qwen3:8b-q4`.
+   `palan cp dmz.example/llm/qwen3:8b-q4 registry.internal/llm/qwen3:8b-q4`.
 3. **zot sync**: give the internet-facing zot a `sync` extension config
    pulling selected repos, and let the internal zot sync from it on a
    schedule (`extensions.sync` in zot's config; content rules support
@@ -52,8 +52,8 @@ Options, in increasing automation:
 
 ## Validation checklist (run on your cluster, not automatable from CI)
 
-- [ ] `moci login registry.internal` (OIDC device flow or API key)
-- [ ] `moci push registry.internal/llm/smoke:test` of a small packed model
+- [ ] `palan login registry.internal` (OIDC device flow or API key)
+- [ ] `palan push registry.internal/llm/smoke:test` of a small packed model
 - [ ] Pull from a pod using a projected SA token (no static secret)
 - [ ] Blob GET redirects to object storage (curl -v shows the 307)
 - [ ] zot `/metrics` scraped by your Prometheus-compatible stack

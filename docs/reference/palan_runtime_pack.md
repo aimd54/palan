@@ -1,4 +1,4 @@
-## moci runtime pack
+## palan runtime pack
 
 Pack a llama-server build as a runtime artifact
 
@@ -9,7 +9,7 @@ libraries) as an OCI artifact. The publisher-side counterpart of
 'runtime pull'.
 
 ```
-moci runtime pack PATH... -t REF --build BUILD [flags]
+palan runtime pack PATH... -t REF --build BUILD [flags]
 ```
 
 ### Options
@@ -31,7 +31,7 @@ moci runtime pack PATH... -t REF --build BUILD [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -40,5 +40,5 @@ moci runtime pack PATH... -t REF --build BUILD [flags]
 
 ### SEE ALSO
 
-* [moci runtime](moci_runtime.md)	 - Manage inference runtimes distributed as OCI artifacts
+* [palan runtime](palan_runtime.md)	 - Manage inference runtimes distributed as OCI artifacts
 

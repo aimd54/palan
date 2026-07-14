@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -21,7 +21,7 @@ import (
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // downloadAttempts bounds retries per blob; partials persist between

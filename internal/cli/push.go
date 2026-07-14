@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/refname"
+	"github.com/aimd54/palan/internal/refname"
 )
 
 func newPushCmd(v *viper.Viper) *cobra.Command {

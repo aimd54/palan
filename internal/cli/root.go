@@ -1,7 +1,7 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cli implements the moci command surface.
+// Package cli implements the palan command surface.
 package cli
 
 import (
@@ -14,12 +14,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/store"
-	"github.com/aimd54/moci/internal/transfer"
-	"github.com/aimd54/moci/internal/version"
+	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/internal/transfer"
+	"github.com/aimd54/palan/internal/version"
 )
 
-// Config keys (config file ~/.config/moci/config.yaml, env prefix MOCI_).
+// Config keys (config file ~/.config/palan/config.yaml, env prefix PALAN_).
 const (
 	keyRegistryDefault    = "registry.default"
 	keyRegistryPlainHTTP  = "registry.plain-http"
@@ -33,9 +33,9 @@ func New() *cobra.Command {
 	v := viper.New()
 
 	root := &cobra.Command{
-		Use:           "moci",
+		Use:           "palan",
 		Short:         "Distribute and serve GGUF models as OCI artifacts",
-		Long:          "moci pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry — daemonless, in one binary.",
+		Long:          "palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry — daemonless, in one binary.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -44,7 +44,7 @@ func New() *cobra.Command {
 	}
 
 	pf := root.PersistentFlags()
-	pf.String("config", "", "config file (default ~/.config/moci/config.yaml)")
+	pf.String("config", "", "config file (default ~/.config/palan/config.yaml)")
 	pf.String("registry", "", "default registry host applied to short references")
 	pf.Bool("plain-http", false, "use HTTP instead of HTTPS for registries")
 	pf.String("ca-file", "", "PEM CA bundle to trust in addition to the system pool")
@@ -84,7 +84,7 @@ func New() *cobra.Command {
 func Execute(ctx context.Context) int {
 	root := New()
 	if err := root.ExecuteContext(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "moci: %v\n", err)
+		fmt.Fprintf(os.Stderr, "palan: %v\n", err)
 		return 1
 	}
 	return 0
@@ -98,7 +98,7 @@ func must(err error) {
 
 // initConfig loads the config file (if any) and env overrides into v.
 func initConfig(v *viper.Viper, cmd *cobra.Command) error {
-	v.SetEnvPrefix("MOCI")
+	v.SetEnvPrefix("PALAN")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 
@@ -118,7 +118,7 @@ func initConfig(v *viper.Viper, cmd *cobra.Command) error {
 	if err != nil {
 		return nil // no config dir: flags/env only
 	}
-	v.SetConfigFile(filepath.Join(confDir, "moci", "config.yaml"))
+	v.SetConfigFile(filepath.Join(confDir, "palan", "config.yaml"))
 	if err := v.ReadInConfig(); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -137,7 +137,7 @@ func newTransferClient(v *viper.Viper) (*transfer.Client, error) {
 		PlainHTTP:             v.GetBool(keyRegistryPlainHTTP),
 		InsecureSkipTLSVerify: v.GetBool(keyRegistryInsecure),
 		CAFile:                v.GetString(keyRegistryCAFile),
-		UserAgent:             "moci/" + version.Version(),
+		UserAgent:             "palan/" + version.Version(),
 		Concurrency:           v.GetInt(keyTransferConcurrent),
 	})
 }

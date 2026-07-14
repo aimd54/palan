@@ -1,20 +1,21 @@
-## moci cp
+## palan save
 
-Copy a model between registries
+Export models to a tar bundle for offline transfer
 
 ### Synopsis
 
-cp streams an artifact from one registry to another without touching the
-local store — the mirroring workhorse for DMZ-to-air-gap promotion.
+save writes the given references (with all their blobs, deduplicated)
+as a tar of a standard OCI image layout. "-o -" writes to stdout.
 
 ```
-moci cp SRC DST [flags]
+palan save REF... -o FILE [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for cp
+  -h, --help            help for save
+  -o, --output string   output file (- for stdout)
 ```
 
 ### Options inherited from parent commands
@@ -22,7 +23,7 @@ moci cp SRC DST [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -31,5 +32,5 @@ moci cp SRC DST [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

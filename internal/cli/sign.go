@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -14,9 +14,9 @@ import (
 	"golang.org/x/term"
 	"oras.land/oras-go/v2/registry"
 
-	"github.com/aimd54/moci/internal/refname"
-	"github.com/aimd54/moci/internal/signing"
-	"github.com/aimd54/moci/internal/transfer"
+	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/internal/signing"
+	"github.com/aimd54/palan/internal/transfer"
 )
 
 // Config keys for verification policy.
@@ -32,7 +32,7 @@ func newSignCmd(v *viper.Viper) *cobra.Command {
 		Short: "Sign a pushed model with a cosign-compatible key",
 		Long: `Sign resolves REF on its registry and attaches a cosign-compatible
 signature next to it (the sha256-<digest>.sig tag convention), so
-'cosign verify --key' and 'moci verify' both accept it — including fully
+'cosign verify --key' and 'palan verify' both accept it — including fully
 offline. Encrypted cosign keys are supported; the password comes from
 COSIGN_PASSWORD or an interactive prompt.`,
 		Args: cobra.ExactArgs(1),

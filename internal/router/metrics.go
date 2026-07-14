@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package router
@@ -30,30 +30,30 @@ type Metrics struct {
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		loads: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "moci_model_loads_total", Help: "Model instances started.",
+			Name: "palan_model_loads_total", Help: "Model instances started.",
 		}, []string{"model"}),
 		evictions: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "moci_model_evictions_total", Help: "Model instances stopped, by reason (idle, memory, exit).",
+			Name: "palan_model_evictions_total", Help: "Model instances stopped, by reason (idle, memory, exit).",
 		}, []string{"model", "reason"}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "moci_requests_total", Help: "Proxied requests by model and status code.",
+			Name: "palan_requests_total", Help: "Proxied requests by model and status code.",
 		}, []string{"model", "code"}),
 		ttft: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "moci_ttft_seconds",
+			Name:    "palan_ttft_seconds",
 			Help:    "Time from request arrival to the first response byte.",
 			Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
 		}, []string{"model"}),
 		streamEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "moci_stream_events_total", Help: "SSE data events proxied (≈ tokens for llama-server streams).",
+			Name: "palan_stream_events_total", Help: "SSE data events proxied (≈ tokens for llama-server streams).",
 		}, []string{"model"}),
 		loadedGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moci_models_loaded", Help: "Currently loaded model instances.",
+			Name: "palan_models_loaded", Help: "Currently loaded model instances.",
 		}),
 		usedGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moci_memory_used_bytes", Help: "Estimated memory of loaded models.",
+			Name: "palan_memory_used_bytes", Help: "Estimated memory of loaded models.",
 		}),
 		budget: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moci_memory_budget_bytes", Help: "Configured memory budget.",
+			Name: "palan_memory_budget_bytes", Help: "Configured memory budget.",
 		}),
 	}
 	if reg != nil {

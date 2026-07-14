@@ -1,21 +1,17 @@
-## moci push
+## palan ls
 
-Push a locally-stored model to its registry
-
-### Synopsis
-
-Push uploads the model tagged REF in the local store to its registry.
-Blobs the registry already has are skipped, and where supported, blobs known
-from sibling repositories are mounted server-side instead of re-uploaded.
+List models in the local store or a remote registry
 
 ```
-moci push REF [flags]
+palan ls [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for push
+  -h, --help            help for ls
+      --json            output JSON
+      --remote string   list a remote registry (host[:port]) instead of the local store
 ```
 
 ### Options inherited from parent commands
@@ -23,7 +19,7 @@ moci push REF [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -32,5 +28,5 @@ moci push REF [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

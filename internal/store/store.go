@@ -1,7 +1,7 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package store implements moci's local model store.
+// Package store implements palan's local model store.
 //
 // The store is a standard OCI image layout (oci-layout, index.json,
 // blobs/<alg>/<hex>) managed through oras-go's oci.Store, so any OCI tool
@@ -29,7 +29,7 @@ import (
 )
 
 // EnvHome overrides the store location when set.
-const EnvHome = "MOCI_HOME"
+const EnvHome = "PALAN_HOME"
 
 // maxJSONBlobSize bounds manifests/config blobs we are willing to parse.
 // Real ModelPack manifests and configs are a few KiB; anything approaching
@@ -46,20 +46,20 @@ type Store struct {
 	lk   *flock.Flock
 }
 
-// DefaultRoot resolves the store directory: $MOCI_HOME, else
-// $XDG_DATA_HOME/moci, else ~/.local/share/moci.
+// DefaultRoot resolves the store directory: $PALAN_HOME, else
+// $XDG_DATA_HOME/palan, else ~/.local/share/palan.
 func DefaultRoot() (string, error) {
 	if v := os.Getenv(EnvHome); v != "" {
 		return v, nil
 	}
 	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
-		return filepath.Join(v, "moci"), nil
+		return filepath.Join(v, "palan"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home directory: %w", err)
 	}
-	return filepath.Join(home, ".local", "share", "moci"), nil
+	return filepath.Join(home, ".local", "share", "palan"), nil
 }
 
 // Open opens (creating if necessary) the store at root; an empty root means
@@ -81,7 +81,7 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	return &Store{
 		root: root,
 		oci:  ociStore,
-		lk:   flock.New(filepath.Join(root, ".moci.lock")),
+		lk:   flock.New(filepath.Join(root, ".palan.lock")),
 	}, nil
 }
 
@@ -98,7 +98,7 @@ func (s *Store) OCI() *oci.Store { return s.oci }
 func (s *Store) Lock(ctx context.Context) (func(), error) {
 	ok, err := s.lk.TryLockContext(ctx, lockRetryInterval)
 	if err != nil || !ok {
-		return nil, fmt.Errorf("acquiring exclusive store lock at %s (another moci process may be running): %w", s.lk.Path(), err)
+		return nil, fmt.Errorf("acquiring exclusive store lock at %s (another palan process may be running): %w", s.lk.Path(), err)
 	}
 	return func() { _ = s.lk.Unlock() }, nil
 }
@@ -161,7 +161,7 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 }
 
 // Remove unlinks a reference. Content stays until GC reclaims it
-// (design §8.1: `moci rm` unlinks, `moci gc` reclaims).
+// (design §8.1: `palan rm` unlinks, `palan gc` reclaims).
 func (s *Store) Remove(ctx context.Context, ref string) error {
 	if err := s.oci.Untag(ctx, ref); err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {

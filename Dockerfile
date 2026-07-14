@@ -1,8 +1,8 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Distroless moci image — primarily the Kubernetes init-container puller
-# (design §10.1): `moci pull $MODEL --output /models` into an emptyDir.
+# Distroless palan image — primarily the Kubernetes init-container puller
+# (design §10.1): `palan pull $MODEL --output /models` into an emptyDir.
 
 FROM golang:1.25 AS build
 WORKDIR /src
@@ -11,12 +11,12 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w -X github.com/aimd54/moci/internal/version.version=${VERSION}" \
-      -o /out/moci ./cmd/moci
+      -ldflags "-s -w -X github.com/aimd54/palan/internal/version.version=${VERSION}" \
+      -o /out/palan ./cmd/palan
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/moci /usr/local/bin/moci
+COPY --from=build /out/palan /usr/local/bin/palan
 # The store lives on a mounted volume in pod usage; default it somewhere
 # writable for ad-hoc runs.
-ENV MOCI_HOME=/tmp/moci
-ENTRYPOINT ["/usr/local/bin/moci"]
+ENV PALAN_HOME=/tmp/palan
+ENTRYPOINT ["/usr/local/bin/palan"]

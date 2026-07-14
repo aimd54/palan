@@ -1,10 +1,10 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package signing implements cosign-compatible, key-based signing of model
 // artifacts (design §11). Signatures use cosign's simple-signing payload
 // and tag convention (sha256-<digest>.sig in the same repository), so
-// `cosign verify --key` accepts moci signatures and vice versa — and
+// `cosign verify --key` accepts palan signatures and vice versa — and
 // verification works fully offline, which the air gap requires. Keyless
 // (Fulcio/Rekor) signing is deliberately out of scope for v0.1: it needs
 // online transparency infrastructure.

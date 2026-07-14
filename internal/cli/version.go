@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aimd54/moci/internal/version"
+	"github.com/aimd54/palan/internal/version"
 )
 
 func newVersionCmd() *cobra.Command {

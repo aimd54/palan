@@ -1,10 +1,10 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 
 SHELL := /usr/bin/env bash
 
-BINARY  ?= moci
-MODULE  := github.com/aimd54/moci
+BINARY  ?= palan
+MODULE  := github.com/aimd54/palan
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -18,12 +18,12 @@ LDFLAGS := -s -w \
 all: build
 
 .PHONY: build
-build: ## Build the moci binary into bin/
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/moci
+build: ## Build the palan binary into bin/
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/palan
 
 .PHONY: install
-install: ## Install moci into GOBIN
-	CGO_ENABLED=0 go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/moci
+install: ## Install palan into GOBIN
+	CGO_ENABLED=0 go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/palan
 
 .PHONY: fmt
 fmt: ## Format Go sources in place

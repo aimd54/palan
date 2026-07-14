@@ -1,16 +1,16 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package modelspec is moci's single point of contact with the CNCF
+// Package modelspec is palan's single point of contact with the CNCF
 // ModelPack specification (github.com/modelpack/model-spec).
 //
 // It re-exports the upstream spec types and media types — pinned via go.mod
-// so a spec bump is an explicit, reviewable event — and adds the moci-specific
+// so a spec bump is an explicit, reviewable event — and adds the palan-specific
 // annotation keys, which per the design (docs/design/oci-llm-distribution.md
 // §7.1) are the only sanctioned extension point: custom needs go in
 // annotations, never in new media types.
 //
-// Nothing else in moci may import the upstream spec module directly; this
+// Nothing else in palan may import the upstream spec module directly; this
 // package is the isolation layer that keeps ModelPack drift contained
 // (ADR-0005).
 package modelspec
@@ -27,7 +27,7 @@ const (
 	// MediaTypeModelConfig is the media type of the model config blob.
 	MediaTypeModelConfig = specv1.MediaTypeModelConfig
 
-	// Raw (unarchived, uncompressed) layer media types. moci packs GGUF
+	// Raw (unarchived, uncompressed) layer media types. palan packs GGUF
 	// weights raw: the blob in the local store is the file llama-server
 	// mmaps — no unpack step, no double storage (design §7.2).
 	MediaTypeModelWeightRaw       = specv1.MediaTypeModelWeightRaw
@@ -36,7 +36,7 @@ const (
 	MediaTypeModelCodeRaw         = specv1.MediaTypeModelCodeRaw
 	MediaTypeModelDatasetRaw      = specv1.MediaTypeModelDatasetRaw
 
-	// Tar-based variants (produced by other ModelPack tools; moci reads
+	// Tar-based variants (produced by other ModelPack tools; palan reads
 	// them for interoperability but does not produce them for weights).
 	MediaTypeModelWeightTar          = specv1.MediaTypeModelWeight
 	MediaTypeModelWeightGzip         = specv1.MediaTypeModelWeightGzip

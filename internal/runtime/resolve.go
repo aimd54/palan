@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package runtime
@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // DefaultBinaryName is looked up in PATH when no runtime artifact is
@@ -26,5 +26,5 @@ func Resolve(ctx context.Context, st *store.Store, ref string) (string, error) {
 		return p, nil
 	}
 	return "", fmt.Errorf(
-		"no llama-server available: pull a runtime artifact (`moci runtime pull REF` and set runtime.ref), or install llama-server in PATH")
+		"no llama-server available: pull a runtime artifact (`palan runtime pull REF` and set runtime.ref), or install llama-server in PATH")
 }

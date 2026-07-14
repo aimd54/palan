@@ -1,7 +1,7 @@
 # Security guide
 
 Model weights are attacker-controlled, code-adjacent inputs (design §11):
-they are mmapped by native code and their templates steer your agents. moci
+they are mmapped by native code and their templates steer your agents. palan
 treats their distribution accordingly.
 
 ## What you get by default
@@ -23,15 +23,15 @@ transparency log required, which the air gap demands. Verified
 bidirectionally against the real cosign in CI.
 
 ```sh
-# One-time: a cosign keypair (moci reads cosign.key/cosign.pub directly)
+# One-time: a cosign keypair (palan reads cosign.key/cosign.pub directly)
 cosign generate-key-pair
 
 # Sign after pushing (signature lands next to the model in the registry)
-moci push  registry.internal/llm/qwen3:8b-q4
-moci sign  registry.internal/llm/qwen3:8b-q4 --key cosign.key
+palan push  registry.internal/llm/qwen3:8b-q4
+palan sign  registry.internal/llm/qwen3:8b-q4 --key cosign.key
 
 # Verify explicitly…
-moci verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
+palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
 # …or with cosign itself
 cosign verify --key cosign.pub --insecure-ignore-tlog \
   registry.internal/llm/qwen3:8b-q4
@@ -46,15 +46,15 @@ copying a valid signature onto a different artifact or repo fails.
 Ad hoc:
 
 ```sh
-moci pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
+palan pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
 ```
 
-Fleet-wide, in `~/.config/moci/config.yaml`:
+Fleet-wide, in `~/.config/palan/config.yaml`:
 
 ```yaml
 verify:
   required: true
-  key: /etc/moci/cosign.pub
+  key: /etc/palan/cosign.pub
 ```
 
 With `verify.required`, **every** pull checks the signature before any
@@ -64,7 +64,7 @@ This is the recommended posture once your pipeline signs everything
 
 ## Registry authentication
 
-- `moci login REGISTRY` validates credentials and stores them in the
+- `palan login REGISTRY` validates credentials and stores them in the
   Docker credentials store (a credential helper when configured; plaintext
   `~/.docker/config.json` otherwise — prefer a helper).
 - No plaintext password flag exists; use the prompt or `--password-stdin`.
@@ -74,7 +74,7 @@ This is the recommended posture once your pipeline signs everything
 
 ## Serving
 
-- `moci serve` binds `:11500`; child llama-server processes bind loopback
+- `palan serve` binds `:11500`; child llama-server processes bind loopback
   only and are never directly exposed.
 - Optional bearer auth: `serve.bearer-token` in the config (compared in
   constant time).

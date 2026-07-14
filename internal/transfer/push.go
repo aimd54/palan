@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -12,7 +12,7 @@ import (
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/registry"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // Push uploads the locally-stored ref to its registry. Blobs the registry
@@ -27,7 +27,7 @@ func (c *Client) Push(ctx context.Context, st *store.Store, ref registry.Referen
 
 	local := ref.String()
 	if _, err := st.Resolve(ctx, local); err != nil {
-		return ocispec.Descriptor{}, fmt.Errorf("%q is not in the local store (see `moci ls`): %w", local, err)
+		return ocispec.Descriptor{}, fmt.Errorf("%q is not in the local store (see `palan ls`): %w", local, err)
 	}
 
 	copyOpts := oras.CopyOptions{

@@ -1,9 +1,9 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package refname normalizes model references.
 //
-// moci follows the Docker/OCI convention: a reference is
+// palan follows the Docker/OCI convention: a reference is
 // [registry-host/]repository[:tag|@digest]. The first path component is
 // treated as a registry host iff it contains a dot or colon or equals
 // "localhost"; otherwise the configured default registry is prepended.

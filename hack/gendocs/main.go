@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Command gendocs regenerates the CLI reference (docs/reference) from the
@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 
-	"github.com/aimd54/moci/internal/cli"
+	"github.com/aimd54/palan/internal/cli"
 )
 
 func main() {

@@ -1,9 +1,9 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build e2e
 
-// Package e2e exercises the real moci binary against a real zot registry
+// Package e2e exercises the real palan binary against a real zot registry
 // (docker), plus oras and modctl binaries for the interop contract (G2).
 //
 // Requirements: docker (unless E2E_REGISTRY points at a running registry);
@@ -28,7 +28,7 @@ import (
 const zotImage = "ghcr.io/project-zot/zot-linux-amd64:v2.1.18"
 
 var (
-	mociBin     string
+	palanBin    string
 	regOnce     sync.Once
 	regHostVal  string
 	regSkipWhy  string
@@ -37,15 +37,15 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "moci-e2e-*")
+	tmp, err := os.MkdirTemp("", "palan-e2e-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: tempdir:", err)
 		os.Exit(1)
 	}
-	mociBin = filepath.Join(tmp, "moci")
-	build := exec.Command("go", "build", "-o", mociBin, "github.com/aimd54/moci/cmd/moci")
+	palanBin = filepath.Join(tmp, "palan")
+	build := exec.Command("go", "build", "-o", palanBin, "github.com/aimd54/palan/cmd/palan")
 	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: building moci: %v\n%s", err, out)
+		fmt.Fprintf(os.Stderr, "e2e: building palan: %v\n%s", err, out)
 		os.Exit(1)
 	}
 
@@ -117,21 +117,21 @@ func freePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// moci runs the built binary with an isolated store and plain-HTTP
+// palan runs the built binary with an isolated store and plain-HTTP
 // registries, failing the test on error.
-func moci(t *testing.T, home string, args ...string) string {
+func palan(t *testing.T, home string, args ...string) string {
 	t.Helper()
-	out, err := mociRun(home, args...)
+	out, err := palanRun(home, args...)
 	if err != nil {
-		t.Fatalf("moci %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("palan %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
 }
 
-func mociRun(home string, args ...string) (string, error) {
+func palanRun(home string, args ...string) (string, error) {
 	full := append([]string{"--plain-http", "--quiet"}, args...)
-	cmd := exec.Command(mociBin, full...)
-	cmd.Env = append(os.Environ(), "MOCI_HOME="+home)
+	cmd := exec.Command(palanBin, full...)
+	cmd.Env = append(os.Environ(), "PALAN_HOME="+home)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

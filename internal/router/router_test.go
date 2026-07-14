@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package router
@@ -18,19 +18,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aimd54/moci/internal/runtime"
+	"github.com/aimd54/palan/internal/runtime"
 )
 
 var fakellamaBin string
 
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "moci-router-test-*")
+	tmp, err := os.MkdirTemp("", "palan-router-test-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	fakellamaBin = filepath.Join(tmp, "fakellama")
-	build := exec.Command("go", "build", "-o", fakellamaBin, "github.com/aimd54/moci/internal/fakellama")
+	build := exec.Command("go", "build", "-o", fakellamaBin, "github.com/aimd54/palan/internal/fakellama")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "building fakellama: %v\n%s", err, out)
 		os.Exit(1)

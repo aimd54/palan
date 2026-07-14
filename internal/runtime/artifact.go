@@ -1,12 +1,12 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package runtime distributes and supervises inference runtimes.
 //
 // llama-server builds travel as OCI artifacts through the same registries
 // as the models (design §9.1, G8): version-pinned, air-gap friendly, and
-// swappable without rebuilding moci (ADR-0003). These are moci's own
-// artifacts — not ModelPack models — so they carry vnd.moci media types.
+// swappable without rebuilding palan (ADR-0003). These are palan's own
+// artifacts — not ModelPack models — so they carry vnd.palan media types.
 package runtime
 
 import (
@@ -27,17 +27,17 @@ import (
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // Media types for runtime artifacts.
 const (
-	// ArtifactTypeRuntime identifies a moci runtime artifact manifest.
-	ArtifactTypeRuntime = "application/vnd.moci.runtime.v1+json"
+	// ArtifactTypeRuntime identifies a palan runtime artifact manifest.
+	ArtifactTypeRuntime = "application/vnd.palan.runtime.v1+json"
 	// MediaTypeRuntimeConfig is the runtime config blob.
-	MediaTypeRuntimeConfig = "application/vnd.moci.runtime.config.v1+json"
+	MediaTypeRuntimeConfig = "application/vnd.palan.runtime.config.v1+json"
 	// MediaTypeRuntimeFile is a raw runtime file layer (binary, library…).
-	MediaTypeRuntimeFile = "application/vnd.moci.runtime.file.v1.raw"
+	MediaTypeRuntimeFile = "application/vnd.palan.runtime.file.v1.raw"
 )
 
 // Config is the runtime artifact's config blob.
@@ -144,7 +144,7 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
-		return "", fmt.Errorf("runtime %q not in local store (try `moci runtime pull`): %w", ref, err)
+		return "", fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", ref, err)
 	}
 	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
 	if err != nil {

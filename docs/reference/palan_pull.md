@@ -1,4 +1,4 @@
-## moci pull
+## palan pull
 
 Pull a model from a registry into the local store
 
@@ -14,7 +14,7 @@ Kubernetes init-container pattern: pull into an emptyDir, serve with any
 llama-server image.
 
 ```
-moci pull REF [flags]
+palan pull REF [flags]
 ```
 
 ### Options
@@ -31,7 +31,7 @@ moci pull REF [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -40,5 +40,5 @@ moci pull REF [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

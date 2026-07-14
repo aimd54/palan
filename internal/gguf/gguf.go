@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 // Package gguf reads GGUF file headers — just enough metadata to fill the
@@ -60,7 +60,7 @@ var scalarSize = map[uint32]int64{
 	typeUint64: 8, typeInt64: 8, typeFloat64: 8,
 }
 
-// Info is the metadata moci cares about, plus the raw scalar/string KVs.
+// Info is the metadata palan cares about, plus the raw scalar/string KVs.
 type Info struct {
 	Version       uint32
 	TensorCount   uint64

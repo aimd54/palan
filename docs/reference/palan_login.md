@@ -1,17 +1,23 @@
-## moci ls
+## palan login
 
-List models in the local store or a remote registry
+Log in to a registry
+
+### Synopsis
+
+Login validates credentials against the registry and saves them in the
+Docker credentials store (a configured credential helper, or
+~/.docker/config.json otherwise).
 
 ```
-moci ls [flags]
+palan login REGISTRY [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help            help for ls
-      --json            output JSON
-      --remote string   list a remote registry (host[:port]) instead of the local store
+  -h, --help              help for login
+      --password-stdin    read the password from stdin
+  -u, --username string   registry username
 ```
 
 ### Options inherited from parent commands
@@ -19,7 +25,7 @@ moci ls [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -28,5 +34,5 @@ moci ls [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan](palan.md)	 - Distribute and serve GGUF models as OCI artifacts
 

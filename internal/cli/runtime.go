@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package cli
@@ -11,9 +11,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/aimd54/moci/internal/refname"
-	mociruntime "github.com/aimd54/moci/internal/runtime"
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/refname"
+	palanruntime "github.com/aimd54/palan/internal/runtime"
+	"github.com/aimd54/palan/internal/store"
 )
 
 func newRuntimeCmd(v *viper.Viper) *cobra.Command {
@@ -59,7 +59,7 @@ func newRuntimePullCmd(v *viper.Viper) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := mociruntime.Ensure(ctx, st, ref.String())
+			entry, err := palanruntime.Ensure(ctx, st, ref.String())
 			if err != nil {
 				return err
 			}
@@ -87,7 +87,7 @@ func newRuntimeLsCmd() *cobra.Command {
 			}
 			defer unlock()
 
-			entries, err := mociruntime.List(ctx, st)
+			entries, err := palanruntime.List(ctx, st)
 			if err != nil {
 				return err
 			}
@@ -98,7 +98,7 @@ func newRuntimeLsCmd() *cobra.Command {
 				if err != nil {
 					continue
 				}
-				cfg, err := store.FetchJSON[mociruntime.Config](ctx, st.OCI(), manifest.Config)
+				cfg, err := store.FetchJSON[palanruntime.Config](ctx, st.OCI(), manifest.Config)
 				if err != nil {
 					continue
 				}
@@ -133,11 +133,11 @@ libraries) as an OCI artifact. The publisher-side counterpart of
 			if err != nil {
 				return err
 			}
-			files := make([]mociruntime.PackFile, 0, len(args))
+			files := make([]palanruntime.PackFile, 0, len(args))
 			for _, p := range args {
-				files = append(files, mociruntime.PackFile{Path: p})
+				files = append(files, palanruntime.PackFile{Path: p})
 			}
-			cfg := mociruntime.Config{
+			cfg := palanruntime.Config{
 				Name: name, Build: build, OS: osName, Arch: arch,
 				Flavor: flavor, Entrypoint: entrypoint,
 			}
@@ -152,7 +152,7 @@ libraries) as an OCI artifact. The publisher-side counterpart of
 			}
 			defer unlock()
 
-			desc, err := mociruntime.Pack(ctx, st, files, cfg, ref.String())
+			desc, err := palanruntime.Pack(ctx, st, files, cfg, ref.String())
 			if err != nil {
 				return err
 			}

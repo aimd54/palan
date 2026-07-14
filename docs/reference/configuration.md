@@ -1,14 +1,14 @@
 # Configuration reference
 
-moci reads, in order of precedence (highest wins):
+palan reads, in order of precedence (highest wins):
 
 1. command-line flags
-2. environment variables — `MOCI_` prefix, dots/dashes become underscores
-   (e.g. `MOCI_REGISTRY_DEFAULT`, `MOCI_SERVE_BEARER_TOKEN`)
-3. the config file — `--config PATH`, else `~/.config/moci/config.yaml`
+2. environment variables — `PALAN_` prefix, dots/dashes become underscores
+   (e.g. `PALAN_REGISTRY_DEFAULT`, `PALAN_SERVE_BEARER_TOKEN`)
+3. the config file — `--config PATH`, else `~/.config/palan/config.yaml`
 
-The local store location is separate: `MOCI_HOME`, else
-`$XDG_DATA_HOME/moci`, else `~/.local/share/moci`.
+The local store location is separate: `PALAN_HOME`, else
+`$XDG_DATA_HOME/palan`, else `~/.local/share/palan`.
 
 ## Keys
 
@@ -42,6 +42,6 @@ verify:
 
 | Variable | Purpose |
 |---|---|
-| `MOCI_HOME` | store location override |
+| `PALAN_HOME` | store location override |
 | `COSIGN_PASSWORD` | password for encrypted signing keys |
 | `DOCKER_CONFIG` | where the Docker credentials store lives |

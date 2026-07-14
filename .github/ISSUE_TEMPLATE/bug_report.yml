@@ -1,4 +1,4 @@
-# Copyright The moci Authors
+# Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 
 name: Bug report
@@ -17,8 +17,8 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. moci pack …
-        2. moci push …
+        1. palan pack …
+        2. palan push …
         3. …
     validations:
       required: true
@@ -26,7 +26,7 @@ body:
     id: env
     attributes:
       label: Environment
-      description: Output of `moci version`, OS/arch, registry (zot/Harbor/…) and version.
+      description: Output of `palan version`, OS/arch, registry (zot/Harbor/…) and version.
       render: text
     validations:
       required: true

@@ -1,4 +1,4 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package transfer
@@ -13,7 +13,7 @@ import (
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/registry"
 
-	"github.com/aimd54/moci/internal/store"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // Events carries optional progress callbacks. All fields may be nil.

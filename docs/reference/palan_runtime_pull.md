@@ -1,15 +1,15 @@
-## moci logout
+## palan runtime pull
 
-Remove stored credentials for a registry
+Pull a runtime artifact and materialize its executable
 
 ```
-moci logout REGISTRY [flags]
+palan runtime pull REF [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for logout
+  -h, --help   help for pull
 ```
 
 ### Options inherited from parent commands
@@ -17,7 +17,7 @@ moci logout REGISTRY [flags]
 ```
       --ca-file string             PEM CA bundle to trust in addition to the system pool
       --concurrency int            parallel blob streams for transfers (default 4)
-      --config string              config file (default ~/.config/moci/config.yaml)
+      --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
@@ -26,5 +26,5 @@ moci logout REGISTRY [flags]
 
 ### SEE ALSO
 
-* [moci](moci.md)	 - Distribute and serve GGUF models as OCI artifacts
+* [palan runtime](palan_runtime.md)	 - Manage inference runtimes distributed as OCI artifacts
 

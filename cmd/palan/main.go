@@ -1,7 +1,7 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command moci distributes and serves GGUF models as OCI artifacts.
+// Command palan distributes and serves GGUF models as OCI artifacts.
 // See docs/design/oci-llm-distribution.md for the design.
 package main
 
@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/aimd54/moci/internal/cli"
+	"github.com/aimd54/palan/internal/cli"
 )
 
 func main() {

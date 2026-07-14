@@ -1,7 +1,7 @@
-// Copyright The moci Authors
+// Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package router is moci's multi-model serving core (design §9.2): one
+// Package router is palan's multi-model serving core (design §9.2): one
 // OpenAI-compatible endpoint that lazily spawns a llama-server per model,
 // unloads idle ones, and evicts least-recently-used instances when the
 // memory budget would overflow — so loading model B on a 10 GB GPU evicts
@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/aimd54/moci/internal/runtime"
+	"github.com/aimd54/palan/internal/runtime"
 )
 
 // DefaultAddr is the router's default listen address (design §16.3: 11500,
@@ -160,7 +160,7 @@ func (rt *Router) handleModels(w http.ResponseWriter, r *http.Request) {
 		Data   []m    `json:"data"`
 	}{Object: "list", Data: []m{}}
 	for _, ref := range refs {
-		out.Data = append(out.Data, m{ID: ref, Object: "model", OwnedBy: "moci"})
+		out.Data = append(out.Data, m{ID: ref, Object: "model", OwnedBy: "palan"})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
@@ -430,6 +430,6 @@ func writeOpenAIError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{"message": msg, "type": "moci_router_error", "code": status},
+		"error": map[string]any{"message": msg, "type": "palan_router_error", "code": status},
 	})
 }
