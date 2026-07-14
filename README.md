@@ -4,6 +4,8 @@
 > daemonless, air-gap-first, one static binary.
 
 [![CI](https://github.com/aimd54/palan/actions/workflows/ci.yml/badge.svg)](https://github.com/aimd54/palan/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/aimd54/palan/badge)](https://scorecard.dev/viewer/?uri=github.com/aimd54/palan)
+[![Go Reference](https://pkg.go.dev/badge/github.com/aimd54/palan.svg)](https://pkg.go.dev/github.com/aimd54/palan)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 palan treats local LLMs the way `docker` treats images: models are
