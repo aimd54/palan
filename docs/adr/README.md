@@ -16,5 +16,6 @@ ADRs pin down the decisions that document left open.
 | [ADR-0003](0003-llama-server-as-subprocess.md) | Manage llama-server as a subprocess, not via cgo | accepted |
 | [ADR-0004](0004-implementation-language-go.md) | Implement in Go | accepted |
 | [ADR-0005](0005-transfer-backend-oras-go.md) | oras-go v2 as transfer backend; modctl as interop oracle | accepted |
+| [ADR-0006](0006-rename-to-palan.md) | Rename the project from moci to palan | accepted |
 
 Use [`template.md`](template.md) for new ADRs.
