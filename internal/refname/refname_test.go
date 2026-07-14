@@ -3,7 +3,10 @@
 
 package refname
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParse(t *testing.T) {
 	cases := []struct {
@@ -39,5 +42,23 @@ func TestParse(t *testing.T) {
 		if got := ref.String(); got != c.want {
 			t.Errorf("Parse(%q, %q) = %q, want %q", c.raw, c.def, got, c.want)
 		}
+	}
+}
+
+func TestParseLowercaseHint(t *testing.T) {
+	_, err := Parse("localhost:5000/llm/Gemma-3-1B", "")
+	if err == nil {
+		t.Fatal("expected error for uppercase repository")
+	}
+	if !strings.Contains(err.Error(), "lowercase") {
+		t.Errorf("error should hint at lowercase repositories: %v", err)
+	}
+
+	_, err = Parse("registry.internal/llm/foo bar", "")
+	if err == nil {
+		t.Fatal("expected error for repository with a space")
+	}
+	if strings.Contains(err.Error(), "lowercase") {
+		t.Errorf("hint should not fire when lowercasing does not fix the reference: %v", err)
 	}
 }

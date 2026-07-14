@@ -36,6 +36,11 @@ func Parse(raw, defaultRegistry string) (registry.Reference, error) {
 	}
 	ref, err := registry.ParseReference(name)
 	if err != nil {
+		// The most common mistake is case: OCI repository names must be
+		// lowercase. Say so when lowercasing is what would fix the parse.
+		if _, lerr := registry.ParseReference(strings.ToLower(name)); lerr == nil {
+			return registry.Reference{}, fmt.Errorf("invalid reference %q: %w (repository names must be lowercase)", raw, err)
+		}
 		return registry.Reference{}, fmt.Errorf("invalid reference %q: %w", raw, err)
 	}
 	if ref.Reference == "" {
