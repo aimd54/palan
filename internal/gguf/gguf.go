@@ -3,7 +3,8 @@
 
 // Package gguf reads GGUF file headers — just enough metadata to fill the
 // ModelPack config at pack time (architecture, quantization, context
-// length…), in ~200 lines instead of a heavyweight dependency (design §12).
+// length…), in ~200 lines instead of a heavyweight dependency (see
+// docs/adr/0004-implementation-language-go.md).
 //
 // Layout (little-endian, versions 2 and 3):
 //
@@ -12,7 +13,7 @@
 // where each KV is: string key | valueType u32 | value. Weights follow the
 // header; this package never reads them. All variable-length fields are
 // bounds-checked so a hostile file cannot balloon memory: model files are
-// attacker-adjacent inputs (design §11).
+// attacker-adjacent inputs (see docs/architecture.md, "Security model").
 package gguf
 
 import (

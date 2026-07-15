@@ -5,7 +5,7 @@
 // local store. It is a thin, registry-agnostic layer over oras-go v2
 // (ADR-0005): oras.Copy does graph traversal and tagging, while large leaf
 // blobs take a custom download path that survives interruption via HTTP
-// Range resume (design §8.1).
+// Range resume.
 package transfer
 
 import (
@@ -31,7 +31,7 @@ type Options struct {
 	// PlainHTTP uses HTTP instead of HTTPS (lab bring-up only).
 	PlainHTTP bool
 	// InsecureSkipTLSVerify disables TLS certificate verification. The CLI
-	// warns loudly when this is set; it is never the default (design §11).
+	// warns loudly when this is set; it is never the default.
 	InsecureSkipTLSVerify bool
 	// CAFile adds a PEM CA bundle (e.g. the internal CA) to the trust pool.
 	CAFile string
@@ -87,7 +87,7 @@ func New(opts Options) (*Client, error) {
 			tlsCfg.RootCAs = pool
 		}
 		if opts.InsecureSkipTLSVerify {
-			tlsCfg.InsecureSkipVerify = true // #nosec G402 -- explicit, loudly-warned opt-in for lab bring-up (design §11)
+			tlsCfg.InsecureSkipVerify = true // #nosec G402 -- explicit, loudly-warned opt-in for lab bring-up
 		}
 		transport.TLSClientConfig = tlsCfg
 	}

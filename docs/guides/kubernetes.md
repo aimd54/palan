@@ -25,8 +25,9 @@ explains the moving parts.
 
    Node-level caching and dedup come from the container runtime; pin
    `@sha256:` digests in GitOps. The car profile exists because containerd
-   guarantees mounting only for tar-layer *images*, not raw artifacts
-   (design §7.3) — CRI-O mounts raw artifacts natively.
+   guarantees mounting only for tar-layer *images*, not raw artifacts (see
+   ["Car" profile](../architecture.md#artifact-format)) — CRI-O mounts raw
+   artifacts natively.
 
 3. **KServe modelcars** — `storageUri: oci://…-car` if KServe is already in
    the picture.
@@ -53,4 +54,4 @@ resources:
 
 Validation of image volumes on your cluster's containerd — and whether raw
 artifacts mount without the car profile — is a per-environment checklist
-item (design §16.4, see the examples README).
+item; see the [examples README](../../deploy/k8s-examples/README.md).

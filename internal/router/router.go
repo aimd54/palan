@@ -1,8 +1,9 @@
 // Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package router is palan's multi-model serving core (design §9.2): one
-// OpenAI-compatible endpoint that lazily spawns a llama-server per model,
+// Package router is palan's multi-model serving core (see
+// docs/architecture.md, "Serving layer"): one OpenAI-compatible endpoint
+// that lazily spawns a llama-server per model,
 // unloads idle ones, and evicts least-recently-used instances when the
 // memory budget would overflow — so loading model B on a 10 GB GPU evicts
 // model A instead of OOMing it.
@@ -26,8 +27,8 @@ import (
 	"github.com/aimd54/palan/internal/runtime"
 )
 
-// DefaultAddr is the router's default listen address (design §16.3: 11500,
-// deliberately not Ollama's 11434 to allow coexistence).
+// DefaultAddr is the router's default listen address: 11500, deliberately
+// not Ollama's 11434 to allow coexistence.
 const DefaultAddr = ":11500"
 
 // DefaultIdleTimeout unloads models after this much inactivity (§9.2).

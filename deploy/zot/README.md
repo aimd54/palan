@@ -27,7 +27,8 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
 2. **MinIO**: create the bucket; the `redirectBlobURL: true` knob makes blob
    GETs answer with a 307 to a presigned MinIO URL, so multi-GB GGUF pulls
    stream straight from MinIO instead of proxying through zot — the single
-   most important performance setting for model-sized blobs (design §6).
+   most important performance setting for model-sized blobs (see
+   [Registry layer](../../docs/architecture.md#registry-layer)).
 3. **TLS**: terminate at the ingress with the internal CA, or configure
    `http.tls` in `config.json` with a mounted certificate. Clients that
    don't trust the internal CA system-wide can pass `--ca-file`.

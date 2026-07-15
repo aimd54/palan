@@ -23,7 +23,7 @@ const (
 
 	// AnnotationContextLength is the model's maximum context length in
 	// tokens, as a decimal string (read from the GGUF header at pack time).
-	// The upstream ModelConfig has no such field; see design §7.2.
+	// The upstream ModelConfig has no such field.
 	AnnotationContextLength = "io.palan.model.context_length"
 )
 

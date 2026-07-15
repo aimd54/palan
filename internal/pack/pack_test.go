@@ -54,7 +54,7 @@ var testOpts = Options{
 }
 
 // TestModelPackDeterministic: same inputs ⇒ same manifest digest, across
-// fresh stores and shuffled input order (design §7.4, M2 acceptance).
+// fresh stores and shuffled input order.
 func TestModelPackDeterministic(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

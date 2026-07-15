@@ -18,7 +18,7 @@ import (
 // Push uploads the locally-stored ref to its registry. Blobs the registry
 // already has are skipped; where the registry supports cross-repository
 // blob mounting, blobs known from sibling repositories mount server-side
-// instead of re-uploading (design §8.1).
+// instead of re-uploading.
 func (c *Client) Push(ctx context.Context, st *store.Store, ref registry.Reference, ev Events) (ocispec.Descriptor, error) {
 	repo, err := c.Repository(ref)
 	if err != nil {

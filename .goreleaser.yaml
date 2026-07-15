@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Release pipeline: static binaries for linux/amd64, linux/arm64, and
-# darwin/arm64 (design §13), SBOMs, checksums signed keylessly with cosign
-# in CI, and the distroless puller image.
+# darwin/arm64, SBOMs, checksums signed keylessly with cosign in CI, and
+# the distroless puller image.
 
 version: 2
 
@@ -29,7 +29,7 @@ builds:
       - arm64
     ignore:
       - goos: darwin
-        goarch: amd64 # v0.x targets Linux + macOS arm64 (design §3)
+        goarch: amd64 # v0.x targets Linux + macOS arm64
 
 archives:
   - formats: [tar.gz]

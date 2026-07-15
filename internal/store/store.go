@@ -8,7 +8,7 @@
 // can read it directly — `oras cp --from-oci-layout` included. Weight layers
 // are raw GGUF bytes, which means the blob path returned by BlobPath is the
 // exact file llama-server mmaps: zero copies between "pulled" and
-// "servable" (design §8.2).
+// "servable" (see docs/architecture.md, "Client and local store").
 package store
 
 import (
@@ -161,7 +161,7 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 }
 
 // Remove unlinks a reference. Content stays until GC reclaims it
-// (design §8.1: `palan rm` unlinks, `palan gc` reclaims).
+// (`palan rm` unlinks, `palan gc` reclaims).
 func (s *Store) Remove(ctx context.Context, ref string) error {
 	if err := s.oci.Untag(ctx, ref); err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {

@@ -59,8 +59,9 @@ llama-server image.`,
 				return err
 			}
 
-			// Signature gate (design §11): verify the manifest signature
-			// BEFORE any weight bytes move, when asked or when the config
+			// Signature gate (see docs/architecture.md, "Security model"):
+			// verify the manifest signature BEFORE any weight bytes move,
+			// when asked or when the config
 			// enforces verify.required.
 			if doVerify || v.GetBool(keyVerifyRequired) {
 				repo, err := client.Repository(ref)

@@ -103,8 +103,8 @@ func TestPushPullRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSaveLoadAcrossStores: the sneakernet path — save on a connected
-// machine, load on an air-gapped one, byte-identical (M5 acceptance).
+// TestSaveLoadAcrossStores: the offline-transfer path — save on a connected
+// machine, load on an air-gapped one, byte-identical.
 func TestSaveLoadAcrossStores(t *testing.T) {
 	fx := writeFixtures(t, 512<<10)
 	ref := "registry.internal/llm/offline:v1"

@@ -24,8 +24,9 @@ import (
 const carPrefix = "models/"
 
 // Car packs the same inputs as an OCI *image* with a single uncompressed
-// tar layer (design §7.3): containerd-based image volumes and KServe
-// modelcars mount images, not raw artifacts. The tar is deterministic —
+// tar layer (see docs/architecture.md, "Artifact format"): containerd-based
+// image volumes and KServe modelcars mount images, not raw artifacts. The
+// tar is deterministic —
 // sorted entries, zeroed timestamps, fixed ownership — and uncompressed so
 // identical inputs give identical digests.
 //

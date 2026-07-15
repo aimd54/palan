@@ -14,7 +14,7 @@ import (
 )
 
 // DetectBudget picks a conservative memory budget when none is configured
-// (design §15: conservative factor, manual override always available):
+// (conservative factor, manual override always available):
 // 90% of the first GPU's VRAM when nvidia-smi answers, else 50% of system
 // RAM (CPU inference is RAM-bound).
 func DetectBudget() (int64, string) {

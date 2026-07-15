@@ -19,7 +19,8 @@ func newCpCmd(v *viper.Viper) *cobra.Command {
 		Use:   "cp SRC DST",
 		Short: "Copy a model between registries",
 		Long: `cp streams an artifact from one registry to another without touching the
-local store — the mirroring workhorse for DMZ-to-air-gap promotion.`,
+local store — the mirroring workhorse for moving artifacts from a connected
+registry into an offline one.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()

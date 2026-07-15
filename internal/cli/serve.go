@@ -34,7 +34,7 @@ const (
 
 // memoryOverhead is the fixed per-model allowance added on top of the
 // weight size (KV cache, activations); the multiplier keeps the estimate
-// conservative (design §15).
+// conservative.
 const (
 	memoryFactor   = 1.2
 	memoryOverhead = 512 << 20

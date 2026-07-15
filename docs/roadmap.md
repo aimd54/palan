@@ -1,8 +1,6 @@
 # Roadmap
 
-Status of the design document's milestones
-([docs/design/oci-llm-distribution.md](design/oci-llm-distribution.md) §14)
-as of July 2026.
+Status of palan's build-out milestones as of July 2026.
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -23,17 +21,16 @@ These cannot be validated from CI and carry checklists in the repo:
 - CUDA serving on a GPU host (runtime artifact with a cuda flavor;
   `palan runtime pack … --flavor cuda12`)
 - K8s image volumes on a containerd-based cluster — decides whether the
-  car profile stays (design §16.4,
-  [deploy/k8s-examples/README.md](../deploy/k8s-examples/README.md))
+  car profile stays
+  ([deploy/k8s-examples/README.md](../deploy/k8s-examples/README.md))
 
 ## Planned / open
 
-- **Rename before wide release** — `palan` is a codename (design §16.1).
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.
-- `verify.required` as the default posture once signing pipelines are
-  ubiquitous (§16.2).
+- `verify.required` as the default once signing pipelines are
+  ubiquitous.
 - Referrers-API storage for signatures alongside the tag fallback.
-- Upstreaming the GGUF packing path to modctl if welcome (§16.6, ADR-0005).
-- Stretch (design §14): LoRA adapter artifacts, multimodal mmproj, HF
-  import (`pack hf://…`), safetensors/vLLM profile.
+- Upstreaming the GGUF packing path to modctl if welcome (see ADR-0005).
+- Stretch goals: LoRA adapter artifacts, multimodal mmproj, HF import
+  (`pack hf://…`), safetensors/vLLM profile.

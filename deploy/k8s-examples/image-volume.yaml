@@ -1,7 +1,7 @@
 # Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pattern 2 (design §10.2): mount the car-profile image directly as a
+# Pattern 2 (see docs/guides/kubernetes.md): mount the car-profile image directly as a
 # volume. Requires Kubernetes ≥ 1.36 (image volumes GA) and containerd
 # ≥ 2.1 — verify on your K3s channel (see README.md checklist).
 apiVersion: v1

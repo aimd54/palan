@@ -52,8 +52,9 @@ type modelDetail struct {
 }
 
 // describeRef builds a listing row by reading the manifest and, for
-// ModelPack artifacts, the small config blob (design §7.2: metadata
-// questions are answered without touching weights).
+// ModelPack artifacts, the small config blob (see docs/architecture.md,
+// "Artifact format": metadata questions are answered without touching
+// weights).
 func describeRef(ctx context.Context, fetcher content.Fetcher, ref string, desc ocispec.Descriptor) modelRow {
 	row := modelRow{Ref: ref, Kind: "unknown", Digest: desc.Digest.String()}
 	manifest, err := store.FetchManifest(ctx, fetcher, desc)

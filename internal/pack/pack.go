@@ -3,13 +3,14 @@
 
 // Package pack builds ModelPack artifacts from GGUF files.
 //
-// Packing is reproducible (design §7.4): layer ordering is fixed (weights,
-// then weight-configs, then docs — each sorted by artifact path), config
-// and manifest JSON contain no timestamps, and identical inputs therefore
-// yield identical digests on every run.
+// Packing is reproducible (see docs/architecture.md, "Artifact format"):
+// layer ordering is fixed (weights, then weight-configs, then docs — each
+// sorted by artifact path), config and manifest JSON contain no
+// timestamps, and identical inputs therefore yield identical digests on
+// every run.
 //
-// Two profiles ship the same content in two envelopes (design §7.2–7.3):
-// the primary "artifact" profile (raw GGUF layers, zero-copy servable from
+// Two profiles ship the same content in two envelopes: the primary
+// "artifact" profile (raw GGUF layers, zero-copy servable from
 // the store) and the secondary "car" profile (a single-tar-layer OCI image
 // for Kubernetes image volumes and KServe modelcars).
 package pack
@@ -175,7 +176,8 @@ func prepare(files []File) ([]File, *gguf.Info, error) {
 	return ordered, info, nil
 }
 
-// manifestAnnotations assembles the manifest annotation set (design §7.2).
+// manifestAnnotations assembles the manifest annotation set (see
+// docs/architecture.md, "Artifact format").
 func manifestAnnotations(info *gguf.Info, layers []ocispec.Descriptor, opts Options, license string) (map[string]string, error) {
 	a := map[string]string{}
 	if opts.SourceURL != "" {

@@ -30,7 +30,7 @@ const downloadAttempts = 3
 
 // downloadBlob fetches one blob into the store with resume support. The
 // partial file is keyed by digest under the store's ingest directory, so a
-// killed process resumes where it stopped (design §8.1: HTTP Range).
+// killed process resumes where it stopped (HTTP Range).
 func (c *Client) downloadBlob(ctx context.Context, repo *remote.Repository, ref registry.Reference, desc ocispec.Descriptor, st *store.Store, ingestDir string, ev Events) error {
 	if desc.Digest.Algorithm() != digest.SHA256 {
 		// Rare algorithm: fall back to a plain verified fetch (no resume).

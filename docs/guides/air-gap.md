@@ -1,13 +1,13 @@
 # Air-gapped model distribution with palan
 
-palan is air-gap-first (design goal G5): every artifact — models *and* the
-llama-server runtimes that serve them — moves through standard OCI
-registries or offline bundles, digest-verified end to end.
+palan is air-gap-first: every artifact — models *and* the llama-server
+runtimes that serve them — moves through standard OCI registries or
+offline bundles, digest-verified end to end.
 
 ## The cast
 
 - **Connected side**: a machine that can reach upstream sources
-  (Hugging Face, ghcr.io) and the DMZ registry.
+  (Hugging Face, ghcr.io) and the connected-side registry.
 - **Air-gapped side**: the internal registry (e.g. zot, see
   [`deploy/zot/`](../../deploy/zot/README.md)) and the workstations/cluster
   that pull from it.
@@ -17,14 +17,14 @@ registries or offline bundles, digest-verified end to end.
 ```sh
 # Model: GGUF + chat template + license, with provenance annotations
 palan pack qwen3-8b-instruct-q4_k_m.gguf chat_template.jinja LICENSE \
-  -t dmz.example/llm/qwen3:8b-instruct-q4_k_m \
+  -t connected.example/llm/qwen3:8b-instruct-q4_k_m \
   --source https://huggingface.co/Qwen/... \
   --ctx 8192 --ngl 99 \
   --profile both --push
 
 # Runtime: a pinned llama-server build (from llama.cpp releases)
 palan runtime pack llama-server libggml.so \
-  -t dmz.example/runtimes/llama-server:b4567-cuda12 \
+  -t connected.example/runtimes/llama-server:b4567-cuda12 \
   --build b4567 --flavor cuda12 --push
 ```
 
@@ -35,13 +35,13 @@ re-packing on both sides of the gap yields verifiable equality.
 
 Pick per your topology:
 
-### Sneakernet (no path at all)
+### Physical transfer (no network path at all)
 
 ```sh
 # Connected side — one bundle can carry several refs, blobs deduplicated:
-palan pull dmz.example/llm/qwen3:8b-instruct-q4_k_m
-palan save dmz.example/llm/qwen3:8b-instruct-q4_k_m \
-          dmz.example/runtimes/llama-server:b4567-cuda12 \
+palan pull connected.example/llm/qwen3:8b-instruct-q4_k_m
+palan save connected.example/llm/qwen3:8b-instruct-q4_k_m \
+          connected.example/runtimes/llama-server:b4567-cuda12 \
           -o transfer.tar
 # … carry transfer.tar across …
 # Air-gapped side:
@@ -54,15 +54,15 @@ The bundle is a tar of a standard OCI image layout — inspectable with
 host inside the bundle; re-tag on import side with a pull/push pair or use
 `palan cp` when a one-way path exists.
 
-### One-way network path (DMZ → inside)
+### One-way network path (connected side → offline side)
 
 ```sh
-palan cp dmz.example/llm/qwen3:8b-instruct-q4_k_m \
+palan cp connected.example/llm/qwen3:8b-instruct-q4_k_m \
         registry.internal/llm/qwen3:8b-instruct-q4_k_m
 ```
 
 **Continuous mirroring**: zot's `sync` extension pulls selected repos from
-the DMZ zot on a schedule — see the registry runbook.
+the connected-side zot on a schedule — see the registry runbook.
 
 ## 3. Serve inside
 

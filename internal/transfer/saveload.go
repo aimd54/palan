@@ -24,7 +24,7 @@ import (
 )
 
 // Copy transfers an artifact between two registries without touching the
-// local store — the air-gap and mirroring workhorse (design §8.1).
+// local store — the air-gap and mirroring workhorse.
 func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Events) (ocispec.Descriptor, error) {
 	srcRepo, err := c.Repository(src)
 	if err != nil {
@@ -50,7 +50,7 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 
 // Save exports refs from the local store into a tar stream containing a
 // standard OCI image layout — readable by any OCI tool, not just palan
-// (design §8.1: sneakernet bundles).
+// (see docs/architecture.md, "Client and local store": offline transfer bundles).
 func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) error {
 	tmp, err := os.MkdirTemp("", "palan-save-*")
 	if err != nil {

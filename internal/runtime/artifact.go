@@ -4,8 +4,9 @@
 // Package runtime distributes and supervises inference runtimes.
 //
 // llama-server builds travel as OCI artifacts through the same registries
-// as the models (design §9.1, G8): version-pinned, air-gap friendly, and
-// swappable without rebuilding palan (ADR-0003). These are palan's own
+// as the models (see docs/architecture.md, "Serving layer"): version-pinned,
+// air-gap friendly, and swappable without rebuilding palan (ADR-0003).
+// These are palan's own
 // artifacts — not ModelPack models — so they carry vnd.palan media types.
 package runtime
 

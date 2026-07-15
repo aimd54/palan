@@ -5,7 +5,8 @@ Copy a model between registries
 ### Synopsis
 
 cp streams an artifact from one registry to another without touching the
-local store — the mirroring workhorse for DMZ-to-air-gap promotion.
+local store — the mirroring workhorse for moving artifacts from a connected
+registry into an offline one.
 
 ```
 palan cp SRC DST [flags]

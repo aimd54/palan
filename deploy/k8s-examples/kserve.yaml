@@ -1,7 +1,7 @@
 # Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pattern 3 (design §10.3): KServe modelcars — the storageUri points at the
+# Pattern 3 (see docs/guides/kubernetes.md): KServe modelcars — the storageUri points at the
 # car-profile image. Requires KServe ≥ 0.12 with modelcars enabled
 # (`enableModelcar: true` in the inferenceservice-config ConfigMap).
 apiVersion: serving.kserve.io/v1beta1

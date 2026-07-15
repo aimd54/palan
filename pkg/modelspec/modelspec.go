@@ -29,7 +29,7 @@ const (
 
 	// Raw (unarchived, uncompressed) layer media types. palan packs GGUF
 	// weights raw: the blob in the local store is the file llama-server
-	// mmaps — no unpack step, no double storage (design §7.2).
+	// mmaps — no unpack step, no double storage.
 	MediaTypeModelWeightRaw       = specv1.MediaTypeModelWeightRaw
 	MediaTypeModelWeightConfigRaw = specv1.MediaTypeModelWeightConfigRaw
 	MediaTypeModelDocRaw          = specv1.MediaTypeModelDocRaw

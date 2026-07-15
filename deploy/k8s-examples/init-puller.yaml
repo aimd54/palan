@@ -1,7 +1,7 @@
 # Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pattern 1 (design §10.1): an init container pulls the model into an
+# Pattern 1 (see docs/guides/kubernetes.md): an init container pulls the model into an
 # emptyDir with palan (digest-verified, resumable), then any llama-server
 # image serves it. Works on every Kubernetes version.
 apiVersion: apps/v1

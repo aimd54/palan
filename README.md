@@ -84,13 +84,13 @@ Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
 | Document | What it covers |
 | --- | --- |
 | [Quickstart](docs/quickstart.md) | zero to served model in ~5 minutes |
-| [Air-gap guide](docs/guides/air-gap.md) | sneakernet bundles, mirroring, offline verification |
+| [Architecture](docs/architecture.md) | how the pieces fit together |
+| [Air-gap guide](docs/guides/air-gap.md) | offline bundles, mirroring, offline verification |
 | [Kubernetes guide](docs/guides/kubernetes.md) | init puller, image volumes, KServe |
 | [Security guide](docs/guides/security.md) | signing, verification policy, TLS, auth |
 | [CLI reference](docs/reference/palan.md) | generated from the command tree (`make docs`) |
 | [Configuration](docs/reference/configuration.md) | config file, env vars, precedence |
 | [Registry deployment](deploy/zot/README.md) | zot + MinIO + OIDC reference setup |
-| [Design document](docs/design/oci-llm-distribution.md) | the why behind everything (predates the rename, [ADR-0006](docs/adr/0006-rename-to-palan.md)) |
 | [ADRs](docs/adr/README.md) | decisions and their reasoning |
 | [Roadmap](docs/roadmap.md) | shipped vs. planned |
 
@@ -98,8 +98,8 @@ Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
 
 Pre-1.0, under active development. Scope is deliberately sharp: **GGUF +
 llama.cpp** (safetensors/vLLM are format-compatible later, not now).
-`palan` is the project's release name — the design document and early ADRs
-predate it and use the working codename `moci`
+`palan` is the project's release name — early ADRs predate it and use the
+working codename `moci`
 ([ADR-0006](docs/adr/0006-rename-to-palan.md)).
 Interoperability is a contract, not an aspiration —
 artifacts must round-trip against `modctl` and `oras`, and signatures

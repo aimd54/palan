@@ -1,8 +1,9 @@
 # Security guide
 
-Model weights are attacker-controlled, code-adjacent inputs (design §11):
-they are mmapped by native code and their templates steer your agents. palan
-treats their distribution accordingly.
+Model weights are attacker-controlled, code-adjacent inputs: they are
+mmapped by native code and their templates steer your agents. palan treats
+their distribution accordingly. See also the [security
+model](../architecture.md#security-model) overview.
 
 ## What you get by default
 
@@ -49,7 +50,7 @@ Ad hoc:
 palan pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
 ```
 
-Fleet-wide, in `~/.config/palan/config.yaml`:
+Machine-wide, in `~/.config/palan/config.yaml`:
 
 ```yaml
 verify:
@@ -59,8 +60,8 @@ verify:
 
 With `verify.required`, **every** pull checks the signature before any
 weight bytes are downloaded; unsigned or foreign-signed models are refused.
-This is the recommended posture once your pipeline signs everything
-(design §16.2 ships it opt-in for v0.1).
+This is the recommended default once your pipeline signs everything
+(v0.1 ships it opt-in).
 
 ## Registry authentication
 

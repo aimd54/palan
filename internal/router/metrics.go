@@ -12,8 +12,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics instruments the router for any Prometheus-compatible stack
-// (design §9.2): loads, evictions, requests, TTFT, stream events.
+// Metrics instruments the router for any Prometheus-compatible stack (see
+// docs/architecture.md, "Serving layer"): loads, evictions, requests,
+// TTFT, stream events.
 type Metrics struct {
 	loads        *prometheus.CounterVec
 	evictions    *prometheus.CounterVec
