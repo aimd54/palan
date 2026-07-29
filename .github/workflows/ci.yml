@@ -31,7 +31,13 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.6.1
+          # goinstall builds the linter with the toolchain from go.mod, so it
+          # can never be older than the Go version this module targets. The
+          # prebuilt binaries are built against whatever Go was current at
+          # their release and refuse to run against a newer target.
+          # Dependabot does not watch this input; bump it by hand.
+          version: v2.12.2
+          install-mode: goinstall
 
   lint-docs:
     name: Lint docs

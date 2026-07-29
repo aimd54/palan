@@ -34,7 +34,7 @@ Keep commits small and self-contained; every commit must build and pass tests.
 Requirements: Go ≥ 1.26, `make`, [golangci-lint](https://golangci-lint.run/) v2,
 and Docker (end-to-end tests only). If golangci-lint panics with a Go version
 mismatch, rebuild it against your toolchain:
-`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.1`.
+`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
 
 ```sh
 make build      # build bin/palan
