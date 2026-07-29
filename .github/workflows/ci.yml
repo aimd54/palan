@@ -11,6 +11,11 @@ on:
 # Default to no permissions; each job requests exactly what it needs.
 permissions: {}
 
+# Runners are pinned to a specific image rather than ubuntu-latest: GitHub
+# migrates that alias on its own schedule, which can change the toolchain
+# under a build with no commit here. Dependabot does not track runs-on, so
+# bump it deliberately when GitHub announces an image deprecation.
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,7 +23,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -41,7 +46,7 @@ jobs:
 
   lint-docs:
     name: Lint docs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -55,7 +60,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -75,7 +80,7 @@ jobs:
 
   e2e:
     name: End-to-end and interop
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -113,7 +118,7 @@ jobs:
 
   govulncheck:
     name: Vulnerability scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
