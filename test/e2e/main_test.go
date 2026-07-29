@@ -25,7 +25,7 @@ import (
 )
 
 // zotImage pins the e2e registry (ADR-0002; keep in sync with ci.yml).
-const zotImage = "ghcr.io/project-zot/zot-linux-amd64:v2.1.18"
+const zotImage = "ghcr.io/project-zot/zot-minimal-linux-amd64:v2.1.18"
 
 var (
 	palanBin    string

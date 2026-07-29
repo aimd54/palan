@@ -9,8 +9,12 @@
 # References: docs/architecture.md ("Registry layer"), ADR-0002.
 
 image:
+  # The full build, not zot-minimal: the extensions matter here. sync drives
+  # cross-network mirroring (see docs/guides/air-gap.md), and search/ui are
+  # useful on a real deployment. CI uses zot-minimal on purpose, since the
+  # e2e suite only exercises the core Distribution API.
   repository: ghcr.io/project-zot/zot-linux-amd64
-  # Pin and bump deliberately; keep in sync with the e2e pin.
+  # Pin and bump deliberately; keep the tag aligned with the CI pin.
   tag: "v2.1.18"
 
 service:
