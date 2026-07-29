@@ -16,24 +16,25 @@ to the rest of that ecosystem.
 ## Overview
 
 ```text
-                        ┌─────────────────────────────────────────────┐
-                        │  Kubernetes cluster                         │
-   push (CI / laptop)   │  ┌───────────────┐      ┌───────────────┐   │
-  ┌──────────────┐      │  │  zot registry │──S3──│  object store │   │
-  │ palan pack   │─────▶│  │  (Deployment) │      │ (blob backend)│   │
-  │ palan push   │ HTTPS│  └──────┬────────┘      └───────────────┘   │
-  └──────────────┘  +OIDC        │ OCI Distribution API               │
-                        └────────┼────────────────────────────────────┘
-                                 │
-        ┌────────────────────────┼─────────────────────────────┐
-        │                        │                             │
-┌───────▼────────┐      ┌────────▼─────────┐         ┌─────────▼─────────┐
-│ Workstation    │      │ K8s Pod          │         │ Offline transfer  │
-│ palan pull     │      │  initContainer:  │         │  palan save → tar │
-│ palan serve ───┼─▶ OpenAI API :11500     │         │  palan load       │
-│  └ llama-server│      │  or image volume │         │  palan cp reg→reg │
-│    (managed)   │      │  (K8s ≥1.36)     │         └───────────────────┘
-└────────────────┘      └──────────────────┘
+ push (CI / laptop)
+┌─────────────────┐   ┌──────────────────────────────────────────────────┐
+│ palan pack      │   │ Kubernetes cluster                               │
+│ palan push      │──▶│  ┌──────────────────┐      ┌──────────────────┐  │
+└─────────────────┘   │  │ zot registry     │──S3──│ object store     │  │
+  HTTPS + OIDC        │  │ (Deployment)     │      │ (blob backend)   │  │
+                      │  └────────┬─────────┘      └──────────────────┘  │
+                      │  OCI Distribution API                            │
+                      └───────────┼──────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+┌─────────▼──────────┐  ┌─────────▼──────────┐  ┌─────────▼──────────┐
+│ Workstation        │  │ K8s Pod            │  │ Offline transfer   │
+│  palan pull        │  │  initContainer,    │  │  palan save → tar  │
+│  palan serve       │  │  or image volume   │  │  palan load        │
+│   ├ llama-server   │  │  (K8s ≥ 1.36)      │  │  palan cp reg→reg  │
+│   └ OpenAI :11500  │  │                    │  │                    │
+└────────────────────┘  └────────────────────┘  └────────────────────┘
 ```
 
 Three planes make up the system:
