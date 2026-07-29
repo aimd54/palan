@@ -75,8 +75,10 @@ jobs:
       contents: read
     services:
       zot:
-        # Keep the pin in sync with test/e2e/main_test.go.
-        image: ghcr.io/project-zot/zot-linux-amd64:v2.1.18
+        # Keep the pin in sync with test/e2e/main_test.go. Dependabot does
+        # not watch service images, so bump the digest by hand alongside the
+        # tag.
+        image: ghcr.io/project-zot/zot-linux-amd64:v2.1.18@sha256:34f18f783037f967dba10df02f9d4086c4d626f5643ef9f5e51e4a4547280a0b
         ports:
           - 5000:5000
     steps:

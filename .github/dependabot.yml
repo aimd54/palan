@@ -17,3 +17,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # Keeps the digest pins in Dockerfile and Dockerfile.release current.
+  # Service-container images in workflows are not covered; bump those by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

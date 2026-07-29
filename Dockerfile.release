@@ -3,7 +3,7 @@
 #
 # Release image built by goreleaser from the prebuilt static binary
 # (the source-building Dockerfile at the repo root serves local builds).
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 # goreleaser dockers_v2 lays the context out per platform (linux/amd64/palan,
 # linux/arm64/palan), so the copy source must be platform-qualified.
 ARG TARGETPLATFORM
