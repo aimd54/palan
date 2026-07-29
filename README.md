@@ -1,6 +1,6 @@
 # palan
 
-> Pull, push, pack, and **serve** GGUF models as standard OCI artifacts —
+> **Serve** GGUF models straight from any OCI registry —
 > daemonless, air-gap-first, one static binary.
 
 [![CI](https://github.com/aimd54/palan/actions/workflows/ci.yml/badge.svg)](https://github.com/aimd54/palan/actions/workflows/ci.yml)
@@ -25,11 +25,13 @@ Every neighbouring tool concedes one leg of the triangle palan occupies:
 | modctl / KitOps / ORAS         | ✓ | ✓ | ✗ |
 | **palan**                       | ✓ | ✓ | ✓ |
 
-Think of palan as **the runtime companion to
-[modctl](https://github.com/modelpack/modctl)**: packaging is
-spec-identical (round-trips against `modctl`, `oras`, and `cosign` are part
-of CI), and palan adds the layer they stop at — pulling *and serving*, in
-places where no Docker daemon exists and no internet ever will.
+Artifacts are plain ModelPack — they round-trip against
+[modctl](https://github.com/modelpack/modctl), `oras`, and `cosign` in CI,
+so whatever packs a model for an OCI registry can feed palan, and whatever
+reads OCI artifacts can read what palan writes. Weights stay raw and
+mmap-ready, the inference engine arrives from the same registry as the
+models, and one static binary runs them behind an OpenAI endpoint — where
+no container engine exists and no internet ever will.
 
 ## Highlights
 
@@ -43,11 +45,14 @@ places where no Docker daemon exists and no internet ever will.
   router on `:11500` — lazy load, idle unload, memory-budget LRU eviction
   (two models on a 10 GB GPU evict instead of OOMing), SSE streaming,
   Prometheus metrics.
+- **Runtime distribution**: `llama-server` builds travel as OCI artifacts
+  through the same registry as the weights — version-pinned per release,
+  signable like any other artifact, and swappable without rebuilding palan.
+  Offline hosts get engine upgrades through the channel they already have.
 - **Zero-copy**: weight layers are raw, so the blob in the store *is* the
   file `llama-server` mmaps. No unpack step, no double storage.
-- **Air gap**: `save`/`load` tar bundles (standard OCI layout), direct
-  registry-to-registry `cp`, and llama-server builds distributed as OCI
-  artifacts through the same registries as the models.
+- **Air gap**: `save`/`load` tar bundles (standard OCI layout) and direct
+  registry-to-registry `cp`; models and runtimes travel the same two paths.
 - **Supply chain**: cosign-compatible key-based signing that works fully
   offline; `palan pull --verify` refuses unsigned or foreign-signed models
   before a single weight byte moves.
