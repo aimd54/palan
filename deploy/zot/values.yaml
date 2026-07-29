@@ -6,7 +6,7 @@
 # the upstream chart; run `helm show values project-zot/zot` against your
 # pinned chart version before applying (see README.md in this directory).
 #
-# Design references: docs/design/oci-llm-distribution.md §6, ADR-0002.
+# References: docs/architecture.md ("Registry layer"), ADR-0002.
 
 image:
   repository: ghcr.io/project-zot/zot-linux-amd64
@@ -67,7 +67,7 @@ configFiles:
     }
 
 # S3 credentials: provide via an existing Secret and env, never inline
-# (pair with your secrets tooling — SOPS, sealed-secrets, external-secrets…).
+# (pair with your secrets tooling: SOPS, sealed-secrets, external-secrets...).
 env:
   - name: AWS_ACCESS_KEY_ID
     valueFrom:

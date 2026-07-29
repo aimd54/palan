@@ -50,7 +50,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Error("weights corrupted through save/load")
 	}
 	blobs, _ := filepath.Glob(filepath.Join(dst.Root(), "blobs", "sha256", "*"))
-	if len(blobs) != 3 { // config, weights, manifest — shared across both tags
+	if len(blobs) != 3 { // config, weights, manifest: shared across both tags
 		t.Errorf("dedup lost through save/load: %d blobs", len(blobs))
 	}
 }

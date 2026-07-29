@@ -130,7 +130,7 @@ fills up. Prometheus metrics are on /metrics.`,
 			case err := <-errCh:
 				return err
 			case <-ctx.Done():
-				fmt.Fprintln(cmd.ErrOrStderr(), "shutting down…")
+				fmt.Fprintln(cmd.ErrOrStderr(), "shutting down...")
 				shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(shutCtx)

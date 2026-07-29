@@ -18,7 +18,7 @@ palan runtime pack PATH... -t REF --build BUILD [flags]
       --arch string         target architecture (GOARCH) (default "amd64")
       --build string        upstream build identifier, e.g. b4567 (required)
       --entrypoint string   executable file name among the packed files (default "llama-server")
-      --flavor string       acceleration flavor: cpu|cuda12|metal|vulkan… (default "cpu")
+      --flavor string       acceleration flavor: cpu|cuda12|metal|vulkan... (default "cpu")
   -h, --help                help for pack
       --name string         runtime name (default "llama-server")
       --os string           target OS (GOOS) (default "linux")

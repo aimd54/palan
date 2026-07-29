@@ -6,8 +6,8 @@ if a decision changes, a new ADR supersedes the old one (which gets its
 `Status` updated to `superseded by ADR-XXXX`), preserving the reasoning trail.
 
 The overall system design lives in
-[`docs/design/oci-llm-distribution.md`](../design/oci-llm-distribution.md);
-ADRs pin down the decisions that document left open.
+[`docs/architecture.md`](../architecture.md); ADRs pin down individual
+decisions and the reasoning behind them.
 
 | ID | Title | Status |
 |----|-------|--------|

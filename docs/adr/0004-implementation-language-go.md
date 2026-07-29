@@ -7,7 +7,7 @@
 ## Context
 
 The workload is I/O-bound transfer, process supervision, and HTTP/SSE
-proxying — inference performance lives entirely in llama.cpp regardless of
+proxying; inference performance lives entirely in llama.cpp regardless of
 client language (design doc §12). Language choice is therefore about
 ecosystem leverage. The canonical OCI client libraries (oras-go v2,
 go-containerregistry, containerd) are Go; every reference peer in this space

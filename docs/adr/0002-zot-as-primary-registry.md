@@ -13,7 +13,7 @@ metrics), **distribution** (`registry:2`; simplest, no UI/OIDC/sync), and
 **Harbor** (full platform; heavier, worth it mainly if wanted for container
 images too).
 
-The self-hosted, air-gap-first use case favors zot: its S3 storage driver
+The self-hosted, air-gapped use case favors zot: its S3 storage driver
 targets any S3-compatible store such as MinIO (with `redirectBlobURL: true`
 streaming multi-GB blobs straight from object storage via presigned 307
 redirects), OIDC covers both human and workload authentication, and its

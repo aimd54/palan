@@ -9,7 +9,7 @@ import (
 
 // TestSpecStringsPinned guards the exact wire strings this project depends
 // on. If a ModelPack spec bump ever changes one of these, interop with
-// already-published artifacts breaks — this test makes that a loud,
+// already-published artifacts breaks; this test makes that a loud,
 // reviewable event instead of a silent one (ADR-0005).
 func TestSpecStringsPinned(t *testing.T) {
 	pins := map[string]string{

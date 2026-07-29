@@ -5,8 +5,8 @@
 // artifacts (see docs/architecture.md, "Security model"). Signatures use
 // cosign's simple-signing payload
 // and tag convention (sha256-<digest>.sig in the same repository), so
-// `cosign verify --key` accepts palan signatures and vice versa — and
-// verification works fully offline, which the air gap requires. Keyless
+// `cosign verify --key` accepts palan signatures and vice versa, and
+// verification works fully offline. Keyless
 // (Fulcio/Rekor) signing is deliberately out of scope for v0.1: it needs
 // online transparency infrastructure.
 package signing

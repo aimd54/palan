@@ -103,7 +103,7 @@ func TestPushPullRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSaveLoadAcrossStores: the offline-transfer path — save on a connected
+// TestSaveLoadAcrossStores: the offline-transfer path. Save on a connected
 // machine, load on an air-gapped one, byte-identical.
 func TestSaveLoadAcrossStores(t *testing.T) {
 	fx := writeFixtures(t, 512<<10)
@@ -161,7 +161,7 @@ func TestRmAndGC(t *testing.T) {
 	}
 }
 
-// TestDescribe: metadata questions are answered without weights moving —
+// TestDescribe: metadata questions are answered without weights moving,
 // locally right after a pack, and remotely (manifest + config blob only)
 // from a store that never pulled the model.
 func TestDescribe(t *testing.T) {

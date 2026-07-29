@@ -52,7 +52,7 @@ func (c *Client) Push(ctx context.Context, st *store.Store, ref registry.Referen
 }
 
 // mountCandidates lists other repositories on the same registry present in
-// the local store — likely blob sources for cross-repo mounting (e.g. two
+// the local store, likely blob sources for cross-repo mounting (e.g. two
 // quantizations sharing a license layer).
 func mountCandidates(ctx context.Context, st *store.Store, ref registry.Reference) ([]string, error) {
 	entries, err := st.List(ctx)

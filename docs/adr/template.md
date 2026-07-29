@@ -11,7 +11,7 @@ What situation and constraints force a decision? Include verifiable facts
 
 ## Decision
 
-The decision, stated actively: "We will …"
+The decision, stated actively: "We will ..."
 
 ## Consequences
 

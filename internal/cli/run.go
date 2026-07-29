@@ -80,7 +80,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 				return err
 			}
 
-			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s on %s…\n", filepath.Base(spec.Bin), ref)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s on %s...\n", filepath.Base(spec.Bin), ref)
 			srv, err := palanruntime.Start(ctx, spec)
 			if err != nil {
 				return err
@@ -124,7 +124,7 @@ type modelInfo struct {
 func ensureModel(ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string) (*modelInfo, error) {
 	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%s not in local store; pulling…\n", ref)
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s not in local store; pulling...\n", ref)
 		parsed, perr := refname.Parse(ref, v.GetString(keyRegistryDefault))
 		if perr != nil {
 			return nil, perr
@@ -184,7 +184,7 @@ func loadModelInfo(ctx context.Context, st *store.Store, ref string, desc ocispe
 // streamed answers on stdout, conversation history preserved.
 func chatREPL(ctx context.Context, cmd *cobra.Command, baseURL, model string) error {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Chatting with %s — Ctrl-D or /bye to exit.\n", model)
+	fmt.Fprintf(out, "Chatting with %s. Ctrl-D or /bye to exit.\n", model)
 	reader := bufio.NewReader(cmd.InOrStdin())
 	var history []chatMessage
 	for {

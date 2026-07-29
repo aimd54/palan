@@ -265,7 +265,7 @@ func TestPullResumesAcrossProcessRestart(t *testing.T) {
 }
 
 // TestPullRestartsWhenRangeIgnored: a registry that ignores Range must not
-// corrupt the download — the client restarts hashing from zero.
+// corrupt the download; the client restarts hashing from zero.
 func TestPullRestartsWhenRangeIgnored(t *testing.T) {
 	reg := registrytest.New(t)
 	weights := randomBytes(t, 1<<20)

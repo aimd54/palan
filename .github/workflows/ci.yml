@@ -89,7 +89,7 @@ jobs:
       - name: Install interop tools (oras, modctl, cosign)
         env:
           # setup-go pins GOTOOLCHAIN=local to our go.mod minimum; these
-          # tools may require newer patch releases — let go auto-fetch them.
+          # tools may require newer patch releases; let go auto-fetch them.
           GOTOOLCHAIN: auto
         run: |
           go install oras.land/oras/cmd/oras@v1.3.3

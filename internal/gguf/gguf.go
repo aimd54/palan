@@ -1,9 +1,9 @@
 // Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package gguf reads GGUF file headers — just enough metadata to fill the
+// Package gguf reads GGUF file headers: just enough metadata to fill the
 // ModelPack config at pack time (architecture, quantization, context
-// length…), in ~200 lines instead of a heavyweight dependency (see
+// length...), in ~200 lines instead of a heavyweight dependency (see
 // docs/adr/0004-implementation-language-go.md).
 //
 // Layout (little-endian, versions 2 and 3):

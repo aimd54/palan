@@ -17,9 +17,9 @@ const (
 	// LayerKindWeight is model weights (e.g. the GGUF file itself).
 	LayerKindWeight
 	// LayerKindWeightConfig is weight-adjacent configuration
-	// (tokenizer.json, chat templates, …).
+	// (tokenizer.json, chat templates, ...).
 	LayerKindWeightConfig
-	// LayerKindDoc is documentation (README, LICENSE, …).
+	// LayerKindDoc is documentation (README, LICENSE, ...).
 	LayerKindDoc
 	// LayerKindCode is model-related code.
 	LayerKindCode

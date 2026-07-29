@@ -4,11 +4,11 @@
 // Package modelspec is palan's single point of contact with the CNCF
 // ModelPack specification (github.com/modelpack/model-spec).
 //
-// It re-exports the upstream spec types and media types — pinned via go.mod
-// so a spec bump is an explicit, reviewable event — and adds the palan-specific
-// annotation keys, which per the design (docs/design/oci-llm-distribution.md
-// §7.1) are the only sanctioned extension point: custom needs go in
-// annotations, never in new media types.
+// It re-exports the upstream spec types and media types, pinned via go.mod
+// so a spec bump is an explicit, reviewable event, and adds the
+// palan-specific annotation keys. Annotations are the spec's only sanctioned
+// extension point (see docs/architecture.md, "Artifact format"): custom
+// needs go in annotations, never in new media types.
 //
 // Nothing else in palan may import the upstream spec module directly; this
 // package is the isolation layer that keeps ModelPack drift contained
@@ -29,7 +29,7 @@ const (
 
 	// Raw (unarchived, uncompressed) layer media types. palan packs GGUF
 	// weights raw: the blob in the local store is the file llama-server
-	// mmaps — no unpack step, no double storage.
+	// mmaps, with no unpack step and no double storage.
 	MediaTypeModelWeightRaw       = specv1.MediaTypeModelWeightRaw
 	MediaTypeModelWeightConfigRaw = specv1.MediaTypeModelWeightConfigRaw
 	MediaTypeModelDocRaw          = specv1.MediaTypeModelDocRaw
@@ -69,9 +69,9 @@ const (
 type (
 	// Model is the config blob (application/vnd.cncf.model.config.v1+json).
 	Model = specv1.Model
-	// ModelDescriptor holds general model information (family, name, licenses…).
+	// ModelDescriptor holds general model information (family, name, licenses...).
 	ModelDescriptor = specv1.ModelDescriptor
-	// ModelConfig holds execution-relevant properties (format, quantization…).
+	// ModelConfig holds execution-relevant properties (format, quantization...).
 	ModelConfig = specv1.ModelConfig
 	// ModelFS lists layer diff IDs; for raw layers the diff ID equals the
 	// layer digest.

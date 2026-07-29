@@ -5,7 +5,7 @@
 // docs/architecture.md, "Serving layer"): one OpenAI-compatible endpoint
 // that lazily spawns a llama-server per model,
 // unloads idle ones, and evicts least-recently-used instances when the
-// memory budget would overflow — so loading model B on a 10 GB GPU evicts
+// memory budget would overflow, so loading model B on a 10 GB GPU evicts
 // model A instead of OOMing it.
 package router
 

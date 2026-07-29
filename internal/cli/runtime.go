@@ -177,7 +177,7 @@ libraries) as an OCI artifact. The publisher-side counterpart of
 	cmd.Flags().StringVarP(&tag, "tag", "t", "", "reference to tag the runtime with (required)")
 	cmd.Flags().StringVar(&name, "name", "llama-server", "runtime name")
 	cmd.Flags().StringVar(&build, "build", "", "upstream build identifier, e.g. b4567 (required)")
-	cmd.Flags().StringVar(&flavor, "flavor", "cpu", "acceleration flavor: cpu|cuda12|metal|vulkan…")
+	cmd.Flags().StringVar(&flavor, "flavor", "cpu", "acceleration flavor: cpu|cuda12|metal|vulkan...")
 	cmd.Flags().StringVar(&entrypoint, "entrypoint", "llama-server", "executable file name among the packed files")
 	cmd.Flags().StringVar(&osName, "os", runtime.GOOS, "target OS (GOOS)")
 	cmd.Flags().StringVar(&arch, "arch", runtime.GOARCH, "target architecture (GOARCH)")

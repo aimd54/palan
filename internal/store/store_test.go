@@ -124,7 +124,7 @@ func TestBlobDedupAcrossTags(t *testing.T) {
 	pushTestModel(t, s, "registry.example/llm/tiny:b", weights)
 
 	blobs, _ := filepath.Glob(filepath.Join(s.Root(), "blobs", "sha256", "*"))
-	// config, weight, manifest — all identical between the two pushes except
+	// config, weight, manifest: all identical between the two pushes except
 	// nothing: both tags point at the same manifest. 3 blobs total.
 	if len(blobs) != 3 {
 		t.Errorf("expected 3 deduplicated blobs, got %d", len(blobs))

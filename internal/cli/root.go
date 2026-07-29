@@ -35,7 +35,7 @@ func New() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "palan",
 		Short:         "Distribute and serve GGUF models as OCI artifacts",
-		Long:          "palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry — daemonless, in one binary.",
+		Long:          "palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry. Daemonless, in one binary.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

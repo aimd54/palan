@@ -362,7 +362,7 @@ func (r *Registry) Requests() []ReqRecord {
 }
 
 // CopyManifest republished the manifest stored under srcRef in repo under
-// dstRef — used to simulate signature-substitution attacks in tests.
+// dstRef, to simulate signature-substitution attacks in tests.
 func (r *Registry) CopyManifest(repo, srcRef, dstRef string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

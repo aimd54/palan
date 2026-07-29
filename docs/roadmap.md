@@ -19,9 +19,9 @@ These cannot be validated from CI and carry checklists in the repo:
 - zot with an S3 backend and OIDC on a real cluster
   ([deploy/zot/README.md](../deploy/zot/README.md))
 - CUDA serving on a GPU host (runtime artifact with a cuda flavor;
-  `palan runtime pack … --flavor cuda12`)
-- K8s image volumes on a containerd-based cluster — decides whether the
-  car profile stays
+  `palan runtime pack ... --flavor cuda12`)
+- K8s image volumes on a containerd-based cluster, which decides whether
+  the car profile stays
   ([deploy/k8s-examples/README.md](../deploy/k8s-examples/README.md))
 
 ## Planned / open
@@ -33,4 +33,4 @@ These cannot be validated from CI and carry checklists in the repo:
 - Referrers-API storage for signatures alongside the tag fallback.
 - Upstreaming the GGUF packing path to modctl if welcome (see ADR-0005).
 - Stretch goals: LoRA adapter artifacts, multimodal mmproj, HF import
-  (`pack hf://…`), safetensors/vLLM profile.
+  (`pack hf://...`), safetensors/vLLM profile.

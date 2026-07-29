@@ -18,7 +18,7 @@ import (
 	"github.com/aimd54/palan/pkg/modelspec"
 )
 
-// TestOrasInterop: the G2 contract in the oras direction — a palan-packed
+// TestOrasInterop: the G2 contract in the oras direction. A palan-packed
 // artifact must be a plain, spec-compliant OCI artifact for generic tools,
 // and a ModelPack artifact produced by oras must be pullable by palan.
 func TestOrasInterop(t *testing.T) {

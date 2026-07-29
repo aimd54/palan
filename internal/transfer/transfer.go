@@ -127,7 +127,7 @@ func (c *Client) Registry(host string) (*remote.Registry, error) {
 }
 
 // Login validates credentials against host (ping) and saves them in the
-// Docker credentials store — a configured credential helper when present,
+// Docker credentials store: a configured credential helper when present,
 // plaintext config.json otherwise.
 func (c *Client) Login(ctx context.Context, host, username, password string) error {
 	credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{AllowPlaintextPut: true})

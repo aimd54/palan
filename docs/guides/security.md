@@ -19,9 +19,9 @@ model](../architecture.md#security-model) overview.
 
 ## Signing models
 
-Signatures are cosign-compatible and **work fully offline** — no
-transparency log required, which the air gap demands. Verified
-bidirectionally against the real cosign in CI.
+Signatures are cosign-compatible and **work fully offline**, with no
+transparency log required. CI verifies them bidirectionally against the
+real cosign.
 
 ```sh
 # One-time: a cosign keypair (palan reads cosign.key/cosign.pub directly)
@@ -31,16 +31,16 @@ cosign generate-key-pair
 palan push  registry.internal/llm/qwen3:8b-q4
 palan sign  registry.internal/llm/qwen3:8b-q4 --key cosign.key
 
-# Verify explicitly…
+# Verify explicitly...
 palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
-# …or with cosign itself
+# ...or with cosign itself
 cosign verify --key cosign.pub --insecure-ignore-tlog \
   registry.internal/llm/qwen3:8b-q4
 ```
 
 A signature is accepted only if it validates against the key, **binds the
-exact manifest digest**, and claims the expected repository identity —
-copying a valid signature onto a different artifact or repo fails.
+exact manifest digest**, and claims the expected repository identity.
+Copying a valid signature onto a different artifact or repo fails.
 
 ## Enforcing verification on pull
 
@@ -67,10 +67,10 @@ This is the recommended default once your pipeline signs everything
 
 - `palan login REGISTRY` validates credentials and stores them in the
   Docker credentials store (a credential helper when configured; plaintext
-  `~/.docker/config.json` otherwise — prefer a helper).
+  `~/.docker/config.json` otherwise; prefer a helper).
 - No plaintext password flag exists; use the prompt or `--password-stdin`.
 - Kubernetes workloads should use OIDC workload identity against zot
-  (projected ServiceAccount tokens) instead of static secrets — see the
+  (projected ServiceAccount tokens) instead of static secrets. See the
   [Kubernetes guide](kubernetes.md).
 
 ## Serving
@@ -82,7 +82,7 @@ This is the recommended default once your pipeline signs everything
 
 ## Out of scope in v0.1 (tracked on the roadmap)
 
-- Keyless (Fulcio/Rekor) signing — requires online infrastructure.
+- Keyless (Fulcio/Rekor) signing, which requires online infrastructure.
 - OIDC device-flow login from the CLI.
 - Signature verification for `save`/`load` bundles (verify against the
   registry after import instead).

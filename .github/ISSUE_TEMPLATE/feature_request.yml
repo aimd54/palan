@@ -22,4 +22,4 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Including existing tools (oras, modctl, RamaLama, Ollama, …) and why they don't cover it.
+      description: Including existing tools (oras, modctl, RamaLama, Ollama, ...) and why they don't cover it.

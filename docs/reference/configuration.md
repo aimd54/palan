@@ -3,9 +3,9 @@
 palan reads, in order of precedence (highest wins):
 
 1. command-line flags
-2. environment variables — `PALAN_` prefix, dots/dashes become underscores
+2. environment variables: `PALAN_` prefix, dots/dashes become underscores
    (e.g. `PALAN_REGISTRY_DEFAULT`, `PALAN_SERVE_BEARER_TOKEN`)
-3. the config file — `--config PATH`, else `~/.config/palan/config.yaml`
+3. the config file: `--config PATH`, else `~/.config/palan/config.yaml`
 
 The local store location is separate: `PALAN_HOME`, else
 `$XDG_DATA_HOME/palan`, else `~/.local/share/palan`.
@@ -31,7 +31,7 @@ serve:
   addr: ":11500"
   idle-timeout: 10m
   memory-budget: ""            # e.g. 9GiB; empty auto-detects (GPU VRAM, else RAM/2)
-  bearer-token: ""             # require Authorization: Bearer … when set
+  bearer-token: ""             # require Authorization: Bearer ... when set
 
 verify:
   required: false              # verify signatures on every pull

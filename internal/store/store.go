@@ -5,7 +5,7 @@
 //
 // The store is a standard OCI image layout (oci-layout, index.json,
 // blobs/<alg>/<hex>) managed through oras-go's oci.Store, so any OCI tool
-// can read it directly — `oras cp --from-oci-layout` included. Weight layers
+// can read it directly, `oras cp --from-oci-layout` included. Weight layers
 // are raw GGUF bytes, which means the blob path returned by BlobPath is the
 // exact file llama-server mmaps: zero copies between "pulled" and
 // "servable" (see docs/architecture.md, "Client and local store").

@@ -9,9 +9,9 @@ verifying digests. Interrupted downloads resume from where they stopped,
 including across process restarts.
 
 With --output, the model's files are additionally materialized into a
-directory (named per their org.cncf.model.filepath annotations) — the
-Kubernetes init-container pattern: pull into an emptyDir, serve with any
-llama-server image.
+directory (named per their org.cncf.model.filepath annotations). This is
+the Kubernetes init-container pattern: pull into an emptyDir, serve with
+any llama-server image.
 
 ```
 palan pull REF [flags]

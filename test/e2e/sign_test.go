@@ -57,7 +57,7 @@ func writeTestKeys(t *testing.T) (privPath, pubPath string) {
 	return privPath, pubPath
 }
 
-// TestSignVerifyAndPullGate: M6 acceptance — sign a pushed model, verify
+// TestSignVerifyAndPullGate: M6 acceptance. Sign a pushed model, verify
 // it, enforce the pull gate, and prove an unsigned artifact fails the gate.
 func TestSignVerifyAndPullGate(t *testing.T) {
 	t.Setenv("COSIGN_PASSWORD", testKeyPassword)

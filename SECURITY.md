@@ -21,6 +21,6 @@ Pre-1.0, only the latest minor release line receives security fixes.
 Model weights are attacker-controlled inputs: palan verifies blob digests on
 every transfer and supports cosign signature verification on pull
 (`palan pull --verify`, `verify.required` in the config). Weaknesses in those
-guarantees — digest bypass, signature confusion, path traversal during
-unpacking, `--insecure` behavior beyond its documented warning — are all
+guarantees (digest bypass, signature confusion, path traversal during
+unpacking, or `--insecure` behavior beyond its documented warning) are all
 in scope and highly appreciated reports.

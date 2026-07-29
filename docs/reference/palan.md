@@ -5,7 +5,7 @@ Distribute and serve GGUF models as OCI artifacts
 ### Synopsis
 
 palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts
-against any OCI 1.1 registry — daemonless, in one binary.
+against any OCI 1.1 registry. Daemonless, in one binary.
 
 ### Options
 

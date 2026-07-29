@@ -4,7 +4,7 @@
 // Package pack builds ModelPack artifacts from GGUF files.
 //
 // Packing is reproducible (see docs/architecture.md, "Artifact format"):
-// layer ordering is fixed (weights, then weight-configs, then docs — each
+// layer ordering is fixed (weights, then weight-configs, then docs, each
 // sorted by artifact path), config and manifest JSON contain no
 // timestamps, and identical inputs therefore yield identical digests on
 // every run.

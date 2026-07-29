@@ -8,13 +8,13 @@
 
 The design doc (§4, §8.3) preferred delegating the transfer/pack layer to
 **modctl** (the ModelPack reference implementation) *if* its logic proved
-importable, with oras-go v2 as fallback — "for a solo maintainer,
+importable, with oras-go v2 as fallback: "for a solo maintainer,
 upstreaming beats reimplementing."
 
 Findings, checked 2026-07-12 against modctl v0.2.2:
 
 - modctl **does** ship an importable `pkg/` tree alongside `internal/`, with
-  GoDoc published — the library path exists in principle.
+  GoDoc published, so the library path exists in principle.
 - The project positions itself CLI-first; the README documents commands, not
   a programmatic API. It is pre-1.0 with 43 releases and an actively churning
   API surface.
@@ -24,8 +24,8 @@ Findings, checked 2026-07-12 against modctl v0.2.2:
   building moci's store on modctl's stack would couple that guarantee to a
   fast-moving dependency's internals.
 - The ModelPack manifest/config construction moci needs is small and
-  spec-pinned (media types, fixed layer ordering, canonical config JSON) —
-  low-risk to implement directly, and its correctness is *externally
+  spec-pinned (media types, fixed layer ordering, canonical config JSON), so
+  it is low-risk to implement directly, and its correctness is *externally
   checkable* against modctl.
 
 ## Decision

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command palan distributes and serves GGUF models as OCI artifacts.
-// See docs/design/oci-llm-distribution.md for the design.
+// See docs/architecture.md for how the pieces fit together.
 package main
 
 import (

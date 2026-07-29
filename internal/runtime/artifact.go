@@ -6,8 +6,8 @@
 // llama-server builds travel as OCI artifacts through the same registries
 // as the models (see docs/architecture.md, "Serving layer"): version-pinned,
 // air-gap friendly, and swappable without rebuilding palan (ADR-0003).
-// These are palan's own
-// artifacts — not ModelPack models — so they carry vnd.palan media types.
+// These are palan's own artifacts rather than ModelPack models, so they
+// carry vnd.palan media types.
 package runtime
 
 import (
@@ -37,7 +37,7 @@ const (
 	ArtifactTypeRuntime = "application/vnd.palan.runtime.v1+json"
 	// MediaTypeRuntimeConfig is the runtime config blob.
 	MediaTypeRuntimeConfig = "application/vnd.palan.runtime.config.v1+json"
-	// MediaTypeRuntimeFile is a raw runtime file layer (binary, library…).
+	// MediaTypeRuntimeFile is a raw runtime file layer (binary, library...).
 	MediaTypeRuntimeFile = "application/vnd.palan.runtime.file.v1.raw"
 )
 
@@ -50,7 +50,7 @@ type Config struct {
 	// OS/Arch in GOOS/GOARCH terms.
 	OS   string `json:"os"`
 	Arch string `json:"arch"`
-	// Flavor distinguishes acceleration variants: cpu, cuda12, metal…
+	// Flavor distinguishes acceleration variants: cpu, cuda12, metal...
 	Flavor string `json:"flavor"`
 	// Entrypoint names the executable layer file.
 	Entrypoint string `json:"entrypoint"`

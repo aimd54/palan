@@ -20,9 +20,9 @@ tools (zot + Ollama's OCI dialect; zot + RamaLama under Podman) before
 writing code (§4). Those trials require the target deployment environment
 and were not run; the maintainer reviewed the trade-off analysis and
 directed the build on 2026-07-12, accepting local-only validation. The
-doc's predictions — Ollama chafing on auth/naming against standard
-registries (issues #2745, #7244, #4204, #9409), RamaLama's hard
-container-engine requirement — are recorded here as *unverified
+doc's predictions, namely Ollama chafing on auth/naming against standard
+registries (issues #2745, #7244, #4204, #9409) and RamaLama's hard
+container-engine requirement, are recorded here as *unverified
 expectations*: if hands-on trials later contradict them, the "adopt
 instead of build" option should be re-examined.
 

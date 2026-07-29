@@ -148,7 +148,7 @@ func run(t *testing.T, bin string, args ...string) string {
 	return string(out)
 }
 
-// firstDigest extracts the first "Digest: sha256:…" line from CLI output.
+// firstDigest extracts the first "Digest: sha256:..." line from CLI output.
 func firstDigest(t *testing.T, out string) string {
 	t.Helper()
 	m := digestRegex.FindStringSubmatch(out)

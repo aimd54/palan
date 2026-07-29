@@ -2,7 +2,7 @@
 
 zot is palan's reference registry (ADR-0002): CNCF, single binary, OCI-native,
 S3 storage driver, OIDC, sync/mirroring, referrers support. palan itself works
-against **any** OCI 1.1 registry — nothing here is required by the client.
+against **any** OCI 1.1 registry; nothing here is required by the client.
 
 ## Install
 
@@ -19,22 +19,22 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
 
 ## Before applying
 
-1. **Secrets** (manage with your usual tooling — SOPS, sealed-secrets, …):
+1. **Secrets** (manage with your usual tooling: SOPS, sealed-secrets, ...):
    - `zot-s3-credentials` with `access-key`/`secret-key` for a dedicated
-     bucket (`zot-models`) on any S3-compatible store (MinIO, …).
+     bucket (`zot-models`) on any S3-compatible store (MinIO, ...).
    - `zot-oidc-credentials` with zot's `oidc-credentials.json`
      (`clientid`/`clientsecret` for your issuer).
 2. **MinIO**: create the bucket; the `redirectBlobURL: true` knob makes blob
    GETs answer with a 307 to a presigned MinIO URL, so multi-GB GGUF pulls
-   stream straight from MinIO instead of proxying through zot — the single
-   most important performance setting for model-sized blobs (see
+   stream straight from MinIO instead of proxying through zot. This is the
+   single most important performance setting for model-sized blobs (see
    [Registry layer](../../docs/architecture.md#registry-layer)).
 3. **TLS**: terminate at the ingress with the internal CA, or configure
    `http.tls` in `config.json` with a mounted certificate. Clients that
    don't trust the internal CA system-wide can pass `--ca-file`.
 4. **Access control**: the sketch in `values.yaml` gives anonymous read on
-   `llm/**` and authenticated read elsewhere; pushes require named policies
-   — tighten to your needs. For workload identity (pods pulling with
+   `llm/**` and authenticated read elsewhere; pushes require named policies.
+   Tighten to your needs. For workload identity (pods pulling with
    projected ServiceAccount tokens, no static credentials), see zot's OIDC
    docs and pair with the init-puller example.
 
@@ -43,7 +43,7 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
 Options, in increasing automation:
 
 1. **Sneakernet**: `palan save llm/qwen3:8b-q4 -o bundle.tar` on the
-   connected side; carry; `palan load -i bundle.tar && palan push …` inside.
+   connected side; carry; `palan load -i bundle.tar && palan push ...` inside.
 2. **Direct copy** when a one-way path exists:
    `palan cp dmz.example/llm/qwen3:8b-q4 registry.internal/llm/qwen3:8b-q4`.
 3. **zot sync**: give the internet-facing zot a `sync` extension config

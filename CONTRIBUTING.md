@@ -26,7 +26,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
 ```
 
 Common types: `feat`, `fix`, `docs`, `test`, `ci`, `chore`, `refactor`.
-Scopes mirror the package tree, e.g. `feat(store): …`, `fix(router): …`.
+Scopes mirror the package tree, e.g. `feat(store): ...`, `fix(router): ...`.
 Keep commits small and self-contained; every commit must build and pass tests.
 
 ## Development setup
@@ -44,7 +44,7 @@ make lint-docs  # markdownlint over the docs (requires Node)
 make help       # list all targets
 ```
 
-Run `make check` before every commit — CI runs the same gates.
+Run `make check` before every commit; CI runs the same gates.
 
 ## Code conventions
 
@@ -67,5 +67,5 @@ Run `make check` before every commit — CI runs the same gates.
 - Use the issue templates for bugs and feature requests.
 - PRs should reference the issue they address and describe testing performed.
 - Interoperability is a contract: artifacts packed by palan must remain
-  pullable by `oras` and `modctl` (see the interop test suite) — changes that
+  pullable by `oras` and `modctl` (see the interop test suite). Changes that
   break this will not be accepted.

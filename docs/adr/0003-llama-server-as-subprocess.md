@@ -9,7 +9,7 @@
 moci serves GGUF models through llama.cpp. Two integration shapes exist:
 embed llama.cpp via cgo bindings, or supervise stock `llama-server`
 processes. llama.cpp moves fast (flags, API, and performance characteristics
-churn across builds — design doc §15), inference crashes are a real
+churn across builds; design doc §15), inference crashes are a real
 operational event, and air-gapped hosts need a way to receive runtime
 updates without rebuilding tools.
 
@@ -25,7 +25,7 @@ through the same registries as the models. cgo bindings are rejected.
 
 - A llama.cpp crash kills one model's process, not the router; recovery is
   a respawn.
-- Runtime upgrades and rollbacks are artifact pulls, not binary rebuilds —
+- Runtime upgrades and rollbacks are artifact pulls, not binary rebuilds,
   and they traverse the air gap through the already-established channel.
 - moci binaries stay CGO_ENABLED=0, keeping cross-compilation and static
   distribution trivial.

@@ -8,8 +8,10 @@ Goal: from nothing to a served model in about five minutes, on one machine.
 - Docker (only for the throwaway registry)
 - A GGUF model file (any quantization; for a small test try a
   SmolLM/stories-class model of a few hundred MB or less)
-- `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp) in
-  PATH — or pull one as a runtime artifact once your registry has one
+- `llama-server` in PATH, from a
+  [llama.cpp install](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
+  (Homebrew, winget, conda-forge, MacPorts, or Nix), or pulled as a runtime
+  artifact once your registry has one
 
 ## 1. Start a registry
 
@@ -35,7 +37,7 @@ palan pack my-model.gguf -t llm/mymodel:q4 --ctx 8192 --push
 ```
 
 `pack` reads the GGUF header and fills the ModelPack config (architecture,
-quantization, size, license) — check with:
+quantization, size, license). Check with:
 
 ```sh
 palan ls
@@ -51,7 +53,7 @@ palan run llm/mymodel:q4               # interactive chat; /bye to quit
 palan run llm/mymodel:q4 -p "One-line haiku about registries"
 ```
 
-`run` spawns `llama-server` directly on the store's blob — the model is
+`run` spawns `llama-server` directly on the store's blob; the model is
 never copied or unpacked.
 
 ## 4. Serve several models

@@ -1,8 +1,9 @@
 # Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Distroless palan image — primarily the Kubernetes init-container puller
-# (design §10.1): `palan pull $MODEL --output /models` into an emptyDir.
+# Distroless palan image, primarily the Kubernetes init-container puller
+# (see docs/guides/kubernetes.md): `palan pull $MODEL --output /models`
+# into an emptyDir.
 
 FROM golang:1.25 AS build
 WORKDIR /src
