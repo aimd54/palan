@@ -7,7 +7,9 @@ Goal: from nothing to a served model in about five minutes, on one machine.
 - A `palan` binary (release download, `go install github.com/aimd54/palan/cmd/palan@latest`, or `make build`)
 - Docker (only for the throwaway registry)
 - A GGUF model file (any quantization; for a small test try a
-  SmolLM/stories-class model of a few hundred MB or less)
+  SmolLM/stories-class model of a few hundred MB or less). If you have
+  models in Ollama or want one from Hugging Face, see
+  [Importing models you already have](#importing-models-you-already-have).
 - `llama-server` in PATH, from a
   [llama.cpp install](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
   (Homebrew, winget, conda-forge, MacPorts, or Nix), or pulled as a runtime
@@ -77,7 +79,67 @@ curl -s localhost:11500/v1/chat/completions -d '{
 }'
 ```
 
-## 5. Where next
+## Importing models you already have
+
+### From Ollama
+
+Ollama stores each model as an OCI manifest whose `model` layer is a plain,
+unmodified GGUF file, so it can be packed as-is. Copy that layer out along
+with the license layer:
+
+```sh
+OLLAMA=~/.ollama/models
+MANIFEST=$OLLAMA/manifests/registry.ollama.ai/library/gemma3/1b
+blob() { jq -r ".layers[]|select(.mediaType|endswith(\".$1\"))|.digest" \
+           "$MANIFEST" | tr ':' '-'; }
+
+cp "$OLLAMA/blobs/$(blob model)"   gemma3-1b.gguf
+cp "$OLLAMA/blobs/$(blob license)" LICENSE
+
+palan pack gemma3-1b.gguf LICENSE -t llm/gemma3:1b \
+  --source https://ai.google.dev/gemma --push
+```
+
+File names decide the layer roles: `.gguf` becomes the weight layer, and
+`LICENSE` a documentation layer that travels with the weights. Because the
+weight bytes are unchanged, the `io.palan.origin.sha256` annotation on the
+result is the same digest Ollama stored the blob under, which chains
+provenance back to where the file came from.
+
+Ollama's `template` and `params` layers use Ollama's own formats and are not
+useful to `llama-server`. Most GGUFs already carry the chat template in the
+header as `tokenizer.chat_template`.
+
+### From Hugging Face
+
+Repositories that publish `.gguf` files need no conversion:
+
+```sh
+curl -LO https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf
+palan pack Qwen3-8B-Q4_K_M.gguf -t llm/qwen3:8b-q4 \
+  --source https://huggingface.co/Qwen/Qwen3-8B-GGUF --push
+```
+
+Repositories that publish only safetensors need llama.cpp's
+`convert_hf_to_gguf.py` first. Gated repositories require accepting the
+model's terms and passing an access token with the download.
+
+### Licensing
+
+Packing does not modify the weights, so redistribution is governed by the
+model's own license. Several widely used families, including Gemma and
+Llama, permit redistribution on the condition that the license text and
+attribution notices stay with the weights. Packing the license file as a
+layer satisfies that mechanically, and `palan pack` also lifts
+`general.license` from the GGUF header into the ModelPack config when the
+file sets it.
+
+Mirroring into a registry you control is what palan is built for.
+Publishing a model onward makes you its distributor, with the notice and
+acceptable-use obligations that follow, and models kept behind terms
+acceptance upstream should stay inside infrastructure you control.
+
+## Where next
 
 - Sign your models and enforce verification: [security guide](guides/security.md)
 - Move models across an air gap: [air-gap guide](guides/air-gap.md)
