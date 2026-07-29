@@ -116,7 +116,7 @@ jobs:
         with:
           # Scan with current stable Go: govulncheck checks the *standard
           # library* of the toolchain in use, and our go.mod minimum
-          # (1.25.0) has stdlib CVEs fixed in later patch releases.
+          # (1.26.0) has stdlib CVEs fixed in later patch releases.
           go-version: stable
       - name: Run govulncheck
         run: |
