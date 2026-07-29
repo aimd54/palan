@@ -18,6 +18,8 @@ jobs:
       contents: write # create the GitHub release
       packages: write # push ghcr.io images
       id-token: write # keyless cosign signing
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,3 +45,24 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Collect artifact digests for provenance
+        id: hashes
+        run: |
+          set -euo pipefail
+          # checksums.txt already lists every released archive; base64 it
+          # whole and hand it to the generator as the provenance subjects.
+          echo "hashes=$(base64 -w0 < dist/checksums.txt)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: [goreleaser]
+    permissions:
+      actions: read # read the workflow run that produced the artifacts
+      id-token: write # sign the provenance
+      contents: write # attach it to the release
+    # The generator refuses to run when referenced by digest: it derives its
+    # own builder identity from this tag, so a SHA pin fails the build. This
+    # is the one unpinned reference in the repo.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.goreleaser.outputs.hashes }}
+      upload-assets: true
