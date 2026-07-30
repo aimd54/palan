@@ -84,6 +84,12 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # Pinned interop tools. These versions form the cache key below, so
+      # editing one here is all it takes to rebuild the cached binaries.
+      ORAS_VERSION: v1.3.3
+      MODCTL_VERSION: v0.2.2
+      COSIGN_VERSION: v2.6.3
     services:
       zot:
         # zot-minimal: the suite only uses the core Distribution API, so the
@@ -102,15 +108,28 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # setup-go's cache is keyed on our own go.sum, which says nothing about
+      # these tools, so without a cache of their own every run re-downloads
+      # ~360 modules and recompiles cosign's dependency tree from scratch.
+      - name: Cache interop tools
+        id: interop-tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/palan-interop-tools
+          key: interop-tools-${{ runner.os }}-${{ runner.arch }}-oras${{ env.ORAS_VERSION }}-modctl${{ env.MODCTL_VERSION }}-cosign${{ env.COSIGN_VERSION }}
       - name: Install interop tools (oras, modctl, cosign)
+        if: steps.interop-tools.outputs.cache-hit != 'true'
         env:
           # setup-go pins GOTOOLCHAIN=local to our go.mod minimum; these
           # tools may require newer patch releases; let go auto-fetch them.
           GOTOOLCHAIN: auto
         run: |
-          go install oras.land/oras/cmd/oras@v1.3.3
-          go install github.com/modelpack/modctl@v0.2.2
-          go install github.com/sigstore/cosign/v2/cmd/cosign@v2.6.3
+          export GOBIN="$HOME/.cache/palan-interop-tools"
+          go install "oras.land/oras/cmd/oras@$ORAS_VERSION"
+          go install "github.com/modelpack/modctl@$MODCTL_VERSION"
+          go install "github.com/sigstore/cosign/v2/cmd/cosign@$COSIGN_VERSION"
+      - name: Put interop tools on PATH
+        run: echo "$HOME/.cache/palan-interop-tools" >> "$GITHUB_PATH"
       - name: Run e2e suite
         env:
           E2E_REGISTRY: localhost:5000
