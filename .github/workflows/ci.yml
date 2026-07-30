@@ -27,6 +27,10 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # Part of the binary cache key below. Dependabot does not watch this,
+      # so bump it by hand.
+      GOLANGCI_LINT_VERSION: v2.12.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,15 +38,32 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Resolve the toolchain for the cache key
+        id: toolchain
+        run: echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      # The linter is built from source rather than downloaded, so that its
+      # own Go version can never be older than the one this module targets:
+      # a prebuilt binary refuses to analyse a newer target. Building it costs
+      # ~70s, so cache the result on the linter version plus the toolchain
+      # that produced it, which are the only things that change the output.
+      - name: Cache golangci-lint
+        id: lint-bin
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/palan-lint-bin
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ steps.toolchain.outputs.version }}
+      - name: Build golangci-lint
+        if: steps.lint-bin.outputs.cache-hit != 'true'
+        run: |
+          GOBIN="$HOME/.cache/palan-lint-bin" \
+            go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION"
+      - name: Put golangci-lint on PATH
+        run: echo "$HOME/.cache/palan-lint-bin" >> "$GITHUB_PATH"
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          # goinstall builds the linter with the toolchain from go.mod, so it
-          # can never be older than the Go version this module targets. The
-          # prebuilt binaries are built against whatever Go was current at
-          # their release and refuse to run against a newer target.
-          # Dependabot does not watch this input; bump it by hand.
-          version: v2.12.2
-          install-mode: goinstall
+          # The binary is already on PATH, from the cache or the step above.
+          install-mode: none
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
 
   lint-docs:
     name: Lint docs
