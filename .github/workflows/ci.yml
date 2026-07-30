@@ -3,10 +3,20 @@
 
 name: CI
 
+# Documentation-only changes skip this workflow entirely; markdown linting
+# lives in docs.yml, which claims the same paths this one ignores. A change
+# touching both docs and code still runs here, because a path filter only
+# skips when every changed file matches it.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
 
 # Default to no permissions; each job requests exactly what it needs.
 permissions: {}
@@ -64,20 +74,6 @@ jobs:
           # The binary is already on PATH, from the cache or the step above.
           install-mode: none
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-
-  lint-docs:
-    name: Lint docs
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: DavidAnson/markdownlint-cli2-action@6bf21b07787794f89a243495939cd651942aeabe # v24.1.0
-        with:
-          globs: "**/*.md"
 
   test:
     name: Test
