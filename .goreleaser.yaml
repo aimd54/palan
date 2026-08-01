@@ -81,6 +81,18 @@ dockers_v2:
 
 changelog:
   use: git
+  # Entries carry no commit hash; the release page already links the full
+  # comparison for anyone who wants it.
+  abbrev: -1
+  filters:
+    # Repository plumbing that changes nothing a consumer of the binaries can
+    # observe. Everything else, including build changes such as a minimum Go
+    # version bump, stays in the notes.
+    exclude:
+      - '^ci[:(]'
+      - '^chore[:(]'
+      - '^test[:(]'
+      - '^style[:(]'
   groups:
     - title: Features
       regexp: '^feat'
