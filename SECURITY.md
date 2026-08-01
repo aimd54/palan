@@ -16,6 +16,17 @@ patched release is available.
 
 Pre-1.0, only the latest minor release line receives security fixes.
 
+## Disclosure in releases
+
+Every release whose changes fix a publicly known vulnerability names it in the
+release notes, with its CVE identifier where one has been assigned, so that
+reading the notes is enough to tell whether an upgrade carries a security fix.
+Vulnerabilities reported privately are disclosed the same way once a patched
+release exists, alongside the GitHub Security Advisory.
+
+Releases that fix nothing security-relevant say nothing about it, so the
+absence of a note means no known vulnerability was addressed.
+
 ## Scope notes
 
 Model weights are attacker-controlled inputs: palan verifies blob digests on

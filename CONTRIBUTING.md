@@ -46,6 +46,23 @@ make help       # list all targets
 
 Run `make check` before every commit; CI runs the same gates.
 
+## Testing policy
+
+New functionality comes with new tests, and bug fixes come with a test that
+fails before the fix and passes after it. A pull request that adds behaviour
+without covering it will be asked for tests before review continues.
+
+What that means in practice:
+
+- Unit tests next to the code, in the same package for unexported behaviour.
+- Parsers that read untrusted input (GGUF headers, references, annotations,
+  archives) get a `Fuzz*` target alongside the table tests.
+- Changes to transfer, packing, or signing get an end-to-end case in the
+  `make e2e` suite, which runs against a real registry and the interop tools.
+- Write the assertion so it fails when the feature is broken. Checking that a
+  command exits 0 rarely does: much of what this project talks to reports
+  success while doing nothing, so assert the state you expect to see.
+
 ## Code conventions
 
 - Go code is formatted with `gofmt` and `goimports`
