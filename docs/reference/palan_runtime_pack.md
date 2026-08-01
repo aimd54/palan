@@ -8,6 +8,12 @@ Pack stores runtime files (the llama-server binary plus any shared
 libraries) as an OCI artifact. The publisher-side counterpart of
 'runtime pull'.
 
+Libraries packed beside the executable are found when it runs: palan points
+the dynamic loader at the unpacked directory, so a build carrying no $ORIGIN
+runpath still resolves its own libraries instead of the host's. Include every
+library the binary needs, because the host serving the model may have none of
+them installed.
+
 ```
 palan runtime pack PATH... -t REF --build BUILD [flags]
 ```

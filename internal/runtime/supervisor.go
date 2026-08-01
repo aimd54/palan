@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -77,6 +78,7 @@ func Start(ctx context.Context, spec Spec) (*Server, error) {
 	args = append(args, spec.ExtraArgs...)
 
 	cmd := exec.Command(spec.Bin, args...) // #nosec G204 -- spawning the resolved inference runtime is this package's purpose (ADR-0003)
+	cmd.Env = runtimeEnv(os.Environ(), filepath.Dir(spec.Bin))
 	var logPath string
 	if spec.LogDir != "" {
 		if err := os.MkdirAll(spec.LogDir, 0o750); err != nil {
@@ -216,4 +218,69 @@ func freePort(host string) (int, error) {
 	}
 	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// libraryPathVar names the dynamic loader's search-path variable for this
+// platform.
+func libraryPathVar() string {
+	if runtime.GOOS == "darwin" {
+		return "DYLD_LIBRARY_PATH"
+	}
+	return "LD_LIBRARY_PATH"
+}
+
+// isSharedLibrary reports whether a file name looks like a shared library,
+// covering both plain and versioned names (libggml.so, libggml.so.0).
+func isSharedLibrary(name string) bool {
+	return strings.HasSuffix(name, ".dylib") ||
+		strings.HasSuffix(name, ".so") ||
+		strings.Contains(name, ".so.")
+}
+
+// shipsLibraries reports whether dir holds shared libraries beside the
+// executable.
+func shipsLibraries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && isSharedLibrary(e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeEnv gives the child a loader search path covering any libraries
+// packed beside its executable.
+//
+// `palan runtime pack` writes llama-server and its shared libraries into one
+// directory, but nothing guarantees the executable carries an $ORIGIN
+// runpath, and builds packaged by a distribution generally do not. Without an
+// explicit search path the loader consults only the system directories: on a
+// host that already has llama.cpp the packed libraries are silently ignored
+// in favour of the host's, and on a host that does not the process fails to
+// start at all. The second case is the air-gapped host this path exists to
+// serve.
+//
+// Directories holding no libraries are left alone, so a llama-server resolved
+// from PATH keeps the environment it would otherwise have had.
+func runtimeEnv(base []string, binDir string) []string {
+	if binDir == "" || binDir == "." || !shipsLibraries(binDir) {
+		return base
+	}
+	prefix := libraryPathVar() + "="
+	value := binDir
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if rest, ok := strings.CutPrefix(kv, prefix); ok {
+			if rest != "" {
+				value = binDir + string(os.PathListSeparator) + rest
+			}
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, prefix+value)
 }

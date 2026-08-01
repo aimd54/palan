@@ -28,6 +28,14 @@ palan runtime pack llama-server libggml.so \
   --build b4567 --flavor cuda12 --push
 ```
 
+Pack every shared library the runtime needs, not only the ones it is obvious
+about. The offline host may have no llama.cpp installed at all, and a binary
+that finds the host's copies on the connected side has nothing to fall back on
+in the gap. palan points the dynamic loader at the unpacked runtime directory,
+so packed libraries are used even when the executable carries no `$ORIGIN`
+runpath. Libraries built against a newer C library than the target host still
+fail there, which is worth checking before the transfer rather than after.
+
 Packing is reproducible: identical inputs give identical digests, so
 re-packing on both sides of the gap yields verifiable equality.
 

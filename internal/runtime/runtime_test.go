@@ -231,3 +231,109 @@ func TestResolveFallsBackToPath(t *testing.T) {
 		t.Error("resolve must fail with no runtime anywhere")
 	}
 }
+
+// writeLib drops a plausibly-named shared library into dir.
+func writeLib(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("fake-lib"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// envValue returns the value of key in a process environment slice.
+func envValue(env []string, key string) (string, bool) {
+	for _, kv := range env {
+		if rest, ok := strings.CutPrefix(kv, key+"="); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+func TestRuntimeEnvExposesPackedLibraries(t *testing.T) {
+	key := libraryPathVar()
+	for _, name := range []string{"libggml.so", "libggml.so.0", "libggml.dylib"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLib(t, dir, name)
+
+			env := runtimeEnv([]string{"PATH=/usr/bin"}, dir)
+			got, ok := envValue(env, key)
+			if !ok || got != dir {
+				t.Errorf("%s = %q (present %v), want %q", key, got, ok, dir)
+			}
+			if v, ok := envValue(env, "PATH"); !ok || v != "/usr/bin" {
+				t.Errorf("unrelated variables must survive; PATH = %q (present %v)", v, ok)
+			}
+		})
+	}
+}
+
+func TestRuntimeEnvPrependsToExistingSearchPath(t *testing.T) {
+	key := libraryPathVar()
+	dir := t.TempDir()
+	writeLib(t, dir, "libggml.so.0")
+
+	env := runtimeEnv([]string{key + "=/opt/libs", "PATH=/usr/bin"}, dir)
+	want := dir + string(os.PathListSeparator) + "/opt/libs"
+	if got, _ := envValue(env, key); got != want {
+		t.Errorf("%s = %q, want %q", key, got, want)
+	}
+	// The variable must not be duplicated, or the loader reads only the first.
+	var n int
+	for _, kv := range env {
+		if strings.HasPrefix(kv, key+"=") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%s appears %d times, want 1", key, n)
+	}
+}
+
+func TestRuntimeEnvLeavesLibraryFreeDirsAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("no libs here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"PATH=/usr/bin"}
+	for _, binDir := range []string{dir, "", ".", filepath.Join(dir, "missing")} {
+		if got := runtimeEnv(base, binDir); len(got) != 1 || got[0] != "PATH=/usr/bin" {
+			t.Errorf("binDir %q: environment changed to %v", binDir, got)
+		}
+	}
+}
+
+// TestSupervisorPointsLoaderAtPackedRuntime covers the air-gap case end to
+// end: a runtime unpacked from an artifact carries its libraries beside the
+// executable, and the child process must be told to look there.
+func TestSupervisorPointsLoaderAtPackedRuntime(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "llama-server")
+	src, err := os.ReadFile(fakellamaBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, src, 0o700); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	writeLib(t, dir, "libggml.so.0")
+
+	srv, err := Start(context.Background(), Spec{
+		Bin:          bin,
+		ModelPath:    "/fake/model.gguf",
+		Alias:        "registry.example/llm/tiny:q4",
+		LogDir:       t.TempDir(),
+		StartTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Stop(context.Background()) }()
+
+	key := libraryPathVar()
+	got, ok := envValue(srv.cmd.Env, key)
+	if !ok || got != dir {
+		t.Errorf("child %s = %q (present %v), want %q", key, got, ok, dir)
+	}
+}
