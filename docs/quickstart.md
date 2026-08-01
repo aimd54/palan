@@ -80,8 +80,8 @@ palan pack mymodel.gguf -t llm/mymodel:q4 --ctx 8192 --ngl 99 --push
 
 `serve` passes `--n-gpu-layers` only when the model's
 `io.palan.serve.defaults` sets it. Recent `llama-server` builds offload
-everything by default, which hides the difference — but on a build that
-defaults to none, an unset `ngl` serves from CPU with no warning. Check with
+everything by default, which hides the difference. On a build that defaults
+to none, an unset `ngl` serves from CPU with no warning. Check with
 `palan describe`, and confirm the GPU is really in use:
 
 ```sh
