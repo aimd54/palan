@@ -247,8 +247,10 @@ Three consumption patterns, from least- to most-coupled. The
 
 - Every blob transfer is digest-verified end to end; a corrupted or
   tampered blob is discarded, never installed.
-- Cosign signatures travel as OCI referrers next to the model they sign, so
-  verification works without any external service.
+- Cosign signatures are stored under cosign's tag convention,
+  `sha256-<manifest digest>.sig`, in the model's own repository. Verification
+  needs no transparency log or certificate authority, only the registry
+  holding the model, which keeps it usable inside an air gap.
 - `palan pull --verify` (or `verify.required` in the config) refuses
   unsigned or foreign-signed models before any weight bytes move.
 

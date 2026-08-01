@@ -82,6 +82,22 @@ via HTTP Range requests against the registry.
   fails on load/pull.
 - `io.palan.origin.sha256` ties the artifact to the upstream file it was
   packed from; `org.opencontainers.image.source` records where.
-- Cosign signatures travel as OCI referrers next to the model, so
-  signature verification works inside the gap without any external
-  service. See the [security guide](security.md) for signing workflows.
+- Cosign signatures work inside the gap, with two conditions. Signatures use
+  cosign's tag convention, `sha256-<manifest digest>.sig` in the same
+  repository, and `palan verify` reads them from a registry rather than from
+  the local store. Verification therefore needs a registry inside the gap that
+  serves the model: mirror into it with `palan cp`, or restore a bundle into
+  it. A bundle on its own cannot be verified.
+- `palan save REF` exports only what you name. To carry a signature through a
+  sneakernet transfer, pass its tag as a second reference:
+
+  ```sh
+  palan save registry.internal/llm/qwen3:8b-instruct-q4_k_m \
+             registry.internal/llm/qwen3:sha256-<digest>.sig \
+             -o qwen3.tar
+  ```
+
+- A signature binds the repository reference it was created for. The in-gap
+  registry must serve the model under the same reference, otherwise
+  verification fails on identity even though the key and digest match. See the
+  [security guide](security.md) for signing workflows.
