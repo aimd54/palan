@@ -23,7 +23,7 @@ palan pack PATH... -t REF [flags]
       --ctx int                default context size for serving (io.palan.serve.defaults)
   -h, --help                   help for pack
       --license string         SPDX license expression (default: the GGUF header's general.license)
-      --ngl int                default GPU layer count for serving (io.palan.serve.defaults)
+      --ngl int                default GPU layer count for serving; unset means serve passes no --n-gpu-layers (io.palan.serve.defaults)
       --origin-sha256 string   SHA-256 of the original upstream file (default: the weight digest)
       --profile string         output profile: artifact|car|both (default "artifact")
       --push                   push to the registry after packing

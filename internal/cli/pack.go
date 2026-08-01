@@ -130,7 +130,7 @@ modelcars; tagged REF-car), or "both".`,
 	cmd.Flags().StringVar(&sourceURL, "source", "", "upstream source URL (org.opencontainers.image.source)")
 	cmd.Flags().StringVar(&license, "license", "", "SPDX license expression (default: the GGUF header's general.license)")
 	cmd.Flags().IntVar(&ctxSize, "ctx", 0, "default context size for serving (io.palan.serve.defaults)")
-	cmd.Flags().IntVar(&ngl, "ngl", 0, "default GPU layer count for serving (io.palan.serve.defaults)")
+	cmd.Flags().IntVar(&ngl, "ngl", 0, "default GPU layer count for serving; unset means serve passes no --n-gpu-layers (io.palan.serve.defaults)")
 	cmd.Flags().StringVar(&originSHA, "origin-sha256", "", "SHA-256 of the original upstream file (default: the weight digest)")
 	cmd.Flags().BoolVar(&doPush, "push", false, "push to the registry after packing")
 	must(cmd.MarkFlagRequired("tag"))

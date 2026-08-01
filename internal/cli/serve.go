@@ -56,7 +56,12 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 /v1/models for all local models (or only the given REFs) and routes by the
 request's "model" field. Models load lazily on first use, unload after
 --idle-timeout, and are evicted least-recently-used when the memory budget
-fills up. Prometheus metrics are on /metrics.`,
+fills up. Prometheus metrics are on /metrics.
+
+GPU offload comes from the model, not from serve: --n-gpu-layers is passed
+only when the model was packed with 'pack --ngl' (io.palan.serve.defaults).
+Without it serve leaves the choice to the runtime, and a build that defaults
+to no offload will serve from CPU on a GPU host.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
