@@ -22,8 +22,9 @@ palan pack qwen3-8b-instruct-q4_k_m.gguf chat_template.jinja LICENSE \
   --ctx 8192 --ngl 99 \
   --profile both --push
 
-# Runtime: a pinned llama-server build (from llama.cpp releases)
-palan runtime pack llama-server libggml.so \
+# Runtime: a pinned llama-server build (from llama.cpp releases).
+# Include the compute backends, which live beside the binary or under ggml/.
+palan runtime pack llama-server lib*.so ggml/*.so \
   -t connected.example/runtimes/llama-server:b4567-cuda12 \
   --build b4567 --flavor cuda12 --push
 ```
@@ -33,8 +34,26 @@ about. The offline host may have no llama.cpp installed at all, and a binary
 that finds the host's copies on the connected side has nothing to fall back on
 in the gap. palan points the dynamic loader at the unpacked runtime directory,
 so packed libraries are used even when the executable carries no `$ORIGIN`
-runpath. Libraries built against a newer C library than the target host still
-fail there, which is worth checking before the transfer rather than after.
+runpath.
+
+`ldd` is not a sufficient inventory. It reports link-time libraries, while
+llama.cpp's compute backends are opened with `dlopen` at startup and never
+appear there. Depending on the build they sit beside the binary or in their own
+directory, such as `ggml/` next to the libraries. Pack those files too: a
+runtime assembled from `ldd` output alone arrives with no backend at all.
+
+Backends also fail quietly. A backend whose own dependencies are missing is
+skipped without an error, leaving the runtime to fall back on whatever else it
+can load, so a build meant for a GPU can end up serving on the CPU or on an
+unrelated accelerator. Ask the runtime what it found rather than trusting the
+pack step:
+
+```sh
+llama-server --list-devices
+```
+
+Libraries built against a newer C library than the target host still fail
+there, which is worth checking before the transfer rather than after.
 
 Packing is reproducible: identical inputs give identical digests, so
 re-packing on both sides of the gap yields verifiable equality.
