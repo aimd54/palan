@@ -56,5 +56,12 @@ Options, in increasing automation:
 - [ ] `palan login registry.internal` (OIDC device flow or API key)
 - [ ] `palan push registry.internal/llm/smoke:test` of a small packed model
 - [ ] Pull from a pod using a projected SA token (no static secret)
-- [ ] Blob GET redirects to object storage (curl -v shows the 307)
-- [ ] zot `/metrics` scraped by your Prometheus-compatible stack
+- [ ] Blob GET redirects to object storage (curl -v shows the 307). Use an
+      unranged GET: zot serves HEAD and ranged requests itself, so they show
+      no redirect regardless of `redirectBlobURL`
+- [ ] The redirect target resolves from wherever clients run. The presigned
+      URL carries the host named in `regionendpoint`, so a name that resolves
+      only inside the cluster leaves external pulls failing against a registry
+      that reports itself healthy
+- [ ] zot `/metrics` scraped by your Prometheus-compatible stack, with the
+      scraper's username listed under `accessControl.metrics`

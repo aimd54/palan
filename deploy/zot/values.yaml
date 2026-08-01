@@ -22,15 +22,30 @@ service:
   port: 5000
 
 # zot reads one config file; the chart mounts it from this block.
+#
+# Three settings below are constrained by the chart's layout and by zot's own
+# config validation:
+#
+#   rootDirectory must be the path where the chart mounts its data volume,
+#   /var/lib/registry. Any other path has no volume behind it, so zot cannot
+#   create its cache database and the pod crash-loops on "permission denied".
+#
+#   dedupe requires a remote cache database when the storage driver is remote.
+#   On an S3 backend with no DynamoDB cacheDriver, zot exits during config
+#   validation. Enable it only alongside a "cacheDriver" block.
+#
+#   accessControl.metrics governs the /metrics endpoint independently of the
+#   metrics extension. With the extension enabled and no user listed there,
+#   /metrics answers 403 to every request. List the scraper's username.
 mountConfig: true
 configFiles:
   config.json: |-
     {
       "distSpecVersion": "1.1.1",
       "storage": {
-        "rootDirectory": "/var/lib/zot",
+        "rootDirectory": "/var/lib/registry",
         "gc": true,
-        "dedupe": true,
+        "dedupe": false,
         "storageDriver": {
           "name": "s3",
           "region": "main",
@@ -60,7 +75,8 @@ configFiles:
             "llm/**":      { "policies": [], "anonymousPolicy": ["read"], "defaultPolicy": ["read"] },
             "runtimes/**": { "policies": [], "defaultPolicy": ["read"] }
           },
-          "adminPolicy": { "users": ["admin"], "actions": ["read", "create", "update", "delete"] }
+          "adminPolicy": { "users": ["admin"], "actions": ["read", "create", "update", "delete"] },
+          "metrics": { "users": ["admin"] }
         }
       },
       "extensions": {
@@ -99,7 +115,7 @@ podSecurityContext:
     type: RuntimeDefault
 securityContext:
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: false # zot writes /var/lib/zot local state
+  readOnlyRootFilesystem: false # zot writes local state under rootDirectory
   capabilities:
     drop: ["ALL"]
 
