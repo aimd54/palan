@@ -17,13 +17,29 @@ for the overview. Pick the first one that fits your cluster:
   pin `@sha256:` digests in your GitOps repo.
 - Already running KServe for other models → modelcars.
 
-**Validation checklist for image volumes on K3s** (decides the car
-profile's future; run on the actual cluster):
+## Why image volumes need the car profile
+
+A raw ModelPack artifact does not mount as an image volume. Tested on
+Kubernetes 1.36.1 with containerd 2.3.1: the kubelet reports a successful
+pull of the full artifact, and then mounts an empty directory. containerd
+stores the blob but never unpacks it, because
+`application/vnd.cncf.model.weight.v1.raw` is not a layer type any snapshotter
+applies. `ctr -n k8s.io images check` shows `UNPACKED false` for the artifact
+next to `true` for the car image.
+
+No error appears at any layer. A workload pointed at a raw tag starts, mounts
+nothing, and fails once the inference server cannot find its model file, which
+is a long way from the cause. The `-car` tag exists for this reason.
+
+**Validation checklist for image volumes on K3s** (run on the actual cluster,
+since K3s embeds its own containerd):
 
 - [ ] `k3s --version` and embedded containerd ≥ 2.1
 - [ ] `kubectl apply -f image-volume.yaml` mounts and the file is visible
-- [ ] Test whether a **raw artifact** (non-car tag) also mounts. If yes,
-      the car profile can be retired in a future release
+- [ ] After a containerd upgrade, retest the raw artifact by pointing the same
+      manifest at the non-car tag. Check that the mount has contents rather
+      than that the pod starts: an empty mount is the failure mode, and it
+      starts fine
 
 **Auth without static secrets**: zot accepts OIDC bearer tokens; give pods a
 projected ServiceAccount token whose issuer zot trusts, and set
