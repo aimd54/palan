@@ -24,6 +24,9 @@ type progress struct {
 	mu      sync.Mutex
 	bars    []*mpb.Bar
 	skipped atomic.Int64
+	// signed records whether a signature travelled with the artifact, so the
+	// report can say that verification will work offline later.
+	signed atomic.Bool
 }
 
 func newProgress(quiet bool) *progress {
@@ -64,6 +67,9 @@ func (pr *progress) events() transfer.Events {
 		OnBlobSkip: func(ocispec.Descriptor) {
 			pr.skipped.Add(1)
 		},
+		OnSignature: func(stored bool) {
+			pr.signed.Store(stored)
+		},
 	}
 }
 
@@ -83,9 +89,14 @@ func (pr *progress) close(err error) {
 	pr.p.Wait()
 }
 
-// report prints a post-transfer summary line for skipped content.
+// report prints a post-transfer summary: content skipped as already present,
+// and whether a signature came along, which decides whether this copy can be
+// verified later without reaching the registry again.
 func (pr *progress) report() {
 	if n := pr.skipped.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "%d blob(s) already present, skipped\n", n)
+	}
+	if pr.signed.Load() {
+		fmt.Fprintln(os.Stderr, "Signature stored alongside the model")
 	}
 }

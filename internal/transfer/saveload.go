@@ -15,11 +15,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
 )
 
@@ -45,29 +48,83 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("copying %s to %s: %w", src, dst, err)
 	}
+
+	// Mirroring into an offline registry is one of the two ways a model
+	// crosses a gap, and a model that arrives without its signature cannot be
+	// verified on the far side.
+	sigTag := signing.SigTag(desc.Digest)
+	if _, err := srcRepo.Resolve(ctx, sigTag); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return desc, nil // unsigned, nothing more to carry
+		}
+		return ocispec.Descriptor{}, fmt.Errorf("looking for a signature on %s: %w", src, err)
+	}
+	if _, err := oras.Copy(ctx, srcRepo, sigTag, dstRepo, sigTag, opts); err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("copying the signature for %s: %w", src, err)
+	}
+	ev.signature(true)
 	return desc, nil
 }
 
 // Save exports refs from the local store into a tar stream containing a
 // standard OCI image layout, readable by any OCI tool
 // (see docs/architecture.md, "Client and local store": offline transfer bundles).
-func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) error {
+//
+// A model's signature travels with it when the store holds one, so the bundle
+// can be verified on a machine that never reaches a registry. Save reports how
+// many signatures it included, since that is not something the caller's list
+// of references reveals.
+func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (int, error) {
 	tmp, err := os.MkdirTemp("", "palan-save-*")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	dst, err := oci.NewWithContext(ctx, tmp)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	var signatures int
 	for _, ref := range refs {
-		if _, err := oras.Copy(ctx, st.OCI(), ref, dst, ref, oras.DefaultCopyOptions); err != nil {
-			return fmt.Errorf("exporting %s: %w", ref, err)
+		desc, err := oras.Copy(ctx, st.OCI(), ref, dst, ref, oras.DefaultCopyOptions)
+		if err != nil {
+			return 0, fmt.Errorf("exporting %s: %w", ref, err)
+		}
+		included, err := saveSignature(ctx, st, dst, ref, desc.Digest)
+		if err != nil {
+			return 0, err
+		}
+		if included {
+			signatures++
 		}
 	}
-	return tarDir(tmp, w)
+	if err := tarDir(tmp, w); err != nil {
+		return 0, err
+	}
+	return signatures, nil
+}
+
+// saveSignature copies a reference's signature into the bundle when the store
+// has one. An unsigned model is ordinary, so a missing signature is reported
+// rather than treated as a failure.
+func saveSignature(ctx context.Context, st *store.Store, dst *oci.Store, ref string, d digest.Digest) (bool, error) {
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		// Not a registry-shaped reference, so no signature can be addressed.
+		return false, nil //nolint:nilerr // exporting the artifact alone is correct here
+	}
+	sigRef := signing.SigRef(parsed, d)
+	if _, err := st.Resolve(ctx, sigRef); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking for a signature on %s: %w", ref, err)
+	}
+	if _, err := oras.Copy(ctx, st.OCI(), sigRef, dst, sigRef, oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("exporting the signature for %s: %w", ref, err)
+	}
+	return true, nil
 }
 
 // Load imports every tagged reference from a tar'd OCI image layout into

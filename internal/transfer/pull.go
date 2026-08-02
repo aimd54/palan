@@ -5,14 +5,19 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/errgroup"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
+	"oras.land/oras-go/v2/registry/remote"
 
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
 )
 
@@ -26,6 +31,9 @@ type Events struct {
 	OnBlobStart func(desc ocispec.Descriptor, resumeOffset int64) func(delta int64)
 	// OnBlobSkip reports content skipped because the destination has it.
 	OnBlobSkip func(desc ocispec.Descriptor)
+	// OnSignature reports whether a cosign signature travelled with the
+	// artifact. False means the registry held none, which is not an error.
+	OnSignature func(stored bool)
 }
 
 func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int64) {
@@ -38,6 +46,12 @@ func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int6
 func (e Events) blobSkip(desc ocispec.Descriptor) {
 	if e.OnBlobSkip != nil {
 		e.OnBlobSkip(desc)
+	}
+}
+
+func (e Events) signature(stored bool) {
+	if e.OnSignature != nil {
+		e.OnSignature(stored)
 	}
 }
 
@@ -92,7 +106,34 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("copying %s into local store: %w", ref, err)
 	}
+
+	stored, err := fetchSignature(ctx, repo, st, ref, desc.Digest)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	ev.signature(stored)
 	return desc, nil
+}
+
+// fetchSignature brings a model's cosign signature into the store alongside
+// it, so the pair can later be exported together and verified with no
+// registry in reach. Signatures are a manifest and a small payload, so they
+// go through a plain copy rather than the resumable path built for weights.
+//
+// An unsigned artifact is the normal case, not a failure: a missing signature
+// tag reports false and leaves the pull successful.
+func fetchSignature(ctx context.Context, repo *remote.Repository, st *store.Store, ref registry.Reference, d digest.Digest) (bool, error) {
+	sigTag := signing.SigTag(d)
+	if _, err := repo.Resolve(ctx, sigTag); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking for a signature on %s: %w", ref, err)
+	}
+	if _, err := oras.Copy(ctx, repo, sigTag, st.OCI(), signing.SigRef(ref, d), oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("copying the signature for %s: %w", ref, err)
+	}
+	return true, nil
 }
 
 // manifestMediaTypes are the media types treated as graph-interior nodes.
