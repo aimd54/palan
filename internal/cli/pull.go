@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
@@ -72,7 +73,16 @@ any llama-server image.`,
 				if err != nil {
 					return err
 				}
-				if err := verifyDigest(ctx, v, verifyKey, client, ref, desc.Digest); err != nil {
+				// The registry is the only source that makes sense here: the
+				// gate runs before anything is downloaded, so a local copy
+				// would be the previous version rather than what is arriving.
+				src := verifySource{
+					target: repo,
+					sigRef: signing.SigTag(desc.Digest),
+					digest: desc.Digest,
+					name:   "registry",
+				}
+				if err := verifyDigest(ctx, v, verifyKey, src, ref); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)

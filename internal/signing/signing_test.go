@@ -19,6 +19,9 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/secure-systems-lab/go-securesystemslib/encrypted"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
+	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 
@@ -94,7 +97,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load verifier: %v", err)
 	}
-	if err := Verify(ctx, repo, repoRef, target, verifier); err != nil {
+	if err := Verify(ctx, repo, SigTag(target), repoRef, target, verifier); err != nil {
 		t.Errorf("verify: %v", err)
 	}
 }
@@ -113,7 +116,7 @@ func TestVerifyFailsWithWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(otherPubPEM)
-	if err := Verify(ctx, repo, repoRef, target, verifier); err == nil {
+	if err := Verify(ctx, repo, SigTag(target), repoRef, target, verifier); err == nil {
 		t.Error("wrong key must fail verification")
 	}
 }
@@ -126,7 +129,7 @@ func TestVerifyFailsOnUnsigned(t *testing.T) {
 
 	repo := testRepo(t, reg, "llm/tiny")
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, reg.Host()+"/llm/tiny", target, verifier)
+	err := Verify(ctx, repo, SigTag(target), reg.Host()+"/llm/tiny", target, verifier)
 	if !errors.Is(err, ErrNoSignature) {
 		t.Errorf("expected ErrNoSignature, got %v", err)
 	}
@@ -152,7 +155,7 @@ func TestVerifyRejectsDigestSubstitution(t *testing.T) {
 	reg.CopyManifest("llm/tiny", SigTag(targetA), SigTag(targetB))
 
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, repoRef, targetB, verifier)
+	err := Verify(ctx, repo, SigTag(targetB), repoRef, targetB, verifier)
 	if err == nil || !strings.Contains(err.Error(), "binds") {
 		t.Errorf("substituted signature must fail with a binding error, got %v", err)
 	}
@@ -171,7 +174,7 @@ func TestVerifyRejectsForeignIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, reg.Host()+"/llm/tiny", target, verifier)
+	err := Verify(ctx, repo, SigTag(target), reg.Host()+"/llm/tiny", target, verifier)
 	if err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Errorf("foreign identity must be rejected, got %v", err)
 	}
@@ -197,5 +200,89 @@ func TestLoadSignerCosignEncryptedKey(t *testing.T) {
 	}
 	if _, err := LoadSigner(pemBytes, nil); err == nil {
 		t.Error("encrypted key without a password source must fail")
+	}
+}
+
+func TestSigRefAndIsSigTag(t *testing.T) {
+	d := digest.Digest("sha256:" + strings.Repeat("ab", 32))
+	ref := registry.Reference{Registry: "reg.example", Repository: "llm/tiny", Reference: "q4"}
+
+	got := SigRef(ref, d)
+	want := "reg.example/llm/tiny:sha256-" + strings.Repeat("ab", 32) + ".sig"
+	if got != want {
+		t.Errorf("SigRef = %q, want %q", got, want)
+	}
+	if !IsSigTag(got) {
+		t.Errorf("IsSigTag(%q) = false, want true", got)
+	}
+	for _, notSig := range []string{
+		"reg.example/llm/tiny:q4",
+		"reg.example/llm/tiny:sha256-deadbeef", // no .sig suffix
+		"reg.example/llm/sig:latest",
+	} {
+		if IsSigTag(notSig) {
+			t.Errorf("IsSigTag(%q) = true, want false", notSig)
+		}
+	}
+}
+
+// TestVerifyFromLocalStoreWithoutRegistry is the regression guard for the
+// air-gap case that prompted this whole path: a signature carried in an OCI
+// layout must verify with no registry reachable at all. The registry is closed
+// partway through, so a lingering network dependency fails the test rather
+// than passing unnoticed.
+func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	target := seedArtifact(t, reg, "llm/tiny", "q4")
+	_, privPEM, pubPEM := testKeypair(t)
+
+	repo := testRepo(t, reg, "llm/tiny")
+	ref := registry.Reference{Registry: reg.Host(), Repository: "llm/tiny", Reference: "q4"}
+	repoRef := reg.Host() + "/llm/tiny"
+	signer, err := LoadSigner(privPEM, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sign(ctx, repo, repoRef, target, signer); err != nil {
+		t.Fatal(err)
+	}
+
+	// Carry the signature into an on-disk layout, the way pull and save do.
+	local, err := oci.NewWithContext(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigRef := SigRef(ref, target)
+	if _, err := oras.Copy(ctx, repo, SigTag(target), local, sigRef, oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying signature into the local layout: %v", err)
+	}
+
+	// Everything below runs with the registry gone.
+	reg.Close()
+
+	verifier, err := LoadVerifier(pubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, local, sigRef, repoRef, target, verifier); err != nil {
+		t.Errorf("verify from the local store: %v", err)
+	}
+
+	// The guarantees must not weaken just because the source changed.
+	_, _, otherPubPEM := testKeypair(t)
+	otherVerifier, err := LoadVerifier(otherPubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, local, sigRef, repoRef, target, otherVerifier); err == nil {
+		t.Error("wrong key must fail from the local store too")
+	}
+	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target, verifier); err == nil {
+		t.Error("foreign identity must be rejected from the local store too")
+	}
+	missing := digest.Digest("sha256:" + strings.Repeat("cd", 32))
+	if err := Verify(ctx, local, SigRef(ref, missing), repoRef, missing, verifier); !errors.Is(err, ErrNoSignature) {
+		t.Errorf("absent signature must report ErrNoSignature, got %v", err)
 	}
 }

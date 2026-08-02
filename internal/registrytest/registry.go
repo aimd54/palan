@@ -77,6 +77,13 @@ func (r *Registry) Host() string {
 	return strings.TrimPrefix(r.srv.URL, "http://")
 }
 
+// Close stops serving before the test ends, so a test can assert that what
+// follows needs no registry rather than merely assuming it. Cleanup closes the
+// server too; both calls are safe.
+func (r *Registry) Close() {
+	r.srv.Close()
+}
+
 func (r *Registry) PutBlob(repo string, content []byte) digest.Digest {
 	d := digest.FromBytes(content)
 	r.mu.Lock()

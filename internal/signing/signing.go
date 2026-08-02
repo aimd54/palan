@@ -3,12 +3,18 @@
 
 // Package signing implements cosign-compatible, key-based signing of model
 // artifacts (see docs/architecture.md, "Security model"). Signatures use
-// cosign's simple-signing payload
-// and tag convention (sha256-<digest>.sig in the same repository), so
-// `cosign verify --key` accepts palan signatures and vice versa, and
-// verification works fully offline. Keyless
-// (Fulcio/Rekor) signing is deliberately out of scope for v0.1: it needs
-// online transparency infrastructure.
+// cosign's simple-signing payload and tag convention
+// (sha256-<digest>.sig in the same repository), so `cosign verify --key`
+// accepts palan signatures and vice versa.
+//
+// Verification needs no external service: no transparency log, no certificate
+// authority, and no registry once the signature sits in the local store.
+// Verify reads from any oras.ReadOnlyTarget, which a remote repository and an
+// on-disk OCI layout both satisfy, so the same code checks a signature in a
+// registry and one carried across an air gap in a transfer bundle.
+//
+// Keyless (Fulcio/Rekor) signing is deliberately out of scope for v0.1: it
+// needs online transparency infrastructure.
 package signing
 
 import (
@@ -26,8 +32,10 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/signature"
 	sigoptions "github.com/sigstore/sigstore/pkg/signature/options"
+	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 )
 
@@ -42,9 +50,29 @@ const (
 // ErrNoSignature marks an unsigned artifact.
 var ErrNoSignature = errors.New("no signature found")
 
-// SigTag returns cosign's signature tag for a subject digest.
+// SigTag returns cosign's signature tag for a subject digest. It is the
+// reference a repository-scoped target resolves, such as a remote repository.
 func SigTag(d digest.Digest) string {
 	return strings.Replace(d.String(), ":", "-", 1) + ".sig"
+}
+
+// SigRef returns the fully-qualified reference for a signature on d, for
+// targets that hold more than one repository. The local store tags everything
+// by full reference, so it needs the registry and repository too.
+func SigRef(ref registry.Reference, d digest.Digest) string {
+	ref.Reference = SigTag(d)
+	return ref.String()
+}
+
+// IsSigTag reports whether a reference names a cosign signature rather than an
+// artifact. Signatures are ordinary tagged manifests, so anything listing or
+// removing store contents has to recognise them.
+func IsSigTag(ref string) bool {
+	tag := ref
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		tag = ref[i+1:]
+	}
+	return strings.HasPrefix(tag, "sha256-") && strings.HasSuffix(tag, ".sig")
 }
 
 // payload is cosign's simple-signing claim document.
@@ -120,15 +148,21 @@ func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target d
 // given key and binds exactly this digest (cosign semantics). The
 // docker-reference claim is compared against repoRef and mismatches are
 // rejected: a signature for someone else's repository must not validate.
-func Verify(ctx context.Context, repo *remote.Repository, repoRef string, target digest.Digest, verifier signature.Verifier) error {
-	desc, err := repo.Resolve(ctx, SigTag(target))
+//
+// src supplies the signature manifest and its payload. A remote repository
+// and a local OCI layout both satisfy the interface, so an air-gapped host
+// verifies a bundle exactly as a connected one verifies a registry. sigRef is
+// how the signature is addressed in that source: SigTag for a repository,
+// SigRef for a store holding many repositories.
+func Verify(ctx context.Context, src oras.ReadOnlyTarget, sigRef, repoRef string, target digest.Digest, verifier signature.Verifier) error {
+	desc, err := src.Resolve(ctx, sigRef)
 	if err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
 			return fmt.Errorf("%w for %s", ErrNoSignature, target)
 		}
 		return fmt.Errorf("resolving signature tag: %w", err)
 	}
-	raw, err := content.FetchAll(ctx, repo.Manifests(), desc)
+	raw, err := content.FetchAll(ctx, src, desc)
 	if err != nil {
 		return err
 	}
@@ -151,7 +185,7 @@ func Verify(ctx context.Context, repo *remote.Repository, repoRef string, target
 			lastErr = fmt.Errorf("malformed signature annotation: %w", err)
 			continue
 		}
-		pl, err := content.FetchAll(ctx, repo.Blobs(), layer)
+		pl, err := content.FetchAll(ctx, src, layer)
 		if err != nil {
 			lastErr = err
 			continue

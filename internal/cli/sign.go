@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -12,11 +13,13 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
+	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
-	"github.com/aimd54/palan/internal/transfer"
+	"github.com/aimd54/palan/internal/store"
 )
 
 // Config keys for verification policy.
@@ -79,29 +82,37 @@ func newVerifyCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify REF --key FILE",
 		Short: "Verify a model's signature against a public key",
-		Args:  cobra.ExactArgs(1),
+		Long: `Verify checks a model's signature against a public key.
+
+A model already in the local store is verified from there, so verification
+needs no registry, no transparency log, and no certificate authority. Anything
+else is resolved on its registry. The output names the source, since a local
+result describes the copy you hold rather than what the registry serves now.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
 			if err != nil {
 				return err
 			}
-			client, err := newTransferClient(v)
+			st, err := openStore(ctx)
 			if err != nil {
 				return err
 			}
-			repo, err := client.Repository(ref)
+			unlock, err := st.RLock(ctx)
 			if err != nil {
 				return err
 			}
-			desc, err := repo.Resolve(ctx, ref.Reference)
+			defer unlock()
+
+			src, err := resolveVerifySource(ctx, st, v, ref)
 			if err != nil {
 				return err
 			}
-			if err := verifyDigest(ctx, v, keyPath, client, ref, desc.Digest); err != nil {
+			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n", ref, desc.Digest)
+			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.digest, src.name)
 			return nil
 		},
 	}
@@ -109,9 +120,57 @@ func newVerifyCmd(v *viper.Viper) *cobra.Command {
 	return cmd
 }
 
-// verifyDigest runs signature verification for a resolved digest, using the
-// explicit key path or the configured verify.key.
-func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, client *transfer.Client, ref registry.Reference, d digest.Digest) error {
+// verifySource is where an artifact and its signature are read from.
+type verifySource struct {
+	target oras.ReadOnlyTarget
+	sigRef string
+	digest digest.Digest
+	name   string
+}
+
+// resolveVerifySource prefers the local store, so verification works with no
+// network whenever the model is already on disk, and falls back to the
+// registry otherwise. Only a genuine miss falls through: a store that fails
+// for any other reason is an error rather than a silent trip to the network.
+func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, ref registry.Reference) (verifySource, error) {
+	desc, err := st.Resolve(ctx, ref.String())
+	switch {
+	case err == nil:
+		return verifySource{
+			target: st.OCI(),
+			sigRef: signing.SigRef(ref, desc.Digest),
+			digest: desc.Digest,
+			name:   "local store",
+		}, nil
+	case !errors.Is(err, errdef.ErrNotFound):
+		return verifySource{}, fmt.Errorf("reading the local store: %w", err)
+	}
+
+	client, err := newTransferClient(v)
+	if err != nil {
+		return verifySource{}, err
+	}
+	repo, err := client.Repository(ref)
+	if err != nil {
+		return verifySource{}, err
+	}
+	desc, err = repo.Resolve(ctx, ref.Reference)
+	if err != nil {
+		return verifySource{}, err
+	}
+	return verifySource{
+		target: repo,
+		sigRef: signing.SigTag(desc.Digest),
+		digest: desc.Digest,
+		name:   "registry",
+	}, nil
+}
+
+// verifyDigest runs signature verification against an already-resolved
+// source, using the explicit key path or the configured verify.key. Callers
+// choose the source, so a pre-download gate can insist on the registry while
+// an offline check reads the store.
+func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) error {
 	if keyPath == "" {
 		keyPath = v.GetString(keyVerifyKey)
 	}
@@ -126,12 +185,9 @@ func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, client *t
 	if err != nil {
 		return err
 	}
-	repo, err := client.Repository(ref)
-	if err != nil {
-		return err
-	}
-	if err := signing.Verify(ctx, repo, ref.Registry+"/"+ref.Repository, d, verifier); err != nil {
-		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, d, err)
+	repoRef := ref.Registry + "/" + ref.Repository
+	if err := signing.Verify(ctx, src.target, src.sigRef, repoRef, src.digest, verifier); err != nil {
+		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, src.digest, err)
 	}
 	return nil
 }
