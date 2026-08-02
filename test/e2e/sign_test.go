@@ -134,3 +134,71 @@ func TestCosignInterop(t *testing.T) {
 	}
 	palan(t, home, "verify", ref2, "--key", pub)
 }
+
+// TestOfflineVerifyFromBundle is the end-to-end guard for the air-gap case:
+// a bundle carried to a machine with no registry must still be verifiable,
+// and a bundle whose model is unsigned must be refused on import without
+// leaving anything behind.
+//
+// The registry is not merely unused after the export; the references point at
+// a host that no longer serves them, so a lingering network dependency shows
+// up as a failure rather than passing unnoticed.
+func TestOfflineVerifyFromBundle(t *testing.T) {
+	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
+	host := registryHost(t)
+	fx := writeFixtures(t, 256<<10)
+	priv, pub := writeTestKeys(t)
+
+	signedRef := host + "/llm/air-signed:v1"
+	unsignedRef := host + "/llm/air-unsigned:v1"
+
+	online := t.TempDir()
+	palan(t, online, "pack", fx.ggufPath, "-t", signedRef)
+	palan(t, online, "push", signedRef)
+	palan(t, online, "sign", signedRef, "--key", priv)
+	palan(t, online, "pack", fx.ggufPath, "-t", unsignedRef)
+	palan(t, online, "push", unsignedRef)
+
+	// Pulling brings the signature down beside the model.
+	if out := palan(t, online, "pull", signedRef); !strings.Contains(out, "Signature stored") {
+		t.Errorf("pull should report the signature travelling:\n%s", out)
+	}
+
+	bundle := filepath.Join(t.TempDir(), "signed.tar")
+	if out := palan(t, online, "save", signedRef, "-o", bundle); !strings.Contains(out, "signature") {
+		t.Errorf("save should report the signature it included:\n%s", out)
+	}
+
+	offline := t.TempDir()
+	palan(t, offline, "load", "-i", bundle, "--verify", "--verify-key", pub)
+
+	out := palan(t, offline, "verify", signedRef, "--key", pub)
+	if !strings.Contains(out, "Verified") {
+		t.Errorf("verify from the bundle failed:\n%s", out)
+	}
+	if !strings.Contains(out, "local store") {
+		t.Errorf("verification should have read the local store, not the registry:\n%s", out)
+	}
+
+	// A wrong key must still be rejected when the source is a bundle.
+	_, otherPub := writeTestKeys(t)
+	if out, err := palanRun(offline, "verify", signedRef, "--key", otherPub); err == nil {
+		t.Errorf("wrong key verified against the local store:\n%s", out)
+	}
+
+	// An unsigned bundle must be refused, and must import nothing.
+	unsignedBundle := filepath.Join(t.TempDir(), "unsigned.tar")
+	palan(t, online, "pull", unsignedRef)
+	palan(t, online, "save", unsignedRef, "-o", unsignedBundle)
+
+	rejected := t.TempDir()
+	out, err := palanRun(rejected, "load", "-i", unsignedBundle, "--verify", "--verify-key", pub)
+	if err == nil {
+		t.Errorf("an unsigned bundle must be refused:\n%s", out)
+	} else if !strings.Contains(out, "no signature") {
+		t.Errorf("refusal should name the missing signature:\n%s", out)
+	}
+	if listed := palan(t, rejected, "ls"); strings.Contains(listed, "air-unsigned") {
+		t.Errorf("a refused bundle must import nothing, store holds:\n%s", listed)
+	}
+}

@@ -36,8 +36,9 @@ a Kubernetes cluster, and a GPU host:
   [`deploy/k8s-examples/README.md`](../deploy/k8s-examples/README.md).
 - **Init-container puller**: end to end from a registry into an `emptyDir`,
   including with a GPU attached to the serving container.
-- **Air gap**: `save`/`load` bundles and registry-to-registry `cp`, subject to
-  the verification limitation recorded below.
+- **Air gap**: `save`/`load` bundles and registry-to-registry `cp`. Signatures
+  travel with the model on all three paths, and a bundle verifies on a host
+  with no network at all.
 
 ## Still outstanding
 
@@ -50,13 +51,9 @@ a Kubernetes cluster, and a GPU host:
 
 ## Planned / open
 
-- **Verification without a registry.** `palan verify` reads signatures from a
-  registry and has no local-store path, so a `save` bundle cannot be verified
-  on its own and an offline site needs a registry that holds the model.
-  `palan save` also exports only the references it is given, leaving the
-  signature tag behind unless that tag is named explicitly. Both behaviours are
-  described in the [air-gap guide](guides/air-gap.md), and both are worth
-  closing.
+- Enforcing `verify.required` in `run` and `serve`. It is honoured by `pull`
+  and by `load`, so content is checked as it enters the store, but nothing
+  re-checks a model at the moment it is served.
 - Referrers-API storage for signatures alongside the tag fallback.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.

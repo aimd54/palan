@@ -6,6 +6,11 @@ Import models from a tar bundle
 
 load imports every tagged reference from a bundle created by save (or any tar'd OCI image layout). "-i -" reads from stdin.
 
+With --verify, or with verify.required set in the config, every model in the
+bundle must carry a valid signature before anything is imported. A bundle is
+whatever a courier handed over, so this is the moment its provenance is worth
+deciding. Verification reads the bundle itself and needs no registry.
+
 ```
 palan load -i FILE [flags]
 ```
@@ -13,8 +18,10 @@ palan load -i FILE [flags]
 ### Options
 
 ```
-  -h, --help           help for load
-  -i, --input string   input file (- for stdin)
+  -h, --help                help for load
+  -i, --input string        input file (- for stdin)
+      --verify              require a valid signature on every model in the bundle before importing
+      --verify-key string   public key for --verify (default: verify.key from the config)
 ```
 
 ### Options inherited from parent commands

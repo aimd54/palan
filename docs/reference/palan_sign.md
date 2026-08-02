@@ -6,8 +6,10 @@ Sign a pushed model with a cosign-compatible key
 
 Sign resolves REF on its registry and attaches a cosign-compatible
 signature next to it (the sha256-<digest>.sig tag convention), so
-'cosign verify --key' and 'palan verify' both accept it, including fully
-offline. Encrypted cosign keys are supported; the password comes from
+'cosign verify --key' and 'palan verify' both accept it. The signature then
+travels with the model through pull, save, and cp, and verifying it needs no
+transparency log, no certificate authority, and no registry once it is in the
+local store. Encrypted cosign keys are supported; the password comes from
 COSIGN_PASSWORD or an interactive prompt.
 
 ```

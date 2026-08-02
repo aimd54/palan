@@ -248,9 +248,10 @@ Three consumption patterns, from least- to most-coupled. The
 - Every blob transfer is digest-verified end to end; a corrupted or
   tampered blob is discarded, never installed.
 - Cosign signatures are stored under cosign's tag convention,
-  `sha256-<manifest digest>.sig`, in the model's own repository. Verification
-  needs no transparency log or certificate authority, only the registry
-  holding the model, which keeps it usable inside an air gap.
+  `sha256-<manifest digest>.sig`, in the model's own repository, and travel
+  with the model through `pull`, `save`, and `cp`. Verification reads either a
+  registry or the local store, so it needs no transparency log, no certificate
+  authority, and no network once the signature is on disk.
 - `palan pull --verify` (or `verify.required` in the config) refuses
   unsigned or foreign-signed models before any weight bytes move.
 

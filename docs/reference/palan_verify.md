@@ -2,6 +2,15 @@
 
 Verify a model's signature against a public key
 
+### Synopsis
+
+Verify checks a model's signature against a public key.
+
+A model already in the local store is verified from there, so verification
+needs no registry, no transparency log, and no certificate authority. Anything
+else is resolved on its registry. The output names the source, since a local
+result describes the copy you hold rather than what the registry serves now.
+
 ```
 palan verify REF --key FILE [flags]
 ```

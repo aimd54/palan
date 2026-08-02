@@ -35,8 +35,10 @@ func newSignCmd(v *viper.Viper) *cobra.Command {
 		Short: "Sign a pushed model with a cosign-compatible key",
 		Long: `Sign resolves REF on its registry and attaches a cosign-compatible
 signature next to it (the sha256-<digest>.sig tag convention), so
-'cosign verify --key' and 'palan verify' both accept it, including fully
-offline. Encrypted cosign keys are supported; the password comes from
+'cosign verify --key' and 'palan verify' both accept it. The signature then
+travels with the model through pull, save, and cp, and verifying it needs no
+transparency log, no certificate authority, and no registry once it is in the
+local store. Encrypted cosign keys are supported; the password comes from
 COSIGN_PASSWORD or an interactive prompt.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,21 +131,34 @@ type verifySource struct {
 }
 
 // resolveVerifySource prefers the local store, so verification works with no
-// network whenever the model is already on disk, and falls back to the
-// registry otherwise. Only a genuine miss falls through: a store that fails
-// for any other reason is an error rather than a silent trip to the network.
+// network whenever the answer is already on disk, and falls back to the
+// registry otherwise.
+//
+// Holding the model locally is not enough: the store must hold its signature
+// too. Signing happens after a push, so a model packed locally and signed
+// afterwards has its signature only on the registry, and treating the local
+// copy as authoritative there would report an artifact as unsigned when it is
+// not. Only a genuine miss falls through; a store that fails for any other
+// reason is an error rather than a silent trip to the network.
 func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, ref registry.Reference) (verifySource, error) {
-	desc, err := st.Resolve(ctx, ref.String())
+	local, localErr := st.Resolve(ctx, ref.String())
 	switch {
-	case err == nil:
-		return verifySource{
-			target: st.OCI(),
-			sigRef: signing.SigRef(ref, desc.Digest),
-			digest: desc.Digest,
-			name:   "local store",
-		}, nil
-	case !errors.Is(err, errdef.ErrNotFound):
-		return verifySource{}, fmt.Errorf("reading the local store: %w", err)
+	case localErr == nil:
+		sigRef := signing.SigRef(ref, local.Digest)
+		_, sigErr := st.Resolve(ctx, sigRef)
+		switch {
+		case sigErr == nil:
+			return verifySource{
+				target: st.OCI(),
+				sigRef: sigRef,
+				digest: local.Digest,
+				name:   "local store",
+			}, nil
+		case !errors.Is(sigErr, errdef.ErrNotFound):
+			return verifySource{}, fmt.Errorf("reading the local store: %w", sigErr)
+		}
+	case !errors.Is(localErr, errdef.ErrNotFound):
+		return verifySource{}, fmt.Errorf("reading the local store: %w", localErr)
 	}
 
 	client, err := newTransferClient(v)
@@ -154,8 +169,14 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 	if err != nil {
 		return verifySource{}, err
 	}
-	desc, err = repo.Resolve(ctx, ref.Reference)
+	desc, err := repo.Resolve(ctx, ref.Reference)
 	if err != nil {
+		if localErr == nil {
+			// Say what is actually known, rather than reporting a bare
+			// network failure for a model that is sitting right here.
+			return verifySource{}, fmt.Errorf(
+				"no signature for %s in the local store, and the registry could not be reached: %w", ref, err)
+		}
 		return verifySource{}, err
 	}
 	return verifySource{
