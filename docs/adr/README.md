@@ -17,5 +17,6 @@ decisions and the reasoning behind them.
 | [ADR-0004](0004-implementation-language-go.md) | Implement in Go | accepted |
 | [ADR-0005](0005-transfer-backend-oras-go.md) | oras-go v2 as transfer backend; modctl as interop oracle | accepted |
 | [ADR-0006](0006-rename-to-palan.md) | Rename the project from moci to palan | accepted |
+| [ADR-0007](0007-signature-storage-and-verification.md) | Signatures travel as cosign tags and verify from any source | accepted |
 
 Use [`template.md`](template.md) for new ADRs.
