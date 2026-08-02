@@ -22,6 +22,13 @@ palan pack qwen3-8b-instruct-q4_k_m.gguf chat_template.jinja LICENSE \
   --ctx 8192 --ngl 99 \
   --profile both --push
 
+# Or fetch straight from the upstream repository, which checks the bytes
+# against the digest it publishes and records that as the artifact's origin.
+# This is the one step that needs the internet, which is why it is here.
+palan pack hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf \
+  -t connected.example/llm/qwen3:8b-instruct-q4_k_m \
+  --ctx 8192 --ngl 99 --profile both --push
+
 # Runtime: a pinned llama-server build (from llama.cpp releases).
 # Include the compute backends, which live beside the binary or under ggml/.
 palan runtime pack llama-server lib*.so ggml/*.so \

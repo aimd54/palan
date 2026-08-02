@@ -9,6 +9,18 @@ quantization, size, context length) and stores a ModelPack artifact in the
 local store under REF. Packing is reproducible: identical inputs yield an
 identical digest.
 
+A PATH may be a local file or a Hugging Face source,
+hf://<org>/<repo>/<file>, which is downloaded first:
+
+  palan pack hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf -t llm/qwen3:8b-q4
+
+The bytes are checked against the SHA-256 the repository publishes and
+refused if they differ, that digest becomes io.palan.origin.sha256, and the
+repository page becomes the source annotation. A split GGUF brings every
+sibling part, and a licence file in the repository travels with the weights.
+Naming a repository without a file lists what it publishes. Gated
+repositories read HF_TOKEN.
+
 Profiles: "artifact" (raw GGUF layers; the default), "car" (an OCI image
 with one tar layer under models/, for Kubernetes image volumes and KServe
 modelcars; tagged REF-car), or "both".

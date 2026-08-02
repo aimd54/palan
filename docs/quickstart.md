@@ -129,17 +129,40 @@ header as `tokenizer.chat_template`.
 
 ### From Hugging Face
 
-Repositories that publish `.gguf` files need no conversion:
+Name the file as an `hf://` source and `pack` fetches it:
 
 ```sh
-curl -LO https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf
-palan pack Qwen3-8B-Q4_K_M.gguf -t llm/qwen3:8b-q4 \
-  --source https://huggingface.co/Qwen/Qwen3-8B-GGUF --push
+palan pack hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf \
+  -t llm/qwen3:8b-q4 --push
 ```
 
+The download is checked against the SHA-256 the repository publishes and
+refused if the bytes differ, so a truncated or substituted file fails here
+rather than being packed and signed as genuine. That digest becomes
+`io.palan.origin.sha256` and the repository page becomes the source
+annotation, without either having to be passed by hand.
+
+Two things happen automatically because getting them wrong is easy. A model
+split across `model-00001-of-00003.gguf` and its siblings brings every part,
+since packing only the part you named produces an artifact that looks
+complete and cannot load. And a `LICENSE` file in the repository travels with
+the weights as a documentation layer.
+
+Naming a repository without a file lists what it publishes rather than
+guessing a quantisation:
+
+```sh
+palan pack hf://Qwen/Qwen3-8B-GGUF -t llm/qwen3:8b-q4
+# available: Qwen3-8B-Q4_K_M.gguf, Qwen3-8B-Q5_0.gguf, ...
+```
+
+Gated repositories read `HF_TOKEN`; accept the model's terms first.
 Repositories that publish only safetensors need llama.cpp's
-`convert_hf_to_gguf.py` first. Gated repositories require accepting the
-model's terms and passing an access token with the download.
+`convert_hf_to_gguf.py` before anything can be packed.
+
+Fetching from Hugging Face is a connected-side convenience, for seeding a
+registry that offline sites then mirror from. Nothing about it is needed to
+pull, serve, or verify a model.
 
 ### Licensing
 

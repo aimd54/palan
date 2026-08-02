@@ -42,6 +42,9 @@ a Kubernetes cluster, and a GPU host:
 - **Verification policy**: `verify.required` is enforced by `pull`, `load`,
   `run`, and `serve`, so a model is checked both on its way into the store and
   each time it is loaded to be served.
+- **Upstream import**: `pack hf://org/repo/file.gguf` fetches from Hugging
+  Face, checks the bytes against the digest the repository publishes, and
+  records it as the artifact's origin (ADR-0009).
 
 ## Still outstanding
 
@@ -59,5 +62,5 @@ a Kubernetes cluster, and a GPU host:
 - Keyless (Fulcio/Rekor) signing for connected environments.
 - `verify.required` as the default once signing pipelines are ubiquitous.
 - Upstreaming the GGUF packing path to modctl if welcome (see ADR-0005).
-- Stretch goals: LoRA adapter artifacts, multimodal mmproj, HF import
-  (`pack hf://...`), safetensors/vLLM profile.
+- Stretch goals: LoRA adapter artifacts, multimodal mmproj, safetensors/vLLM
+  profile.
