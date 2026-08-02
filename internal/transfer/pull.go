@@ -32,8 +32,10 @@ type Events struct {
 	// OnBlobSkip reports content skipped because the destination has it.
 	OnBlobSkip func(desc ocispec.Descriptor)
 	// OnSignature reports whether a cosign signature travelled with the
-	// artifact. False means the registry held none, which is not an error.
-	OnSignature func(stored bool)
+	// artifact. False with a nil problem means the registry held none, which
+	// is not an error; a non-nil problem means the lookup itself failed and
+	// the model was kept anyway.
+	OnSignature func(stored bool, problem error)
 }
 
 func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int64) {
@@ -49,9 +51,9 @@ func (e Events) blobSkip(desc ocispec.Descriptor) {
 	}
 }
 
-func (e Events) signature(stored bool) {
+func (e Events) signature(stored bool, problem error) {
 	if e.OnSignature != nil {
-		e.OnSignature(stored)
+		e.OnSignature(stored, problem)
 	}
 }
 
@@ -107,11 +109,13 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 		return ocispec.Descriptor{}, fmt.Errorf("copying %s into local store: %w", ref, err)
 	}
 
-	stored, err := fetchSignature(ctx, repo, st, ref, desc.Digest)
-	if err != nil {
-		return ocispec.Descriptor{}, err
-	}
-	ev.signature(stored)
+	// A signature is supplementary: the model is already here and verified by
+	// digest. Registries differ on what they answer for a tag that is absent
+	// or not visible, and some say 401 or 403 rather than 404, so treating
+	// anything but a clean miss as fatal would fail ordinary pulls of unsigned
+	// models against those registries.
+	stored, problem := fetchSignature(ctx, repo, st, ref, desc.Digest)
+	ev.signature(stored, problem)
 	return desc, nil
 }
 

@@ -54,6 +54,9 @@ type Registry struct {
 	ignoreRange bool
 	// corruptBlob serves flipped bytes for this digest (content ≠ digest).
 	corruptBlob digest.Digest
+	// missingManifestStatus overrides the 404 used for an unknown manifest,
+	// so tests can reproduce registries that answer 401 or 403 instead.
+	missingManifestStatus int
 
 	srv *httptest.Server
 }
@@ -246,9 +249,15 @@ func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request, repo
 	case http.MethodGet, http.MethodHead:
 		r.mu.Lock()
 		e, ok := r.manifests[repo][ref]
+		status := r.missingManifestStatus
 		r.mu.Unlock()
 		if !ok {
-			http.Error(w, "manifest unknown", http.StatusNotFound)
+			// Registries disagree here. Some answer 404; others answer 401 or
+			// 403 rather than reveal whether a tag exists.
+			if status == 0 {
+				status = http.StatusNotFound
+			}
+			http.Error(w, "manifest unknown", status)
 			return
 		}
 		w.Header().Set("Content-Type", e.mediaType)
@@ -326,6 +335,15 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request, repo, dg
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// SetMissingManifestStatus changes what an unknown manifest answers. Real
+// registries are not consistent about this, and code that treats only 404 as
+// "absent" breaks against the ones that refuse to confirm existence.
+func (r *Registry) SetMissingManifestStatus(code int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.missingManifestStatus = code
 }
 
 // SetFailBlobReads makes the next n GETs of blob d serve only afterBytes

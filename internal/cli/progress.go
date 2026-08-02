@@ -27,6 +27,9 @@ type progress struct {
 	// signed records whether a signature travelled with the artifact, so the
 	// report can say that verification will work offline later.
 	signed atomic.Bool
+	// sigProblem records why a signature did not travel, when the reason was
+	// a failure rather than the registry simply holding none.
+	sigProblem error
 }
 
 func newProgress(quiet bool) *progress {
@@ -67,8 +70,13 @@ func (pr *progress) events() transfer.Events {
 		OnBlobSkip: func(ocispec.Descriptor) {
 			pr.skipped.Add(1)
 		},
-		OnSignature: func(stored bool) {
+		OnSignature: func(stored bool, problem error) {
 			pr.signed.Store(stored)
+			if problem != nil {
+				pr.mu.Lock()
+				pr.sigProblem = problem
+				pr.mu.Unlock()
+			}
 		},
 	}
 }
@@ -98,5 +106,12 @@ func (pr *progress) report() {
 	}
 	if pr.signed.Load() {
 		fmt.Fprintln(os.Stderr, "Signature stored alongside the model")
+	}
+	pr.mu.Lock()
+	problem := pr.sigProblem
+	pr.mu.Unlock()
+	if problem != nil {
+		// The transfer stands; only offline verification is affected.
+		fmt.Fprintf(os.Stderr, "Warning: no signature stored (%v)\n", problem)
 	}
 }

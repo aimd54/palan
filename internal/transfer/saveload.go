@@ -51,18 +51,24 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 
 	// Mirroring into an offline registry is one of the two ways a model
 	// crosses a gap, and a model that arrives without its signature cannot be
-	// verified on the far side.
+	// verified on the far side. The copy is still supplementary: the model is
+	// already mirrored, and registries disagree on what they answer for a tag
+	// that is absent or invisible, so a lookup failure is reported rather than
+	// undoing a transfer that succeeded.
 	sigTag := signing.SigTag(desc.Digest)
 	if _, err := srcRepo.Resolve(ctx, sigTag); err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
-			return desc, nil // unsigned, nothing more to carry
+			ev.signature(false, nil) // unsigned, nothing more to carry
+		} else {
+			ev.signature(false, fmt.Errorf("looking for a signature on %s: %w", src, err))
 		}
-		return ocispec.Descriptor{}, fmt.Errorf("looking for a signature on %s: %w", src, err)
+		return desc, nil
 	}
 	if _, err := oras.Copy(ctx, srcRepo, sigTag, dstRepo, sigTag, opts); err != nil {
-		return ocispec.Descriptor{}, fmt.Errorf("copying the signature for %s: %w", src, err)
+		ev.signature(false, fmt.Errorf("copying the signature for %s: %w", src, err))
+		return desc, nil
 	}
-	ev.signature(true)
+	ev.signature(true, nil)
 	return desc, nil
 }
 

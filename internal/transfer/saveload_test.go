@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,7 +221,7 @@ func TestPullStoresTheSignature(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	var reported bool
 	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
-		OnSignature: func(stored bool) { reported = stored },
+		OnSignature: func(stored bool, _ error) { reported = stored },
 	}); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestPullWithoutSignatureIsNotAnError(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	reported := true
 	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
-		OnSignature: func(stored bool) { reported = stored },
+		OnSignature: func(stored bool, _ error) { reported = stored },
 	}); err != nil {
 		t.Fatalf("pulling an unsigned model must succeed: %v", err)
 	}
@@ -358,5 +359,40 @@ func TestLoadBeforeImportSeesTheBundleContent(t *testing.T) {
 			return nil
 		})); err != nil {
 		t.Fatalf("load: %v", err)
+	}
+}
+
+// TestPullSurvivesRegistryThatHidesMissingTags: a signature is supplementary,
+// so a registry that answers 401 for an unknown tag rather than 404 must not
+// turn every pull of an unsigned model into a failure. Several real registries
+// refuse to confirm whether a tag exists.
+func TestPullSurvivesRegistryThatHidesMissingTags(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	mDesc, _ := seedRegistryModel(t, reg, "llm/tiny", "q4", randomBytes(t, 1024))
+	reg.SetMissingManifestStatus(http.StatusUnauthorized)
+
+	st := openTestStore(t)
+	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
+	var stored bool
+	var problem error
+	desc, err := newTestClient(t).Pull(ctx, st, ref, Events{
+		OnSignature: func(s bool, p error) { stored, problem = s, p },
+	})
+	if err != nil {
+		t.Fatalf("pull must succeed even when the signature lookup is refused: %v", err)
+	}
+	if desc.Digest != mDesc.Digest {
+		t.Errorf("pulled %s, want %s", desc.Digest, mDesc.Digest)
+	}
+	if stored {
+		t.Error("no signature exists, so none can have been stored")
+	}
+	if problem == nil {
+		t.Error("a refused lookup must be reported rather than passed off as unsigned")
+	}
+	// The model itself must be usable regardless.
+	if _, err := st.Resolve(ctx, ref.String()); err != nil {
+		t.Errorf("model missing from the store: %v", err)
 	}
 }
