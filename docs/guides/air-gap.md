@@ -129,7 +129,17 @@ via HTTP Range requests against the registry.
   way the check runs against the bundle before any content reaches the store,
   so a bundle that fails to verify imports nothing.
 
-- A signature binds the repository reference it was created for. The in-gap
-  registry must serve the model under the same reference, otherwise
-  verification fails on identity even though the key and digest match. See the
+- A signature binds the reference it was created for, and that includes the
+  **registry host**, not just the repository path. The in-gap registry must
+  therefore answer on the same name, usually the same DNS name resolved
+  differently on each side of the gap. Copying a model elsewhere brings its
+  signature along but not its identity, so verification at the new address
+  fails even though the key and the digest are both correct:
+
+  ```text
+  signature identity is "connected.example/llm/qwen3",
+  expected "offline.example/llm/qwen3"
+  ```
+
+  Sign again at the destination if the name genuinely has to change. See the
   [security guide](security.md) for signing workflows.

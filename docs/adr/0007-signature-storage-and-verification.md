@@ -65,11 +65,15 @@ verified, or the import is refused.
 - The store now holds entries that are not models. They are hidden from `ls`,
   and `rm` unlinks a model's signature so `gc` can reclaim it instead of
   leaving it pinned.
-- Signature identity stays bound to the repository reference, which is cosign
-  semantics and what stops a signature validating another repository's
-  artifact. An offline registry must therefore serve a model under the same
-  reference it was signed as. Mirroring with `cp` preserves that; re-tagging on
-  arrival does not.
+- Signature identity stays bound to the reference it was made for, **registry
+  host included**, which is cosign semantics and what stops a signature
+  validating another repository's artifact. Measured between two registries on
+  2026-08-02: a model copied to a different host fails on identity even when
+  the repository path is identical. An offline site must therefore answer on
+  the same name the model was signed as, which in practice means the same DNS
+  name resolved differently inside the gap. `cp` carries the signature across
+  but cannot change what it binds, so a mirror that lands under a different
+  host or repository has to be signed again where it lands.
 - Because a name proves nothing, the import check runs in two passes and a
   bundle carrying a stray signature-shaped reference is refused whole rather
   than partly imported. An earlier single-pass form skipped such references and

@@ -42,6 +42,13 @@ A signature is accepted only if it validates against the key, **binds the
 exact manifest digest**, and claims the expected repository identity.
 Copying a valid signature onto a different artifact or repo fails.
 
+That identity is the whole reference, **registry host included**. A model
+mirrored to another registry keeps its signature but not its identity, so it
+does not verify at the new address even with the same repository path and the
+same key. Either serve it under the name it was signed as, which for an
+air-gapped site usually means the same DNS name resolved differently on each
+side, or sign it again where it lands.
+
 ## Enforcing verification on pull
 
 Ad hoc:
