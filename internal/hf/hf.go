@@ -143,12 +143,15 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 // gatedError explains a refusal in terms of what to do about it, since a bare
 // 401 or 403 from a gated repository looks like a palan problem.
 func (c *Client) gatedError(ref Ref, status int) error {
-	hint := "set HF_TOKEN to an access token"
+	// Hugging Face answers 401 for a repository that does not exist as well
+	// as for one you cannot see, so as not to reveal which. Say so, rather
+	// than sending someone to hunt for a token when they mistyped a name.
+	hint := "if it exists and is gated, accept its terms and set HF_TOKEN"
 	if c.Token != "" {
-		hint = "the configured HF_TOKEN may lack access, or the terms may need accepting"
+		hint = "if it exists, the configured HF_TOKEN may lack access or its terms may need accepting"
 	}
-	return fmt.Errorf("hugging face refused %s (%d): the repository is private or gated, so %s at %s",
-		ref.Repo, status, hint, c.endpoint()+"/"+ref.Repo)
+	return fmt.Errorf("hugging face refused %s (%d): the repository is missing, private, or gated, and it does not say which; check the name at %s, and %s",
+		ref.Repo, status, c.endpoint()+"/"+ref.Repo, hint)
 }
 
 // listFiles returns every file path in the repository.
