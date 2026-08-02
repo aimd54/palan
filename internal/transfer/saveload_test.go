@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
@@ -291,5 +293,70 @@ func TestCpWithoutSignatureIsNotAnError(t *testing.T) {
 	}
 	if regB.HasManifest("llm/mirrored", signing.SigTag(mDesc.Digest)) {
 		t.Error("no signature existed, so none should have been created")
+	}
+}
+
+// TestLoadBeforeImportAbortsCleanly: a rejected bundle must leave the store
+// exactly as it was. Asserting on the error alone would pass even if the
+// content had already landed, so this checks the store itself.
+func TestLoadBeforeImportAbortsCleanly(t *testing.T) {
+	ctx := context.Background()
+	src := openTestStore(t)
+	seedStoreModel(t, src, "registry.internal/llm/tiny:a", randomBytes(t, 512))
+
+	var bundle bytes.Buffer
+	if _, err := Save(ctx, src, []string{"registry.internal/llm/tiny:a"}, &bundle); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := openTestStore(t)
+	rejected := errors.New("policy says no")
+	var sawRefs []string
+	_, err := Load(ctx, dst, &bundle, WithBeforeImport(
+		func(_ context.Context, _ oras.ReadOnlyTarget, refs []string) error {
+			sawRefs = refs
+			return rejected
+		}))
+	if !errors.Is(err, rejected) {
+		t.Fatalf("load must surface the hook's error, got %v", err)
+	}
+	if len(sawRefs) == 0 {
+		t.Error("the hook must see the bundle's references")
+	}
+	entries, err := dst.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a rejected bundle must import nothing, store holds %d reference(s)", len(entries))
+	}
+}
+
+// TestLoadBeforeImportSeesTheBundleContent: the hook has to be able to read
+// the bundle, since verifying it is the whole point.
+func TestLoadBeforeImportSeesTheBundleContent(t *testing.T) {
+	ctx := context.Background()
+	src := openTestStore(t)
+	ref := mustParse(t, "registry.internal/llm/tiny:a")
+	mDesc, _ := seedStoreModel(t, src, ref.String(), randomBytes(t, 512))
+	sigRef := seedStoreSignature(t, src, ref, mDesc.Digest)
+
+	var bundle bytes.Buffer
+	if _, err := Save(ctx, src, []string{ref.String()}, &bundle); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := openTestStore(t)
+	if _, err := Load(ctx, dst, &bundle, WithBeforeImport(
+		func(ctx context.Context, b oras.ReadOnlyTarget, _ []string) error {
+			if _, err := b.Resolve(ctx, ref.String()); err != nil {
+				return fmt.Errorf("model unreadable from the bundle: %w", err)
+			}
+			if _, err := b.Resolve(ctx, sigRef); err != nil {
+				return fmt.Errorf("signature unreadable from the bundle: %w", err)
+			}
+			return nil
+		})); err != nil {
+		t.Fatalf("load: %v", err)
 	}
 }

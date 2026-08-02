@@ -4,13 +4,17 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	oras "oras.land/oras-go/v2"
 
 	"github.com/aimd54/palan/internal/refname"
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/transfer"
 )
 
@@ -96,13 +100,22 @@ as a tar of a standard OCI image layout. "-o -" writes to stdout.`,
 	return cmd
 }
 
-func newLoadCmd() *cobra.Command {
-	var input string
+func newLoadCmd(v *viper.Viper) *cobra.Command {
+	var (
+		input     string
+		doVerify  bool
+		verifyKey string
+	)
 	cmd := &cobra.Command{
 		Use:   "load -i FILE",
 		Short: "Import models from a tar bundle",
-		Long:  `load imports every tagged reference from a bundle created by save (or any tar'd OCI image layout). "-i -" reads from stdin.`,
-		Args:  cobra.NoArgs,
+		Long: `load imports every tagged reference from a bundle created by save (or any tar'd OCI image layout). "-i -" reads from stdin.
+
+With --verify, or with verify.required set in the config, every model in the
+bundle must carry a valid signature before anything is imported. A bundle is
+whatever a courier handed over, so this is the moment its provenance is worth
+deciding. Verification reads the bundle itself and needs no registry.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			st, err := openStore(ctx)
@@ -124,17 +137,60 @@ func newLoadCmd() *cobra.Command {
 				defer func() { _ = f.Close() }()
 				r = f
 			}
-			refs, err := transfer.Load(ctx, st, r)
+
+			var opts []transfer.LoadOption
+			if doVerify || v.GetBool(keyVerifyRequired) {
+				opts = append(opts, transfer.WithBeforeImport(bundleVerifier(v, verifyKey, cmd.ErrOrStderr())))
+			}
+			refs, err := transfer.Load(ctx, st, r, opts...)
 			if err != nil {
 				return err
 			}
 			for _, ref := range refs {
+				if signing.IsSigTag(ref) {
+					continue // travelled with its model; not a model itself
+				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Loaded %s\n", ref)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&input, "input", "i", "", "input file (- for stdin)")
+	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature on every model in the bundle before importing")
+	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
 	must(cmd.MarkFlagRequired("input"))
 	return cmd
+}
+
+// bundleVerifier checks every model in a bundle against the configured key,
+// reading the bundle's own layout so no registry is involved. Returning an
+// error from here aborts the import, which is why the check runs before any
+// content reaches the store: a bundle that fails leaves nothing behind.
+func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.Context, oras.ReadOnlyTarget, []string) error {
+	return func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error {
+		for _, raw := range refs {
+			if signing.IsSigTag(raw) {
+				continue
+			}
+			ref, err := refname.Parse(raw, "")
+			if err != nil {
+				return fmt.Errorf("bundle reference %q: %w", raw, err)
+			}
+			desc, err := bundle.Resolve(ctx, raw)
+			if err != nil {
+				return err
+			}
+			src := verifySource{
+				target: bundle,
+				sigRef: signing.SigRef(ref, desc.Digest),
+				digest: desc.Digest,
+				name:   "bundle",
+			}
+			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
+		}
+		return nil
+	}
 }

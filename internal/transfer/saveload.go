@@ -127,9 +127,26 @@ func saveSignature(ctx context.Context, st *store.Store, dst *oci.Store, ref str
 	return true, nil
 }
 
+// LoadOption configures Load.
+type LoadOption func(*loadConfig)
+
+type loadConfig struct {
+	beforeImport func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error
+}
+
+// WithBeforeImport runs fn against the bundle's own layout before any content
+// reaches the store, so a policy check can reject a bundle without the store
+// ever holding what it rejected. A non-nil error aborts the whole import.
+//
+// The callback takes a plain read-only target rather than anything from the
+// signing package, which keeps verification policy out of the transfer layer.
+func WithBeforeImport(fn func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error) LoadOption {
+	return func(c *loadConfig) { c.beforeImport = fn }
+}
+
 // Load imports every tagged reference from a tar'd OCI image layout into
 // the local store and returns the imported refs.
-func Load(ctx context.Context, st *store.Store, r io.Reader) ([]string, error) {
+func Load(ctx context.Context, st *store.Store, r io.Reader, opts ...LoadOption) ([]string, error) {
 	tmp, err := os.MkdirTemp("", "palan-load-*")
 	if err != nil {
 		return nil, err
@@ -153,6 +170,17 @@ func Load(ctx context.Context, st *store.Store, r io.Reader) ([]string, error) {
 	if len(refs) == 0 {
 		return nil, errors.New("bundle contains no tagged references")
 	}
+
+	var cfg loadConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.beforeImport != nil {
+		if err := cfg.beforeImport(ctx, src, refs); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, ref := range refs {
 		if _, err := oras.Copy(ctx, src, ref, st.OCI(), ref, oras.DefaultCopyOptions); err != nil {
 			return nil, fmt.Errorf("importing %s: %w", ref, err)

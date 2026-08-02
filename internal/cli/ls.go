@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/transfer"
 )
 
@@ -65,6 +66,12 @@ func listLocal(ctx context.Context) ([]modelRow, error) {
 	}
 	rows := make([]modelRow, 0, len(entries))
 	for _, e := range entries {
+		// Signatures are tagged manifests like anything else, but they are
+		// attached to a model rather than being one, so listing them as
+		// models would be noise.
+		if signing.IsSigTag(e.Ref) {
+			continue
+		}
 		rows = append(rows, describeRef(ctx, st.OCI(), e.Ref, e.Descriptor))
 	}
 	return rows, nil
