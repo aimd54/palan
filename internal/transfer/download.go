@@ -60,7 +60,7 @@ func (c *Client) downloadBlob(ctx context.Context, repo *remote.Repository, ref 
 // tryDownload performs one download attempt, resuming from an existing
 // partial when the registry honors Range requests.
 func (c *Client) tryDownload(ctx context.Context, repo *remote.Repository, ref registry.Reference, desc ocispec.Descriptor, partial string, st *store.Store, ev Events) (retErr error) {
-	offset, hasher, err := rehashPartial(partial, desc.Size)
+	offset, hasher, err := RehashPartial(partial, desc.Size)
 	if err != nil {
 		return err
 	}
@@ -135,10 +135,13 @@ func (c *Client) tryDownload(ctx context.Context, repo *remote.Repository, ref r
 	return c.installPartial(ctx, st, desc, partial, hasher)
 }
 
-// rehashPartial replays an existing partial file through SHA-256 so the
+// RehashPartial replays an existing partial file through SHA-256 so the
 // digest check covers resumed bytes too. A corrupt or oversized partial is
 // discarded.
-func rehashPartial(partial string, expectedSize int64) (int64, hash.Hash, error) {
+//
+// Exported because resuming a download is not registry-specific: internal/hf
+// resumes a Hugging Face fetch the same way, and this is the tested version.
+func RehashPartial(partial string, expectedSize int64) (int64, hash.Hash, error) {
 	hasher := sha256.New()
 	f, err := os.Open(partial) // #nosec G304 -- digest-derived path in the ingest dir
 	if err != nil {
