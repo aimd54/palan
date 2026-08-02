@@ -29,6 +29,7 @@ const zotImage = "ghcr.io/project-zot/zot-minimal-linux-amd64:v2.1.18"
 
 var (
 	palanBin    string
+	runtimeDir  string // holds a fake llama-server, prepended to the subprocess PATH
 	regOnce     sync.Once
 	regHostVal  string
 	regSkipWhy  string
@@ -46,6 +47,21 @@ func TestMain(m *testing.M) {
 	build := exec.Command("go", "build", "-o", palanBin, "github.com/aimd54/palan/cmd/palan")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: building palan: %v\n%s", err, out)
+		os.Exit(1)
+	}
+
+	// serve and run need a llama-server on PATH. The fake one speaks enough
+	// of the HTTP surface for the router, so these tests can exercise the
+	// serving path without a real llama.cpp build.
+	runtimeDir = filepath.Join(tmp, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o750); err != nil {
+		fmt.Fprintln(os.Stderr, "e2e: runtime dir:", err)
+		os.Exit(1)
+	}
+	fake := exec.Command("go", "build", "-o", filepath.Join(runtimeDir, "llama-server"),
+		"github.com/aimd54/palan/internal/fakellama")
+	if out, err := fake.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: building fakellama: %v\n%s", err, out)
 		os.Exit(1)
 	}
 
@@ -131,7 +147,7 @@ func palan(t *testing.T, home string, args ...string) string {
 func palanRun(home string, args ...string) (string, error) {
 	full := append([]string{"--plain-http", "--quiet"}, args...)
 	cmd := exec.Command(palanBin, full...)
-	cmd.Env = append(os.Environ(), "PALAN_HOME="+home)
+	cmd.Env = append(os.Environ(), "PALAN_HOME="+home, "PATH="+runtimeDir+":"+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

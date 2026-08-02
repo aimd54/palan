@@ -32,6 +32,8 @@ func newRunCmd(v *viper.Viper) *cobra.Command {
 		ctxSize    int
 		ngl        int
 		web        bool
+		doVerify   bool
+		verifyKey  string
 	)
 
 	cmd := &cobra.Command{
@@ -51,6 +53,16 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			st, err := openStore(ctx)
 			if err != nil {
 				return err
+			}
+
+			// Check the policy before anything is fetched or spawned: when
+			// the model is absent, resolveVerifySource answers from the
+			// registry, so an unsigned model is refused without downloading
+			// it first.
+			if gate := verifyGate(v, st, doVerify, verifyKey); gate != nil {
+				if err := gate(ctx, ref.String()); err != nil {
+					return err
+				}
 			}
 
 			model, err := ensureModel(ctx, cmd, v, st, ref.String())
@@ -110,6 +122,8 @@ opens an interactive chat. With --prompt it answers once and exits; with
 	cmd.Flags().IntVar(&ctxSize, "ctx", 0, "context size override")
 	cmd.Flags().IntVar(&ngl, "ngl", 0, "GPU layer count override")
 	cmd.Flags().BoolVar(&web, "web", false, "expose llama-server's web UI instead of the terminal chat")
+	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature before fetching or running the model")
+	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
 	return cmd
 }
 

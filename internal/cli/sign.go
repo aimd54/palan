@@ -187,6 +187,31 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 	}, nil
 }
 
+// verifyGate returns a check that refuses a model whose signature does not
+// verify, or nil when neither the flag nor verify.required asks for one.
+//
+// run and serve share it so that a model is checked at the moment it is about
+// to be served, not only when it entered the store. Source selection is left
+// to resolveVerifySource, which reads the store when it holds the signature
+// and the registry otherwise, so an air-gapped host needs no network and a
+// model signed after a local pack still verifies.
+func verifyGate(v *viper.Viper, st *store.Store, doVerify bool, keyPath string) func(context.Context, string) error {
+	if !doVerify && !v.GetBool(keyVerifyRequired) {
+		return nil
+	}
+	return func(ctx context.Context, raw string) error {
+		ref, err := refname.Parse(raw, v.GetString(keyRegistryDefault))
+		if err != nil {
+			return err
+		}
+		src, err := resolveVerifySource(ctx, st, v, ref)
+		if err != nil {
+			return err
+		}
+		return verifyDigest(ctx, v, keyPath, src, ref)
+	}
+}
+
 // verifyDigest runs signature verification against an already-resolved
 // source, using the explicit key path or the configured verify.key. Callers
 // choose the source, so a pre-download gate can insist on the registry while

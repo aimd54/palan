@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,12 @@ const DefaultAddr = ":11500"
 
 // DefaultIdleTimeout unloads models after this much inactivity (§9.2).
 const DefaultIdleTimeout = 10 * time.Minute
+
+// ErrUnverified marks a model that exists but failed its signature check. A
+// Backend wraps it around such a failure so the router answers 403 rather than
+// reporting the model as missing, which keeps verification policy in the
+// backend and out of this package.
+var ErrUnverified = errors.New("model failed signature verification")
 
 // Backend supplies servable models to the router.
 type Backend interface {
@@ -223,6 +230,10 @@ func (rt *Router) ensure(ctx context.Context, ref string) (*instance, int, error
 
 		spec, memory, err := rt.opts.Backend.Spec(ctx, ref)
 		if err != nil {
+			// A model that is present but unverified is refused, not missing.
+			if errors.Is(err, ErrUnverified) {
+				return nil, &httpError{http.StatusForbidden, fmt.Sprintf("model %q refused: %v", ref, err)}
+			}
 			return nil, &httpError{http.StatusNotFound, fmt.Sprintf("model %q not servable: %v", ref, err)}
 		}
 		if err := rt.makeRoom(memory, ref); err != nil {

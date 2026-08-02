@@ -47,6 +47,8 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 		budgetStr  string
 		keepLoaded []string
 		runtimeRef string
+		doVerify   bool
+		verifyKey  string
 	)
 
 	cmd := &cobra.Command{
@@ -110,6 +112,7 @@ to no offload will serve from CPU on a GPU host.`,
 					bin:    bin,
 					refs:   refs,
 					logDir: filepath.Join(st.Root(), "state", "logs"),
+					gate:   verifyGate(v, st, doVerify, verifyKey),
 				},
 				MemoryBudget: budget,
 				IdleTimeout:  idle,
@@ -148,6 +151,8 @@ to no offload will serve from CPU on a GPU host.`,
 	cmd.Flags().StringVar(&budgetStr, "memory-budget", "", "memory budget for loaded models, e.g. 9GiB (default: auto-detect)")
 	cmd.Flags().StringSliceVar(&keepLoaded, "keep-loaded", nil, "refs never unloaded or evicted")
 	cmd.Flags().StringVar(&runtimeRef, "runtime", "", "runtime artifact reference (default: runtime.ref config, then PATH)")
+	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature before loading any model")
+	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
 	must(v.BindPFlag(keyServeAddr, cmd.Flags().Lookup("addr")))
 	must(v.BindPFlag(keyServeIdleTimeout, cmd.Flags().Lookup("idle-timeout")))
 	must(v.BindPFlag(keyServeBudget, cmd.Flags().Lookup("memory-budget")))
@@ -160,6 +165,11 @@ type storeBackend struct {
 	bin    string
 	refs   []string // non-empty restricts the served set
 	logDir string
+	// gate, when set, must accept a model before it is loaded. It runs once
+	// per load rather than once per request, and re-runs after an eviction,
+	// which is the point: it re-reads a store that may have changed since the
+	// model was imported.
+	gate func(ctx context.Context, ref string) error
 }
 
 func (b *storeBackend) List(ctx context.Context) ([]string, error) {
@@ -195,6 +205,13 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 		}
 		if !allowed {
 			return palanruntime.Spec{}, 0, errors.New("not among the served references")
+		}
+	}
+	if b.gate != nil {
+		if err := b.gate(ctx, ref); err != nil {
+			// Wrapped so the router answers 403: the model is present and
+			// refused, which is a different answer from missing.
+			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
 		}
 	}
 	desc, err := b.st.Resolve(ctx, ref)

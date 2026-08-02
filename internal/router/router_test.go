@@ -344,3 +344,72 @@ func TestParseBudget(t *testing.T) {
 		}
 	}
 }
+
+// unverifiedBackend serves one model normally and refuses another the way a
+// signature check would, so the status mapping can be tested without any
+// signing machinery in this package.
+type unverifiedBackend struct {
+	inner    *fakeBackend
+	refusing string
+}
+
+func (b *unverifiedBackend) List(ctx context.Context) ([]string, error) { return b.inner.List(ctx) }
+
+func (b *unverifiedBackend) Spec(ctx context.Context, ref string) (runtime.Spec, int64, error) {
+	if ref == b.refusing {
+		return runtime.Spec{}, 0, fmt.Errorf("%w: no signature found", ErrUnverified)
+	}
+	return b.inner.Spec(ctx, ref)
+}
+
+// TestUnverifiedModelIs403: a model that exists but fails verification is
+// refused, not reported missing. Answering 404 would tell a caller to go look
+// for the model rather than at its signature, and would be indistinguishable
+// from a typo in the ref.
+func TestUnverifiedModelIs403(t *testing.T) {
+	backend := &unverifiedBackend{
+		inner:    &fakeBackend{models: map[string]int64{"llm/ok:1": 100, "llm/bad:1": 100}},
+		refusing: "llm/bad:1",
+	}
+	_, srv := newTestRouter(t, Options{Backend: backend, MemoryBudget: 1000, IdleTimeout: time.Hour})
+
+	code, body := chat(t, srv.URL, "llm/bad:1", "x", false, nil)
+	if code != http.StatusForbidden {
+		t.Errorf("unverified model: got %d, want %d (%s)", code, http.StatusForbidden, body)
+	}
+	if !strings.Contains(body, "verification") {
+		t.Errorf("the refusal should say why: %s", body)
+	}
+
+	// The mapping must stay narrow: an ordinary missing model is still 404.
+	code, body = chat(t, srv.URL, "llm/absent:1", "x", false, nil)
+	if code != http.StatusNotFound || !strings.Contains(body, "not servable") {
+		t.Errorf("missing model should still be 404: %d %s", code, body)
+	}
+
+	// And a verified model still serves, so the gate is not blanket refusal.
+	if code, body := chat(t, srv.URL, "llm/ok:1", "x", false, nil); code != http.StatusOK {
+		t.Errorf("verified model must still serve: %d %s", code, body)
+	}
+}
+
+// TestUnverifiedModelStillListed: /v1/models reports what the store holds.
+// Verifying every model on every listing would be wasteful and would let one
+// bad artifact break an endpoint that only reports existence.
+func TestUnverifiedModelStillListed(t *testing.T) {
+	backend := &unverifiedBackend{
+		inner:    &fakeBackend{models: map[string]int64{"llm/ok:1": 100, "llm/bad:1": 100}},
+		refusing: "llm/bad:1",
+	}
+	_, srv := newTestRouter(t, Options{Backend: backend, MemoryBudget: 1000, IdleTimeout: time.Hour})
+
+	resp, err := http.Get(srv.URL + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "llm/bad:1") {
+		t.Errorf("an unverified model should still be listed: %s", body)
+	}
+}
