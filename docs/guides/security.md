@@ -49,12 +49,15 @@ same key. Either serve it under the name it was signed as, which for an
 air-gapped site usually means the same DNS name resolved differently on each
 side, or sign it again where it lands.
 
-## Enforcing verification on pull
+## Enforcing verification
 
-Ad hoc:
+Ad hoc, on any command that brings in or runs a model:
 
 ```sh
-palan pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
+palan pull  registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
+palan load  -i bundle.tar                     --verify --verify-key cosign.pub
+palan run   registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
+palan serve                                   --verify --verify-key cosign.pub
 ```
 
 Machine-wide, in `~/.config/palan/config.yaml`:
@@ -65,10 +68,27 @@ verify:
   key: /etc/palan/cosign.pub
 ```
 
-With `verify.required`, **every** pull checks the signature before any
-weight bytes are downloaded; unsigned or foreign-signed models are refused.
-This is the recommended default once your pipeline signs everything
-(v0.1 ships it opt-in).
+With `verify.required`, an unsigned or foreign-signed model is refused at
+every point it could otherwise get in or get used:
+
+| Command | When the check runs |
+|---|---|
+| `pull` | before any weight bytes are downloaded |
+| `load` | against the bundle, before anything reaches the store |
+| `run` | before deciding whether to fetch, so an unsigned model is never downloaded |
+| `serve` | when a model is loaded, on first request and again after an eviction |
+
+`serve` checks at load rather than at startup, so a refusal is a `403` on the
+request for that model and the rest keep serving. `/v1/models` still lists an
+unverified model: listing reports what the store holds, and the refusal
+belongs at the point of use.
+
+Checking at serve time matters because the earlier points only cover content
+*entering* the store. Anything that writes to the store afterwards would
+otherwise be trusted.
+
+This is the recommended configuration once your pipeline signs everything;
+palan ships it opt-in.
 
 ## Registry authentication
 

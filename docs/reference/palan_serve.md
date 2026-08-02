@@ -28,6 +28,8 @@ palan serve [REF...] [flags]
       --keep-loaded strings     refs never unloaded or evicted
       --memory-budget string    memory budget for loaded models, e.g. 9GiB (default: auto-detect)
       --runtime string          runtime artifact reference (default: runtime.ref config, then PATH)
+      --verify                  require a valid signature before loading any model
+      --verify-key string       public key for --verify (default: verify.key from the config)
 ```
 
 ### Options inherited from parent commands

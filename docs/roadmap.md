@@ -39,6 +39,9 @@ a Kubernetes cluster, and a GPU host:
 - **Air gap**: `save`/`load` bundles and registry-to-registry `cp`. Signatures
   travel with the model on all three paths, and a bundle verifies on a host
   with no network at all.
+- **Verification policy**: `verify.required` is enforced by `pull`, `load`,
+  `run`, and `serve`, so a model is checked both on its way into the store and
+  each time it is loaded to be served.
 
 ## Still outstanding
 
@@ -51,9 +54,6 @@ a Kubernetes cluster, and a GPU host:
 
 ## Planned / open
 
-- Enforcing `verify.required` in `run` and `serve`. It is honoured by `pull`
-  and by `load`, so content is checked as it enters the store, but nothing
-  re-checks a model at the moment it is served.
 - Referrers-API storage for signatures alongside the tag fallback.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.

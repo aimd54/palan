@@ -252,8 +252,12 @@ Three consumption patterns, from least- to most-coupled. The
   with the model through `pull`, `save`, and `cp`. Verification reads either a
   registry or the local store, so it needs no transparency log, no certificate
   authority, and no network once the signature is on disk.
-- `palan pull --verify` (or `verify.required` in the config) refuses
-  unsigned or foreign-signed models before any weight bytes move.
+- `verify.required` (or `--verify` on a single command) refuses unsigned or
+  foreign-signed models at every point one could get in or get used: `pull`
+  before any weight bytes move, `load` against the bundle before anything
+  reaches the store, `run` before deciding to fetch, and `serve` each time a
+  model is loaded. The last one is what covers a store changed after import,
+  since the others only see content on its way in.
 
 See the [Security guide](guides/security.md) for signing workflows,
 authentication, and TLS configuration, and
