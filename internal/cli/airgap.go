@@ -166,8 +166,15 @@ deciding. Verification reads the bundle itself and needs no registry.`,
 // reading the bundle's own layout so no registry is involved. Returning an
 // error from here aborts the import, which is why the check runs before any
 // content reaches the store: a bundle that fails leaves nothing behind.
+//
+// A bundle is attacker-controlled, so nothing may be excused from the check on
+// the strength of its name alone. Signature-shaped references are skipped in
+// the first pass and then required, in the second, to be the signature of a
+// model that just verified. Without that, tagging a model
+// `...:sha256-<64 hex>.sig` would carry it past verification untouched.
 func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.Context, oras.ReadOnlyTarget, []string) error {
 	return func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error {
+		expectedSignatures := make(map[string]struct{}, len(refs))
 		for _, raw := range refs {
 			if signing.IsSigTag(raw) {
 				continue
@@ -189,7 +196,18 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
+			expectedSignatures[src.sigRef] = struct{}{}
 			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
+		}
+
+		for _, raw := range refs {
+			if !signing.IsSigTag(raw) {
+				continue
+			}
+			if _, ok := expectedSignatures[raw]; !ok {
+				return fmt.Errorf(
+					"bundle contains %q, which is not the signature of any verified model; refusing to import", raw)
+			}
 		}
 		return nil
 	}

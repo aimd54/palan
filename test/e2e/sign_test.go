@@ -202,3 +202,41 @@ func TestOfflineVerifyFromBundle(t *testing.T) {
 		t.Errorf("a refused bundle must import nothing, store holds:\n%s", listed)
 	}
 }
+
+// TestLoadRejectsSignatureShapedModel covers a bundle crafted to slip past
+// verification: a model tagged so it looks like a cosign signature. The
+// verifier skips signature-shaped references, so anything left over has to be
+// proven to belong to a model that verified, or the whole import is refused.
+//
+// Asserting on the exit status alone would not catch this. The earlier form
+// of the check exited 0 and imported the model anyway, so the store is what
+// the test looks at.
+func TestLoadRejectsSignatureShapedModel(t *testing.T) {
+	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
+	host := registryHost(t)
+	fx := writeFixtures(t, 64<<10)
+	_, pub := writeTestKeys(t)
+
+	// A tag shaped exactly like a signature, attached to an ordinary model.
+	disguised := host + "/llm/disguised:sha256-" + strings.Repeat("a", 64) + ".sig"
+
+	online := t.TempDir()
+	palan(t, online, "pack", fx.ggufPath, "-t", disguised)
+
+	bundle := filepath.Join(t.TempDir(), "disguised.tar")
+	palan(t, online, "save", disguised, "-o", bundle)
+
+	offline := t.TempDir()
+	out, err := palanRun(offline, "load", "-i", bundle, "--verify", "--verify-key", pub)
+	if err == nil {
+		t.Errorf("a signature-shaped model must not pass verification:\n%s", out)
+	}
+	if listed := palan(t, offline, "ls"); strings.Contains(listed, "disguised") {
+		t.Errorf("nothing should have been imported, store holds:\n%s", listed)
+	}
+	// The store must be empty, not merely missing that one listing.
+	blobs := filepath.Join(offline, "blobs", "sha256")
+	if entries, err := os.ReadDir(blobs); err == nil && len(entries) > 0 {
+		t.Errorf("refused bundle left %d blob(s) on disk", len(entries))
+	}
+}
