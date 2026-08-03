@@ -169,14 +169,62 @@ func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target o
 // verifies a bundle exactly as a connected one verifies a registry. sigRef is
 // how the signature is addressed in that source: SigTag for a repository,
 // SigRef for a store holding many repositories.
-func Verify(ctx context.Context, src oras.ReadOnlyTarget, sigRef, repoRef string, target digest.Digest, verifier signature.Verifier) error {
+//
+// The tag is tried first, because it is what cosign writes by default and
+// what every registry supports. Only when nothing is tagged does Verify ask
+// for referrers of the target, which is how a signature made by
+// `cosign sign --registry-referrers-mode=oci-1-1` is stored: that signature
+// has no tag at all, and reporting such a model unsigned would be a wrong
+// answer rather than a missing feature.
+func Verify(ctx context.Context, src oras.ReadOnlyTarget, sigRef, repoRef string, target ocispec.Descriptor, verifier signature.Verifier) error {
 	desc, err := src.Resolve(ctx, sigRef)
-	if err != nil {
-		if errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("%w for %s", ErrNoSignature, target)
-		}
+	switch {
+	case err == nil:
+		return verifyManifest(ctx, src, desc, repoRef, target.Digest, verifier)
+	case !errors.Is(err, errdef.ErrNotFound):
 		return fmt.Errorf("resolving signature tag: %w", err)
 	}
+
+	sigs, err := referrers(ctx, src, target)
+	if err != nil {
+		return err
+	}
+	lastErr := fmt.Errorf("%w for %s", ErrNoSignature, target.Digest)
+	for _, sig := range sigs {
+		if err := verifyManifest(ctx, src, sig, repoRef, target.Digest, verifier); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+// referrers lists the signature manifests attached to target. A source that
+// cannot answer for predecessors is not an error: it means the tag was the
+// only place a signature could have been, and it was not there.
+func referrers(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+	graph, ok := src.(content.ReadOnlyGraphStorage)
+	if !ok {
+		return nil, nil
+	}
+	sigs, err := registry.Referrers(ctx, graph, target, ArtifactTypeSignature)
+	if err != nil {
+		// Registries that predate the referrers API, and stores that hold the
+		// signature but not the model it refers to, both land here. Neither is
+		// a verdict on the signature.
+		if errors.Is(err, errdef.ErrNotFound) || errors.Is(err, errdef.ErrUnsupported) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing referrers of %s: %w", target.Digest, err)
+	}
+	return sigs, nil
+}
+
+// verifyManifest checks one signature manifest against the key and the
+// claims it must carry. Shared by the tag and referrer paths so that a
+// signature found either way is held to the same standard.
+func verifyManifest(ctx context.Context, src oras.ReadOnlyTarget, desc ocispec.Descriptor, repoRef string, target digest.Digest, verifier signature.Verifier) error {
 	raw, err := content.FetchAll(ctx, src, desc)
 	if err != nil {
 		return err

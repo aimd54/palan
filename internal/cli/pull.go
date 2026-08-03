@@ -77,10 +77,10 @@ any llama-server image.`,
 				// gate runs before anything is downloaded, so a local copy
 				// would be the previous version rather than what is arriving.
 				src := verifySource{
-					target: repo,
-					sigRef: signing.SigTag(desc.Digest),
-					digest: desc.Digest,
-					name:   "registry",
+					target:  repo,
+					sigRef:  signing.SigTag(desc.Digest),
+					subject: desc,
+					name:    "registry",
 				}
 				if err := verifyDigest(ctx, v, verifyKey, src, ref); err != nil {
 					return err

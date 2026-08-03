@@ -116,7 +116,7 @@ func FuzzVerify(f *testing.F) {
 				cfgDesc.Digest: cfg,
 			},
 		}
-		err := Verify(ctx, tgt, "irrelevant", repoRef, subject, verifier)
+		err := Verify(ctx, tgt, "irrelevant", repoRef, ocispec.Descriptor{Digest: subject}, verifier)
 		if err == nil && !bytes.Equal(manifest, good) {
 			t.Fatalf("verification accepted a manifest that was not the signed one: %q", manifest)
 		}

@@ -22,6 +22,7 @@ import (
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
@@ -109,7 +110,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load verifier: %v", err)
 	}
-	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target.Digest, verifier); err != nil {
+	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target, verifier); err != nil {
 		t.Errorf("verify: %v", err)
 	}
 }
@@ -196,6 +197,69 @@ func TestSignedArtifactIsDiscoverableAsReferrer(t *testing.T) {
 	}
 }
 
+// TestVerifyFromReferrerWithoutTag covers the signature shape that has no tag
+// at all: what `cosign sign --registry-referrers-mode=oci-1-1` writes. Before
+// verification could follow a subject edge, such a model was reported unsigned,
+// which is a wrong answer rather than a missing feature.
+//
+// The signature is copied in by descriptor and never tagged, and the absence of
+// the tag is asserted first, so the test cannot pass through the tag path.
+func TestVerifyFromReferrerWithoutTag(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	target := seedArtifact(t, reg, "llm/tiny", "q4")
+	_, privPEM, pubPEM := testKeypair(t)
+
+	repo := testRepo(t, reg, "llm/tiny")
+	ref := registry.Reference{Registry: reg.Host(), Repository: "llm/tiny", Reference: "q4"}
+	repoRef := reg.Host() + "/llm/tiny"
+	signer, err := LoadSigner(privPEM, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigDesc, err := Sign(ctx, repo, repoRef, target, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local, err := oci.NewWithContext(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oras.Copy(ctx, repo, "q4", local, ref.String(), oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the model: %v", err)
+	}
+	if err := oras.CopyGraph(ctx, repo, local, sigDesc, oras.DefaultCopyGraphOptions); err != nil {
+		t.Fatalf("copying the signature graph: %v", err)
+	}
+
+	sigRef := SigRef(ref, target.Digest)
+	if _, err := local.Resolve(ctx, sigRef); !errors.Is(err, errdef.ErrNotFound) {
+		t.Fatalf("signature must not be tagged for this test to mean anything, resolve gave %v", err)
+	}
+
+	verifier, err := LoadVerifier(pubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, local, sigRef, repoRef, target, verifier); err != nil {
+		t.Errorf("verify from a referrer: %v", err)
+	}
+
+	// An untagged signature is held to the same standard as a tagged one.
+	_, _, otherPubPEM := testKeypair(t)
+	otherVerifier, err := LoadVerifier(otherPubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, local, sigRef, repoRef, target, otherVerifier); err == nil {
+		t.Error("wrong key must fail from a referrer too")
+	}
+	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target, verifier); err == nil {
+		t.Error("foreign identity must be rejected from a referrer too")
+	}
+}
+
 func TestVerifyFailsWithWrongKey(t *testing.T) {
 	ctx := context.Background()
 	reg := registrytest.New(t)
@@ -210,7 +274,7 @@ func TestVerifyFailsWithWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(otherPubPEM)
-	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target.Digest, verifier); err == nil {
+	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target, verifier); err == nil {
 		t.Error("wrong key must fail verification")
 	}
 }
@@ -223,7 +287,7 @@ func TestVerifyFailsOnUnsigned(t *testing.T) {
 
 	repo := testRepo(t, reg, "llm/tiny")
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target.Digest, verifier)
+	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target, verifier)
 	if !errors.Is(err, ErrNoSignature) {
 		t.Errorf("expected ErrNoSignature, got %v", err)
 	}
@@ -249,7 +313,7 @@ func TestVerifyRejectsDigestSubstitution(t *testing.T) {
 	reg.CopyManifest("llm/tiny", SigTag(targetA.Digest), SigTag(targetB.Digest))
 
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(targetB.Digest), repoRef, targetB.Digest, verifier)
+	err := Verify(ctx, repo, SigTag(targetB.Digest), repoRef, targetB, verifier)
 	if err == nil || !strings.Contains(err.Error(), "binds") {
 		t.Errorf("substituted signature must fail with a binding error, got %v", err)
 	}
@@ -268,7 +332,7 @@ func TestVerifyRejectsForeignIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target.Digest, verifier)
+	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target, verifier)
 	if err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Errorf("foreign identity must be rejected, got %v", err)
 	}
@@ -359,7 +423,7 @@ func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(ctx, local, sigRef, repoRef, target.Digest, verifier); err != nil {
+	if err := Verify(ctx, local, sigRef, repoRef, target, verifier); err != nil {
 		t.Errorf("verify from the local store: %v", err)
 	}
 
@@ -369,14 +433,14 @@ func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(ctx, local, sigRef, repoRef, target.Digest, otherVerifier); err == nil {
+	if err := Verify(ctx, local, sigRef, repoRef, target, otherVerifier); err == nil {
 		t.Error("wrong key must fail from the local store too")
 	}
-	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target.Digest, verifier); err == nil {
+	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target, verifier); err == nil {
 		t.Error("foreign identity must be rejected from the local store too")
 	}
 	missing := digest.Digest("sha256:" + strings.Repeat("cd", 32))
-	if err := Verify(ctx, local, SigRef(ref, missing), repoRef, missing, verifier); !errors.Is(err, ErrNoSignature) {
+	if err := Verify(ctx, local, SigRef(ref, missing), repoRef, ocispec.Descriptor{Digest: missing}, verifier); !errors.Is(err, ErrNoSignature) {
 		t.Errorf("absent signature must report ErrNoSignature, got %v", err)
 	}
 }

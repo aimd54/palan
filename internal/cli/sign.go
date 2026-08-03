@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
@@ -114,7 +114,7 @@ result describes the copy you hold rather than what the registry serves now.`,
 			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.digest, src.name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.subject.Digest, src.name)
 			return nil
 		},
 	}
@@ -126,8 +126,11 @@ result describes the copy you hold rather than what the registry serves now.`,
 type verifySource struct {
 	target oras.ReadOnlyTarget
 	sigRef string
-	digest digest.Digest
-	name   string
+	// subject is the artifact being verified. The whole descriptor is needed,
+	// not just its digest, because a signature may be attached as a referrer
+	// of it rather than under a tag.
+	subject ocispec.Descriptor
+	name    string
 }
 
 // resolveVerifySource prefers the local store, so verification works with no
@@ -140,22 +143,26 @@ type verifySource struct {
 // copy as authoritative there would report an artifact as unsigned when it is
 // not. Only a genuine miss falls through; a store that fails for any other
 // reason is an error rather than a silent trip to the network.
+//
+// A signature may be tagged or attached as a referrer, and a bundle imported
+// from an OCI 1.1 signing tool carries only the latter, so both count as
+// holding it.
 func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, ref registry.Reference) (verifySource, error) {
 	local, localErr := st.Resolve(ctx, ref.String())
 	switch {
 	case localErr == nil:
 		sigRef := signing.SigRef(ref, local.Digest)
-		_, sigErr := st.Resolve(ctx, sigRef)
+		held, sigErr := storeHoldsSignature(ctx, st, sigRef, local)
 		switch {
-		case sigErr == nil:
-			return verifySource{
-				target: st.OCI(),
-				sigRef: sigRef,
-				digest: local.Digest,
-				name:   "local store",
-			}, nil
-		case !errors.Is(sigErr, errdef.ErrNotFound):
+		case sigErr != nil:
 			return verifySource{}, fmt.Errorf("reading the local store: %w", sigErr)
+		case held:
+			return verifySource{
+				target:  st.OCI(),
+				sigRef:  sigRef,
+				subject: local,
+				name:    "local store",
+			}, nil
 		}
 	case !errors.Is(localErr, errdef.ErrNotFound):
 		return verifySource{}, fmt.Errorf("reading the local store: %w", localErr)
@@ -180,11 +187,30 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 		return verifySource{}, err
 	}
 	return verifySource{
-		target: repo,
-		sigRef: signing.SigTag(desc.Digest),
-		digest: desc.Digest,
-		name:   "registry",
+		target:  repo,
+		sigRef:  signing.SigTag(desc.Digest),
+		subject: desc,
+		name:    "registry",
 	}, nil
+}
+
+// storeHoldsSignature reports whether the store can verify this artifact
+// without a network, either from the signature tag or from a signature
+// attached to the artifact as a referrer.
+func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef string, subject ocispec.Descriptor) (bool, error) {
+	switch _, err := st.Resolve(ctx, sigRef); {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, errdef.ErrNotFound):
+		return false, err
+	}
+	refs, err := registry.Referrers(ctx, st.OCI(), subject, signing.ArtifactTypeSignature)
+	if err != nil {
+		// The store holds the model but cannot answer for its predecessors.
+		// That is not a signature verdict, so fall through to the registry.
+		return false, nil //nolint:nilerr // a store that cannot list referrers simply has none to offer
+	}
+	return len(refs) > 0, nil
 }
 
 // verifyGate returns a check that refuses a model whose signature does not
@@ -232,8 +258,8 @@ func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, src verif
 		return err
 	}
 	repoRef := ref.Registry + "/" + ref.Repository
-	if err := signing.Verify(ctx, src.target, src.sigRef, repoRef, src.digest, verifier); err != nil {
-		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, src.digest, err)
+	if err := signing.Verify(ctx, src.target, src.sigRef, repoRef, src.subject, verifier); err != nil {
+		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
 	}
 	return nil
 }

@@ -188,10 +188,10 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				return err
 			}
 			src := verifySource{
-				target: bundle,
-				sigRef: signing.SigRef(ref, desc.Digest),
-				digest: desc.Digest,
-				name:   "bundle",
+				target:  bundle,
+				sigRef:  signing.SigRef(ref, desc.Digest),
+				subject: desc,
+				name:    "bundle",
 			}
 			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
