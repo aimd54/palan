@@ -196,6 +196,93 @@ func TestRemoveThenGC(t *testing.T) {
 	}
 }
 
+// pushTestReferrer attaches a manifest naming subject, the shape a signature
+// takes, and tags it. It carries no layers of its own: what matters is the
+// subject edge, which makes everything under the subject reachable from this
+// tag.
+func pushTestReferrer(t *testing.T, s *Store, ref string, subject ocispec.Descriptor) ocispec.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+
+	cfg := content.NewDescriptorFromBytes(ocispec.MediaTypeImageConfig, []byte("{}"))
+	if err := s.OCI().Push(ctx, cfg, bytes.NewReader([]byte("{}"))); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+		t.Fatalf("push config: %v", err)
+	}
+	manifest := ocispec.Manifest{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    cfg,
+		Layers:    []ocispec.Descriptor{},
+		Subject:   &subject,
+	}
+	manifest.SchemaVersion = 2
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal referrer: %v", err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, raw)
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+		t.Fatalf("push referrer: %v", err)
+	}
+	if err := s.Tag(ctx, desc, ref); err != nil {
+		t.Fatalf("tag %q: %v", ref, err)
+	}
+	return desc
+}
+
+// TestGCReclaimsModelWhoseReferrerOutlivedIt: a signature names its model as
+// its subject, so the signature's tag keeps the model and all its weights
+// reachable. Removing the model without the signature would otherwise leave
+// every byte on disk while gc reported success.
+//
+// The assertion is on the weight blob's absence from disk. Checking that gc
+// returned nil is exactly what would not have caught this.
+func TestGCReclaimsModelWhoseReferrerOutlivedIt(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	weights := []byte("weights-signed")
+	model := pushTestModel(t, s, "registry.example/llm/tiny:v1", weights)
+	pushTestReferrer(t, s, "registry.example/llm/tiny:sha256-"+model.Digest.Encoded()+".sig", model)
+
+	if err := s.Remove(ctx, "registry.example/llm/tiny:v1"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+
+	weightDesc := content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, weights)
+	if _, err := s.BlobPath(weightDesc.Digest); err == nil {
+		t.Error("weights survived gc: the orphaned referrer is still pinning the model")
+	}
+	if _, err := s.Resolve(ctx, "registry.example/llm/tiny:sha256-"+model.Digest.Encoded()+".sig"); err == nil {
+		t.Error("orphaned referrer still resolves after gc")
+	}
+}
+
+// TestGCKeepsReferrerOfLivingModel is the other half: sweeping orphans must
+// not take a signature whose model is still here, or a signed model would
+// silently lose the thing that proves it is signed.
+func TestGCKeepsReferrerOfLivingModel(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	weights := []byte("weights-kept")
+	model := pushTestModel(t, s, "registry.example/llm/tiny:v1", weights)
+	sigRef := "registry.example/llm/tiny:sha256-" + model.Digest.Encoded() + ".sig"
+	pushTestReferrer(t, s, sigRef, model)
+
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+
+	if _, err := s.Resolve(ctx, sigRef); err != nil {
+		t.Errorf("signature of a model still in the store was reclaimed: %v", err)
+	}
+	weightDesc := content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, weights)
+	if _, err := s.BlobPath(weightDesc.Digest); err != nil {
+		t.Errorf("weights of a kept model were reclaimed: %v", err)
+	}
+}
+
 func TestRemoveMissingRef(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Remove(context.Background(), "registry.example/llm/absent:tag"); err == nil {

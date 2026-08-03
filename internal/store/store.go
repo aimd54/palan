@@ -175,7 +175,15 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 // GC removes all blobs not reachable from a tagged manifest, plus any
 // leftover partial downloads in the ingest directory. GC callers hold the
 // exclusive lock, so no in-flight pull can lose its partials to GC.
+//
+// Orphaned referrers are unlinked first. A referrer names its subject, so it
+// keeps that subject and everything under it reachable; a signature left
+// behind by a removed model would hold the whole model on disk and GC would
+// report success having reclaimed nothing.
 func (s *Store) GC(ctx context.Context) error {
+	if err := s.unlinkOrphanedReferrers(ctx); err != nil {
+		return err
+	}
 	if err := s.oci.GC(ctx); err != nil {
 		return err
 	}
@@ -190,6 +198,58 @@ func (s *Store) GC(ctx context.Context) error {
 	for _, e := range entries {
 		if err := os.Remove(filepath.Join(ingest, e.Name())); err != nil {
 			return fmt.Errorf("removing stale partial %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// unlinkOrphanedReferrers untags every referrer whose subject is no longer a
+// tagged artifact in its own right.
+//
+// A referrer is any tagged manifest carrying a subject, which in this store
+// means a signature. Because the subject is a successor, the referrer's tag
+// keeps the artifact it describes alive, so removing a model without removing
+// its signature leaves the model's weights pinned. Sweeping here rather than
+// in `rm` covers the cases `rm` cannot reach: a signature imported without its
+// model, and a model unlinked by any path that did not know to look for one.
+//
+// A manifest that cannot be read is left alone. GC reclaims storage; it is not
+// the place to act on content it cannot interpret.
+func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
+	entries, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+
+	subjects := make(map[digest.Digest]ocispec.Descriptor, len(entries))
+	artifacts := make(map[digest.Digest]bool, len(entries))
+	for _, e := range entries {
+		manifest, err := FetchManifest(ctx, s.oci, e.Descriptor)
+		if err != nil {
+			continue
+		}
+		if manifest.Subject == nil {
+			artifacts[e.Descriptor.Digest] = true
+			continue
+		}
+		subjects[e.Descriptor.Digest] = *manifest.Subject
+	}
+
+	for _, e := range entries {
+		subject, isReferrer := subjects[e.Descriptor.Digest]
+		if !isReferrer || artifacts[subject.Digest] {
+			continue
+		}
+		if err := s.oci.Untag(ctx, e.Ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.Ref, err)
+		}
+		// Delete rather than leave it for the sweep below. An untagged
+		// referrer whose subject is not in the reachable graph sends
+		// oras-go v2.6.2's own index reload into an endless loop: it
+		// re-reads the same manifest instead of walking to the next
+		// subject, so leaving one behind hangs GC rather than failing it.
+		if err := s.oci.Delete(ctx, e.Descriptor); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing orphaned referrer %q: %w", e.Ref, err)
 		}
 	}
 	return nil
