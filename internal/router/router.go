@@ -32,7 +32,8 @@ import (
 // not Ollama's 11434 to allow coexistence.
 const DefaultAddr = ":11500"
 
-// DefaultIdleTimeout unloads models after this much inactivity (§9.2).
+// DefaultIdleTimeout unloads models after this much inactivity (see
+// docs/architecture.md, "Serving layer": idle unload).
 const DefaultIdleTimeout = 10 * time.Minute
 
 // ErrUnverified marks a model that exists but failed its signature check. A
