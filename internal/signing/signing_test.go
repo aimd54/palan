@@ -197,6 +197,49 @@ func TestSignedArtifactIsDiscoverableAsReferrer(t *testing.T) {
 	}
 }
 
+// TestSignAgainstRegistryWithoutReferrersAPI: naming a subject must not make
+// signing depend on a registry feature. Where there is no referrers API the
+// transfer library maintains the tag-schema index instead, and the signature
+// has to remain both pushable and discoverable.
+func TestSignAgainstRegistryWithoutReferrersAPI(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	target := seedArtifact(t, reg, "llm/tiny", "q4")
+	_, privPEM, pubPEM := testKeypair(t)
+
+	repo := testRepo(t, reg, "llm/tiny")
+	if err := repo.SetReferrersCapability(false); err != nil {
+		t.Fatal(err)
+	}
+	repoRef := reg.Host() + "/llm/tiny"
+	signer, err := LoadSigner(privPEM, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sign(ctx, repo, repoRef, target, signer); err != nil {
+		t.Fatalf("signing against a registry with no referrers API: %v", err)
+	}
+
+	if !reg.HasManifest("llm/tiny", SigTag(target.Digest)) {
+		t.Error("signature tag missing, which is the only form such a registry can serve")
+	}
+	refs, err := registry.Referrers(ctx, repo, target, ArtifactTypeSignature)
+	if err != nil {
+		t.Fatalf("listing referrers through the tag schema: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Errorf("referrers through the tag schema = %d, want 1", len(refs))
+	}
+
+	verifier, err := LoadVerifier(pubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target, verifier); err != nil {
+		t.Errorf("verify: %v", err)
+	}
+}
+
 // TestVerifyFromReferrerWithoutTag covers the signature shape that has no tag
 // at all: what `cosign sign --registry-referrers-mode=oci-1-1` writes. Before
 // verification could follow a subject edge, such a model was reported unsigned,
