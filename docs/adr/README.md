@@ -20,5 +20,6 @@ decisions and the reasoning behind them.
 | [ADR-0007](0007-signature-storage-and-verification.md) | Signatures travel as cosign tags and verify from any source | accepted |
 | [ADR-0008](0008-verification-at-load-time.md) | Enforce the verification policy when a model is loaded | accepted |
 | [ADR-0009](0009-hugging-face-as-a-pack-source.md) | Hugging Face as a pack source, compiled in and verified | accepted |
+| [ADR-0010](0010-referrers-alongside-the-signature-tag.md) | Signatures are indexed as referrers as well as tagged (extends ADR-0007) | accepted |
 
 Use [`template.md`](template.md) for new ADRs.

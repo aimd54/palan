@@ -45,6 +45,10 @@ a Kubernetes cluster, and a GPU host:
 - **Upstream import**: `pack hf://org/repo/file.gguf` fetches from Hugging
   Face, checks the bytes against the digest the repository publishes, and
   records it as the artifact's origin (ADR-0009).
+- **Signature discovery**: a signed model is indexed by the registry's
+  referrers API as well as tagged, and a signature written by an OCI 1.1
+  signing tool, which carries no tag, verifies. Both checked against zot and
+  the cosign binary (ADR-0010).
 
 ## Still outstanding
 
@@ -57,7 +61,6 @@ a Kubernetes cluster, and a GPU host:
 
 ## Planned / open
 
-- Referrers-API storage for signatures alongside the tag fallback.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.
 - `verify.required` as the default once signing pipelines are ubiquitous.

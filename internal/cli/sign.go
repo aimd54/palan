@@ -35,11 +35,14 @@ func newSignCmd(v *viper.Viper) *cobra.Command {
 		Short: "Sign a pushed model with a cosign-compatible key",
 		Long: `Sign resolves REF on its registry and attaches a cosign-compatible
 signature next to it (the sha256-<digest>.sig tag convention), so
-'cosign verify --key' and 'palan verify' both accept it. The signature then
-travels with the model through pull, save, and cp, and verifying it needs no
-transparency log, no certificate authority, and no registry once it is in the
-local store. Encrypted cosign keys are supported; the password comes from
-COSIGN_PASSWORD or an interactive prompt.`,
+'cosign verify --key' and 'palan verify' both accept it. The signature also
+names the model as its subject, so the registry indexes it through the
+referrers API and tools that look there find it too.
+
+The signature then travels with the model through pull, save, and cp, and
+verifying it needs no transparency log, no certificate authority, and no
+registry once it is in the local store. Encrypted cosign keys are supported;
+the password comes from COSIGN_PASSWORD or an interactive prompt.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -89,7 +92,11 @@ func newVerifyCmd(v *viper.Viper) *cobra.Command {
 A model already in the local store is verified from there, so verification
 needs no registry, no transparency log, and no certificate authority. Anything
 else is resolved on its registry. The output names the source, since a local
-result describes the copy you hold rather than what the registry serves now.`,
+result describes the copy you hold rather than what the registry serves now.
+
+The signature is looked for under its tag first, then among the referrers of
+the model, so a signature written by an OCI 1.1 signing tool is checked even
+though it carries no tag.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()

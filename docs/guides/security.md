@@ -42,6 +42,26 @@ A signature is accepted only if it validates against the key, **binds the
 exact manifest digest**, and claims the expected repository identity.
 Copying a valid signature onto a different artifact or repo fails.
 
+## Where a signature lives
+
+A signature is stored under cosign's tag, `sha256-<manifest digest>.sig` in the
+model's own repository, and names the model as its subject so registries index
+it through the referrers API. Both point at the same manifest: the tag is what
+`cosign verify --key` reads, and the subject is what makes a signed model
+visible to tooling that discovers artifacts by referrer.
+
+Verification looks under the tag first and asks for referrers only when nothing
+is tagged, which is how a signature written by an OCI 1.1 signing tool is
+checked:
+
+```bash
+COSIGN_EXPERIMENTAL=1 cosign sign --key cosign.key \
+  --registry-referrers-mode=oci-1-1 registry.internal/llm/qwen3:8b-q4
+palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
+```
+
+A signature found that way is held to the same standard as a tagged one.
+
 That identity is the whole reference, **registry host included**. A model
 mirrored to another registry keeps its signature but not its identity, so it
 does not verify at the new address even with the same repository path and the

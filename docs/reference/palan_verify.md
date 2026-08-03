@@ -11,6 +11,10 @@ needs no registry, no transparency log, and no certificate authority. Anything
 else is resolved on its registry. The output names the source, since a local
 result describes the copy you hold rather than what the registry serves now.
 
+The signature is looked for under its tag first, then among the referrers of
+the model, so a signature written by an OCI 1.1 signing tool is checked even
+though it carries no tag.
+
 ```
 palan verify REF --key FILE [flags]
 ```

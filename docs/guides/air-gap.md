@@ -118,9 +118,11 @@ via HTTP Range requests against the registry.
   packed from; `org.opencontainers.image.source` records where.
 - Cosign signatures travel with the artifact and verify inside the gap.
   Signatures use cosign's tag convention, `sha256-<manifest digest>.sig` in the
-  same repository. `palan pull` brings a model's signature down beside it,
-  `palan save` writes it into the bundle, and `palan cp` copies it to the
-  destination registry, so nothing has to be named or fetched separately.
+  same repository, and name the model as their subject so a registry indexes
+  them through the referrers API as well. `palan pull` brings a model's
+  signature down beside it, `palan save` writes it into the bundle, and
+  `palan cp` copies it to the destination registry, so nothing has to be named
+  or fetched separately.
 - Verification reads whichever source holds the answer. A model whose
   signature is in the local store is verified from there, needing no registry,
   no transparency log, and no certificate authority. `palan verify` names the

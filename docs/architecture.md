@@ -252,6 +252,13 @@ Three consumption patterns, from least- to most-coupled. The
   with the model through `pull`, `save`, and `cp`. Verification reads either a
   registry or the local store, so it needs no transparency log, no certificate
   authority, and no network once the signature is on disk.
+- The signature also names the model as its **subject**, so registries index it
+  through the referrers API and a signed model is visible to tooling that
+  discovers artifacts that way rather than by constructing the tag. The tag
+  remains what `cosign verify --key` reads. Verification tries the tag first and
+  falls back to referrers, which is how a signature written by an OCI 1.1
+  signing tool, carrying no tag at all, is checked
+  ([ADR-0010](adr/0010-referrers-alongside-the-signature-tag.md)).
 - `verify.required` (or `--verify` on a single command) refuses unsigned or
   foreign-signed models at every point one could get in or get used: `pull`
   before any weight bytes move, `load` against the bundle before anything

@@ -7,6 +7,13 @@
 // (sha256-<digest>.sig in the same repository), so `cosign verify --key`
 // accepts palan signatures and vice versa.
 //
+// A signature also names the artifact it signs as its subject, so registries
+// index it through the referrers API and a signed model is visible to tooling
+// that discovers artifacts that way. The tag stays authoritative and is what
+// cosign reads; verification consults referrers only when nothing is tagged,
+// which is how a signature written by an OCI 1.1 signing tool is checked
+// (see docs/adr/0010-referrers-alongside-the-signature-tag.md).
+//
 // Verification needs no external service: no transparency log, no certificate
 // authority, and no registry once the signature sits in the local store.
 // Verify reads from any oras.ReadOnlyTarget, which a remote repository and an

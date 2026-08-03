@@ -15,7 +15,12 @@ func newGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
 		Short: "Reclaim disk space from unreferenced blobs",
-		Args:  cobra.NoArgs,
+		Long: `Gc reclaims blobs no tagged manifest refers to.
+
+A signature left behind by a removed model is unlinked first. A signature
+names its model as its subject, which keeps the model and all its weights
+reachable, so an orphaned one would otherwise hold the whole model on disk.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			st, err := openStore(ctx)
