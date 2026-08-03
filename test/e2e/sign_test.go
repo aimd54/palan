@@ -6,18 +6,26 @@
 package e2e
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/secure-systems-lab/go-securesystemslib/encrypted"
+	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry"
+	"oras.land/oras-go/v2/registry/remote"
+
+	"github.com/aimd54/palan/internal/signing"
 )
 
 // testKeyPassword protects the generated cosign-format key; both palan and
@@ -133,6 +141,104 @@ func TestCosignInterop(t *testing.T) {
 		t.Fatalf("cosign sign failed: %v\n%s", err, out)
 	}
 	palan(t, home, "verify", ref2, "--key", pub)
+}
+
+// resolveRef resolves a reference against the e2e registry.
+func resolveRef(t *testing.T, ref string) (*remote.Repository, ocispec.Descriptor) {
+	t.Helper()
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", ref, err)
+	}
+	repo, err := remote.NewRepository(ref)
+	if err != nil {
+		t.Fatalf("opening %q: %v", ref, err)
+	}
+	repo.PlainHTTP = true
+	desc, err := repo.Resolve(context.Background(), parsed.Reference)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", ref, err)
+	}
+	return repo, desc
+}
+
+// TestSignatureIsIndexedByTheRegistry asks the registry what it has indexed
+// against the model, which is what every referrers-aware tool sees. A tag can
+// only be found by guessing its name, so a signature that exists solely under
+// one is invisible here.
+//
+// The assertion is on the descriptor the registry returns, not on the request
+// succeeding: an empty referrers list is a perfectly successful response.
+func TestSignatureIsIndexedByTheRegistry(t *testing.T) {
+	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
+	host := registryHost(t)
+	fx := writeFixtures(t, 128<<10)
+	priv, _ := writeTestKeys(t)
+
+	ref := host + "/llm/referrers-indexed:v1"
+	home := t.TempDir()
+	palan(t, home, "pack", fx.ggufPath, "-t", ref)
+	palan(t, home, "push", ref)
+	palan(t, home, "sign", ref, "--key", priv)
+
+	repo, desc := resolveRef(t, ref)
+	refs, err := registry.Referrers(context.Background(), repo, desc, signing.ArtifactTypeSignature)
+	if err != nil {
+		t.Fatalf("asking the registry for referrers: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("registry indexed %d signatures for the model, want 1", len(refs))
+	}
+	if refs[0].ArtifactType != signing.ArtifactTypeSignature {
+		t.Errorf("indexed artifact type = %q, want %q", refs[0].ArtifactType, signing.ArtifactTypeSignature)
+	}
+
+	// The tag has to keep working: it is what cosign reads by default, and
+	// the referrer is an addition rather than a replacement.
+	if _, err := repo.Resolve(context.Background(), signing.SigTag(desc.Digest)); err != nil {
+		t.Errorf("signature tag no longer resolves: %v", err)
+	}
+}
+
+// TestVerifyCosignOCI11Signature covers the signature shape palan could not
+// read at all: `cosign sign --registry-referrers-mode=oci-1-1` attaches the
+// signature as a referrer and writes no tag, so resolving the tag found
+// nothing and a signed model was reported unsigned.
+//
+// The absence of the tag is asserted before verifying, so the test cannot pass
+// through the tag path and quietly prove nothing.
+func TestVerifyCosignOCI11Signature(t *testing.T) {
+	cosign, err := exec.LookPath("cosign")
+	if err != nil {
+		t.Skip("cosign not in PATH")
+	}
+	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
+	host := registryHost(t)
+	fx := writeFixtures(t, 132<<10)
+	priv, pub := writeTestKeys(t)
+
+	ref := host + "/llm/oci11-signed:v1"
+	home := t.TempDir()
+	palan(t, home, "pack", fx.ggufPath, "-t", ref)
+	palan(t, home, "push", ref)
+
+	cs := exec.Command(cosign, "sign", "--key", priv,
+		"--registry-referrers-mode=oci-1-1",
+		"--tlog-upload=false", "--allow-insecure-registry", "--yes", ref)
+	// cosign gates the mode behind this variable, which is the measure of how
+	// far the ecosystem has moved: writing referrers is opt-in and reading
+	// them is a separate opt-in again.
+	cs.Env = append(os.Environ(), "HOME="+t.TempDir(), "COSIGN_EXPERIMENTAL=1")
+	if out, err := cs.CombinedOutput(); err != nil {
+		t.Fatalf("cosign sign in oci-1-1 mode failed: %v\n%s", err, out)
+	}
+
+	repo, desc := resolveRef(t, ref)
+	if _, err := repo.Resolve(context.Background(), signing.SigTag(desc.Digest)); !errors.Is(err, errdef.ErrNotFound) {
+		t.Fatalf("a signature tag exists, so this test would prove nothing: resolve gave %v", err)
+	}
+
+	palan(t, home, "verify", ref, "--key", pub)
 }
 
 // TestOfflineVerifyFromBundle is the end-to-end guard for the air-gap case:
