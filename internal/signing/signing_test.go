@@ -20,6 +20,7 @@ import (
 	"github.com/secure-systems-lab/go-securesystemslib/encrypted"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
@@ -56,13 +57,19 @@ func testRepo(t *testing.T, reg *registrytest.Registry, name string) *remote.Rep
 	return repo
 }
 
-// seedArtifact plants a manifest in the registry and returns its digest.
+// seedArtifact plants a manifest in the registry and returns its descriptor.
 // The tag is baked into an annotation so different tags give different
-// digests.
-func seedArtifact(t *testing.T, reg *registrytest.Registry, repo, tag string) digest.Digest {
+// digests. The config blob is real rather than a zero descriptor, because a
+// signature names its subject and anything copying the signature walks into
+// the subject's own successors.
+func seedArtifact(t *testing.T, reg *registrytest.Registry, repo, tag string) ocispec.Descriptor {
 	t.Helper()
+	cfg := []byte("{}")
+	reg.PutBlob(repo, cfg)
 	manifest := ocispec.Manifest{
 		MediaType:   ocispec.MediaTypeImageManifest,
+		Config:      content.NewDescriptorFromBytes(ocispec.MediaTypeImageConfig, cfg),
+		Layers:      []ocispec.Descriptor{},
 		Annotations: map[string]string{"test.seed": tag},
 	}
 	manifest.SchemaVersion = 2
@@ -70,7 +77,12 @@ func seedArtifact(t *testing.T, reg *registrytest.Registry, repo, tag string) di
 	if err != nil {
 		t.Fatal(err)
 	}
-	return reg.PutManifest(repo, tag, ocispec.MediaTypeImageManifest, raw)
+	d := reg.PutManifest(repo, tag, ocispec.MediaTypeImageManifest, raw)
+	return ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    d,
+		Size:      int64(len(raw)),
+	}
 }
 
 func TestSignVerifyRoundTrip(t *testing.T) {
@@ -89,7 +101,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if _, err := Sign(ctx, repo, repoRef, target, signer); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	if !reg.HasManifest("llm/tiny", SigTag(target)) {
+	if !reg.HasManifest("llm/tiny", SigTag(target.Digest)) {
 		t.Fatal("signature manifest not stored under the cosign tag")
 	}
 
@@ -97,8 +109,90 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load verifier: %v", err)
 	}
-	if err := Verify(ctx, repo, SigTag(target), repoRef, target, verifier); err != nil {
+	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target.Digest, verifier); err != nil {
 		t.Errorf("verify: %v", err)
+	}
+}
+
+// TestSignAttachesSubject proves the signature is discoverable as a referrer
+// and not only under its tag. The assertions are on the manifest that was
+// stored: a signature whose subject went missing would still verify by tag, so
+// checking that Sign returned no error proves nothing about this.
+func TestSignAttachesSubject(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	target := seedArtifact(t, reg, "llm/tiny", "q4")
+	_, privPEM, _ := testKeypair(t)
+
+	repo := testRepo(t, reg, "llm/tiny")
+	signer, err := LoadSigner(privPEM, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigDesc, err := Sign(ctx, repo, reg.Host()+"/llm/tiny", target, signer)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if sigDesc.ArtifactType != ArtifactTypeSignature {
+		t.Errorf("returned descriptor artifact type = %q, want %q", sigDesc.ArtifactType, ArtifactTypeSignature)
+	}
+
+	raw, err := content.FetchAll(ctx, repo, sigDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ArtifactType != ArtifactTypeSignature {
+		t.Errorf("manifest artifact type = %q, want %q", manifest.ArtifactType, ArtifactTypeSignature)
+	}
+	if manifest.Subject == nil {
+		t.Fatal("signature manifest carries no subject, so no registry will index it as a referrer")
+	}
+	if manifest.Subject.Digest != target.Digest {
+		t.Errorf("subject digest = %s, want %s", manifest.Subject.Digest, target.Digest)
+	}
+}
+
+// TestSignedArtifactIsDiscoverableAsReferrer walks the subject edge the way a
+// referrers query does. The local layout stands in for any target that answers
+// from the graph rather than from a referrers endpoint, which is the same path
+// an air-gapped bundle takes.
+func TestSignedArtifactIsDiscoverableAsReferrer(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	target := seedArtifact(t, reg, "llm/tiny", "q4")
+	_, privPEM, _ := testKeypair(t)
+
+	repo := testRepo(t, reg, "llm/tiny")
+	ref := registry.Reference{Registry: reg.Host(), Repository: "llm/tiny", Reference: "q4"}
+	signer, err := LoadSigner(privPEM, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sign(ctx, repo, reg.Host()+"/llm/tiny", target, signer); err != nil {
+		t.Fatal(err)
+	}
+
+	local, err := oci.NewWithContext(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oras.Copy(ctx, repo, SigTag(target.Digest), local, SigRef(ref, target.Digest), oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the signature into a local layout: %v", err)
+	}
+
+	refs, err := registry.Referrers(ctx, local, target, ArtifactTypeSignature)
+	if err != nil {
+		t.Fatalf("listing referrers: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("referrers of the model = %d, want 1", len(refs))
+	}
+	if refs[0].ArtifactType != ArtifactTypeSignature {
+		t.Errorf("referrer artifact type = %q, want %q", refs[0].ArtifactType, ArtifactTypeSignature)
 	}
 }
 
@@ -116,7 +210,7 @@ func TestVerifyFailsWithWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(otherPubPEM)
-	if err := Verify(ctx, repo, SigTag(target), repoRef, target, verifier); err == nil {
+	if err := Verify(ctx, repo, SigTag(target.Digest), repoRef, target.Digest, verifier); err == nil {
 		t.Error("wrong key must fail verification")
 	}
 }
@@ -129,7 +223,7 @@ func TestVerifyFailsOnUnsigned(t *testing.T) {
 
 	repo := testRepo(t, reg, "llm/tiny")
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(target), reg.Host()+"/llm/tiny", target, verifier)
+	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target.Digest, verifier)
 	if !errors.Is(err, ErrNoSignature) {
 		t.Errorf("expected ErrNoSignature, got %v", err)
 	}
@@ -152,10 +246,10 @@ func TestVerifyRejectsDigestSubstitution(t *testing.T) {
 	}
 
 	// Republish A's signature manifest under B's signature tag.
-	reg.CopyManifest("llm/tiny", SigTag(targetA), SigTag(targetB))
+	reg.CopyManifest("llm/tiny", SigTag(targetA.Digest), SigTag(targetB.Digest))
 
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(targetB), repoRef, targetB, verifier)
+	err := Verify(ctx, repo, SigTag(targetB.Digest), repoRef, targetB.Digest, verifier)
 	if err == nil || !strings.Contains(err.Error(), "binds") {
 		t.Errorf("substituted signature must fail with a binding error, got %v", err)
 	}
@@ -174,7 +268,7 @@ func TestVerifyRejectsForeignIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := LoadVerifier(pubPEM)
-	err := Verify(ctx, repo, SigTag(target), reg.Host()+"/llm/tiny", target, verifier)
+	err := Verify(ctx, repo, SigTag(target.Digest), reg.Host()+"/llm/tiny", target.Digest, verifier)
 	if err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Errorf("foreign identity must be rejected, got %v", err)
 	}
@@ -253,8 +347,8 @@ func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sigRef := SigRef(ref, target)
-	if _, err := oras.Copy(ctx, repo, SigTag(target), local, sigRef, oras.DefaultCopyOptions); err != nil {
+	sigRef := SigRef(ref, target.Digest)
+	if _, err := oras.Copy(ctx, repo, SigTag(target.Digest), local, sigRef, oras.DefaultCopyOptions); err != nil {
 		t.Fatalf("copying signature into the local layout: %v", err)
 	}
 
@@ -265,7 +359,7 @@ func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(ctx, local, sigRef, repoRef, target, verifier); err != nil {
+	if err := Verify(ctx, local, sigRef, repoRef, target.Digest, verifier); err != nil {
 		t.Errorf("verify from the local store: %v", err)
 	}
 
@@ -275,10 +369,10 @@ func TestVerifyFromLocalStoreWithoutRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(ctx, local, sigRef, repoRef, target, otherVerifier); err == nil {
+	if err := Verify(ctx, local, sigRef, repoRef, target.Digest, otherVerifier); err == nil {
 		t.Error("wrong key must fail from the local store too")
 	}
-	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target, verifier); err == nil {
+	if err := Verify(ctx, local, sigRef, "evil.example/llm/other", target.Digest, verifier); err == nil {
 		t.Error("foreign identity must be rejected from the local store too")
 	}
 	missing := digest.Digest("sha256:" + strings.Repeat("cd", 32))

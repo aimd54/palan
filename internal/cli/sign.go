@@ -67,7 +67,7 @@ COSIGN_PASSWORD or an interactive prompt.`,
 			if err != nil {
 				return fmt.Errorf("resolving %s (sign after push): %w", ref, err)
 			}
-			if _, err := signing.Sign(ctx, repo, ref.Registry+"/"+ref.Repository, desc.Digest, signer); err != nil {
+			if _, err := signing.Sign(ctx, repo, ref.Registry+"/"+ref.Repository, desc, signer); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Signed %s@%s\n", ref, desc.Digest)

@@ -45,6 +45,11 @@ const (
 	MediaTypeSimpleSigning = "application/vnd.dev.cosign.simplesigning.v1+json"
 	// AnnotationSignature carries the base64 signature on the payload layer.
 	AnnotationSignature = "dev.cosignproject.cosign/signature"
+	// ArtifactTypeSignature types the signature manifest for the referrers
+	// API, and is the value cosign uses for the same purpose. Without it the
+	// config media type stands in as the artifact type, which is the generic
+	// OCI config type and tells a caller filtering referrers nothing.
+	ArtifactTypeSignature = "application/vnd.dev.cosign.artifact.sig.v1+json"
 )
 
 // ErrNoSignature marks an unsigned artifact.
@@ -100,10 +105,17 @@ func buildPayload(repoRef string, target digest.Digest) ([]byte, error) {
 	return json.Marshal(p)
 }
 
-// Sign signs the target digest and pushes the signature next to it using
-// the cosign tag convention.
-func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target digest.Digest, signer signature.Signer) (ocispec.Descriptor, error) {
-	pl, err := buildPayload(repoRef, target)
+// Sign signs the target and pushes the signature next to it under the cosign
+// tag convention, with target named as the manifest's subject so the registry
+// also indexes it for the referrers API.
+//
+// The tag is what cosign reads and stays the form every registry supports. The
+// subject is an addition: it costs one field and makes the signature visible to
+// anything that discovers artifacts by referrer rather than by guessing a tag.
+// oras-go maintains the referrers tag-schema index itself against a registry
+// that has no referrers API, so no capability check is needed here.
+func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target ocispec.Descriptor, signer signature.Signer) (ocispec.Descriptor, error) {
+	pl, err := buildPayload(repoRef, target.Digest)
 	if err != nil {
 		return ocispec.Descriptor{}, err
 	}
@@ -128,9 +140,11 @@ func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target d
 	}
 
 	manifest := ocispec.Manifest{
-		MediaType: ocispec.MediaTypeImageManifest,
-		Config:    cfgDesc,
-		Layers:    []ocispec.Descriptor{plDesc},
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: ArtifactTypeSignature,
+		Config:       cfgDesc,
+		Layers:       []ocispec.Descriptor{plDesc},
+		Subject:      &target,
 	}
 	manifest.SchemaVersion = 2
 	raw, err := json.Marshal(manifest)
@@ -138,7 +152,8 @@ func Sign(ctx context.Context, repo *remote.Repository, repoRef string, target d
 		return ocispec.Descriptor{}, err
 	}
 	mDesc := content.NewDescriptorFromBytes(manifest.MediaType, raw)
-	if err = repo.Manifests().PushReference(ctx, mDesc, bytes.NewReader(raw), SigTag(target)); err != nil {
+	mDesc.ArtifactType = manifest.ArtifactType
+	if err = repo.Manifests().PushReference(ctx, mDesc, bytes.NewReader(raw), SigTag(target.Digest)); err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("pushing signature manifest: %w", err)
 	}
 	return mDesc, nil
