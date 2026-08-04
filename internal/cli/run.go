@@ -9,16 +9,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 
 	"github.com/aimd54/palan/internal/refname"
 	palanruntime "github.com/aimd54/palan/internal/runtime"
 	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/internal/ui"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
 
@@ -118,7 +122,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 					return fmt.Errorf("llama-server exited: %w", srv.ExitErr())
 				}
 			default:
-				return chatREPL(ctx, cmd, srv.BaseURL(), ref.String())
+				return chat(ctx, cmd, srv.BaseURL(), ref.String())
 			}
 		},
 	}
@@ -199,9 +203,38 @@ func loadModelInfo(ctx context.Context, st *store.Store, ref string, desc ocispe
 	return info, nil
 }
 
-// chatREPL is the interactive loop: newline-terminated prompts on stdin,
+// chat opens the interactive session, choosing the interface the destination
+// can actually support.
+//
+// The full interface needs a terminal on both ends: it reads keys and repaints
+// a live region. Anything else, a pipe, a here-doc, a CI job, gets the plain
+// loop, which reads lines and writes the reply as it arrives. Both hold the
+// same conversation; only the presentation differs.
+func chat(ctx context.Context, cmd *cobra.Command, baseURL, model string) error {
+	in, inOK := cmd.InOrStdin().(*os.File)
+	out, outOK := cmd.OutOrStdout().(*os.File)
+	interactive := inOK && outOK &&
+		term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
+	if !interactive {
+		return chatPlain(ctx, cmd, baseURL, model)
+	}
+
+	width, _, err := term.GetSize(int(out.Fd()))
+	if err != nil || width <= 0 {
+		width = 80
+	}
+	m, err := newChatModel(ctx, baseURL, model, ui.New(out), width)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Chatting with %s. Ctrl-D or /bye to exit.\n", model)
+	_, err = tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
+	return err
+}
+
+// chatPlain is the interactive loop: newline-terminated prompts on stdin,
 // streamed answers on stdout, conversation history preserved.
-func chatREPL(ctx context.Context, cmd *cobra.Command, baseURL, model string) error {
+func chatPlain(ctx context.Context, cmd *cobra.Command, baseURL, model string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Chatting with %s. Ctrl-D or /bye to exit.\n", model)
 	reader := bufio.NewReader(cmd.InOrStdin())
