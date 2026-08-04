@@ -35,6 +35,10 @@ func SetNoColor(v bool) { noColor = v }
 // NO_COLOR convention (any non-empty value), and a terminal that has told us
 // it cannot render anything (TERM=dumb), plus the obvious case of w not being
 // a terminal at all, which covers pipes, files, and CI.
+//
+// Note this is stricter than NO_COLOR asks for. That convention covers colour,
+// and a library honouring it may still emit bold or reset sequences; when this
+// returns false palan's own output carries no escape sequences at all.
 func Enabled(w io.Writer) bool {
 	if noColor || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false

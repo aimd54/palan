@@ -29,6 +29,7 @@ against any OCI 1.1 registry. Daemonless, in one binary.
       --config string              config file (default ~/.config/palan/config.yaml)
   -h, --help                       help for palan
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
+      --no-color                   disable colour output (NO_COLOR is honoured too)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
       --registry string            default registry host applied to short references

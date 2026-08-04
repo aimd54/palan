@@ -36,6 +36,7 @@ palan describe REF [flags]
       --concurrency int            parallel blob streams for transfers (default 4)
       --config string              config file (default ~/.config/palan/config.yaml)
       --insecure-skip-tls-verify   skip TLS certificate verification (dangerous; lab bring-up only)
+      --no-color                   disable colour output (NO_COLOR is honoured too)
       --plain-http                 use HTTP instead of HTTPS for registries
       --quiet                      suppress progress output
       --registry string            default registry host applied to short references

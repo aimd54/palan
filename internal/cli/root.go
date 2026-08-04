@@ -7,12 +7,16 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 
 	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/internal/transfer"
@@ -66,7 +70,7 @@ func New() *cobra.Command {
 	pf.Bool("insecure-skip-tls-verify", false, "skip TLS certificate verification (dangerous; lab bring-up only)")
 	pf.Int("concurrency", transfer.DefaultConcurrency, "parallel blob streams for transfers")
 	pf.Bool("quiet", false, "suppress progress output")
-	pf.Bool("no-color", false, "disable styled output (NO_COLOR is honoured too)")
+	pf.Bool("no-color", false, "disable colour output (NO_COLOR is honoured too)")
 
 	must(v.BindPFlag(keyRegistryDefault, pf.Lookup("registry")))
 	must(v.BindPFlag(keyRegistryPlainHTTP, pf.Lookup("plain-http")))
@@ -99,12 +103,41 @@ func New() *cobra.Command {
 
 // Execute runs the CLI and returns a process exit code.
 func Execute(ctx context.Context) int {
+	// Help and error rendering happen outside any command's PersistentPreRunE,
+	// so --no-color has to be seen before cobra parses anything. NO_COLOR is
+	// the one signal both this package and the help renderer already read.
+	for _, a := range os.Args[1:] {
+		if a == "--no-color" {
+			must(os.Setenv("NO_COLOR", "1"))
+			break
+		}
+		if a == "--" {
+			break
+		}
+	}
+
 	root := New()
-	if err := root.ExecuteContext(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "palan: %v\n", err)
+	err := fang.Execute(ctx, root,
+		fang.WithVersion(version.Version()),
+		fang.WithErrorHandler(errorHandler),
+		fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM),
+	)
+	if err != nil {
 		return 1
 	}
 	return 0
+}
+
+// errorHandler keeps failures readable at a terminal without changing what a
+// script reads. Plain stderr keeps the "palan: " prefix it has always had,
+// because that is output something may already be matching on; a terminal
+// gets the styled form.
+func errorHandler(w io.Writer, styles fang.Styles, err error) {
+	if f, ok := w.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fang.DefaultErrorHandler(w, styles, err)
+		return
+	}
+	fmt.Fprintf(w, "palan: %v\n", err)
 }
 
 func must(err error) {
