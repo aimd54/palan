@@ -9,15 +9,19 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"text/tabwriter"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/transfer"
+	"github.com/aimd54/palan/internal/ui"
 )
 
 func newLsCmd(v *viper.Viper) *cobra.Command {
@@ -131,23 +135,70 @@ func listRemote(ctx context.Context, v *viper.Viper, host string) ([]modelRow, e
 	return rows, nil
 }
 
+// lsColumns is the listing's shape, shared by both renderers so the styled
+// and plain forms cannot drift into showing different things.
+var lsColumns = []string{"REF", "KIND", "FAMILY", "PARAMS", "QUANT", "FORMAT", "SIZE", "DIGEST"}
+
+func lsCells(r modelRow) []string {
+	digest := r.Digest
+	if len(digest) > 19 { // "sha256:" + 12 hex
+		digest = digest[:19]
+	}
+	return []string{
+		r.Ref, r.Kind, orDash(r.Family), orDash(r.Params),
+		orDash(r.Quant), orDash(r.Format), humanBytes(r.Size), digest,
+	}
+}
+
+// renderRows writes the listing.
+//
+// Two renderers, deliberately. tabwriter measures a column in bytes, so an
+// escape sequence anywhere but the last column silently destroys alignment,
+// and a table library that measures displayed width is the only way to colour
+// the middle of a row. Plain output keeps the tabwriter it has always used
+// rather than being re-flowed by a different layout engine, because that
+// output is what pipelines parse (see render_test.go).
 func renderRows(w io.Writer, rows []modelRow, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
+	if s := ui.New(w); ui.Enabled(w) {
+		return renderRowsStyled(w, rows, s)
+	}
+
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "REF\tKIND\tFAMILY\tPARAMS\tQUANT\tFORMAT\tSIZE\tDIGEST")
+	fmt.Fprintln(tw, strings.Join(lsColumns, "\t"))
 	for _, r := range rows {
-		digest := r.Digest
-		if len(digest) > 19 { // "sha256:" + 12 hex
-			digest = digest[:19]
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.Ref, r.Kind, orDash(r.Family), orDash(r.Params), orDash(r.Quant), orDash(r.Format), humanBytes(r.Size), digest)
+		fmt.Fprintln(tw, strings.Join(lsCells(r), "\t"))
 	}
 	return tw.Flush()
+}
+
+func renderRowsStyled(w io.Writer, rows []modelRow, s ui.Styles) error {
+	t := table.New().
+		Border(lipgloss.HiddenBorder()).
+		BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
+		BorderHeader(false).BorderColumn(false).BorderRow(false).
+		Headers(lsColumns...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			switch {
+			case row == table.HeaderRow:
+				return s.Header.PaddingRight(2)
+			case col == 0:
+				return s.Accent.PaddingRight(2)
+			case col == len(lsColumns)-1:
+				return s.Dim.PaddingRight(2)
+			default:
+				return lipgloss.NewStyle().PaddingRight(2)
+			}
+		})
+	for _, r := range rows {
+		t.Row(lsCells(r)...)
+	}
+	_, err := fmt.Fprintln(w, t.Render())
+	return err
 }
 
 func orDash(s string) string {

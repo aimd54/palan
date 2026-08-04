@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/store"
+	"github.com/aimd54/palan/internal/ui"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
 
@@ -168,33 +171,54 @@ the local store first, then on its registry.`,
 	return cmd
 }
 
+// detailFields is the key/value block, built once so the styled and plain
+// renderers show the same fields in the same order.
+func detailFields(d modelDetail) [][2]string {
+	fields := [][2]string{
+		{"Ref", d.Ref},
+		{"Kind", d.Kind},
+		{"Family", orDash(d.Family)},
+		{"Params", orDash(d.Params)},
+		{"Quant", orDash(d.Quant)},
+		{"Format", orDash(d.Format)},
+		{"Size", humanBytes(d.Size)},
+		{"Digest", d.Digest},
+	}
+	if d.ArtifactType != "" {
+		fields = append(fields, [2]string{"Type", d.ArtifactType})
+	}
+	return append(fields, [2]string{"Source", d.Source})
+}
+
+func sortedAnnotationKeys(d modelDetail) []string {
+	keys := make([]string, 0, len(d.Annotations))
+	for k := range d.Annotations {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// renderDetail writes a model's detail.
+//
+// Plain output keeps its tabwriter for the reason given on renderRows: it is
+// what pipelines read, and a different layout engine would re-flow it.
 func renderDetail(w io.Writer, d modelDetail, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(d)
 	}
-	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "Ref:\t%s\n", d.Ref)
-	fmt.Fprintf(tw, "Kind:\t%s\n", d.Kind)
-	fmt.Fprintf(tw, "Family:\t%s\n", orDash(d.Family))
-	fmt.Fprintf(tw, "Params:\t%s\n", orDash(d.Params))
-	fmt.Fprintf(tw, "Quant:\t%s\n", orDash(d.Quant))
-	fmt.Fprintf(tw, "Format:\t%s\n", orDash(d.Format))
-	fmt.Fprintf(tw, "Size:\t%s\n", humanBytes(d.Size))
-	fmt.Fprintf(tw, "Digest:\t%s\n", d.Digest)
-	if d.ArtifactType != "" {
-		fmt.Fprintf(tw, "Type:\t%s\n", d.ArtifactType)
+	if s := ui.New(w); ui.Enabled(w) {
+		return renderDetailStyled(w, d, s)
 	}
-	fmt.Fprintf(tw, "Source:\t%s\n", d.Source)
+	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+	for _, f := range detailFields(d) {
+		fmt.Fprintf(tw, "%s:\t%s\n", f[0], f[1])
+	}
 	if len(d.Annotations) > 0 {
 		fmt.Fprintln(tw, "Annotations:")
-		keys := make([]string, 0, len(d.Annotations))
-		for k := range d.Annotations {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		for _, k := range sortedAnnotationKeys(d) {
 			fmt.Fprintf(tw, "  %s:\t%s\n", k, d.Annotations[k])
 		}
 	}
@@ -204,6 +228,50 @@ func renderDetail(w io.Writer, d modelDetail, asJSON bool) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", shortArtifactType(l.MediaType), humanBytes(l.Size), l.Digest)
 	}
 	return tw.Flush()
+}
+
+func renderDetailStyled(w io.Writer, d modelDetail, s ui.Styles) error {
+	// The key column is padded here rather than by a tabwriter, because the
+	// styled keys carry escape sequences that a byte-counting writer would
+	// mistake for width.
+	width := 0
+	for _, f := range detailFields(d) {
+		if n := len(f[0]) + 1; n > width {
+			width = n
+		}
+	}
+	for _, f := range detailFields(d) {
+		label := s.Key.Render(f[0] + ":")
+		fmt.Fprintf(w, "%s%s%s\n", label, strings.Repeat(" ", width+1-len(f[0])), f[1])
+	}
+	if len(d.Annotations) > 0 {
+		fmt.Fprintln(w, s.Key.Render("Annotations:"))
+		for _, k := range sortedAnnotationKeys(d) {
+			fmt.Fprintf(w, "  %s %s\n", s.Dim.Render(k+":"), d.Annotations[k])
+		}
+	}
+
+	fmt.Fprintln(w)
+	t := table.New().
+		Border(lipgloss.HiddenBorder()).
+		BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
+		BorderHeader(false).BorderColumn(false).BorderRow(false).
+		Headers("LAYER", "SIZE", "DIGEST").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			switch {
+			case row == table.HeaderRow:
+				return s.Header.PaddingRight(2)
+			case col == 2:
+				return s.Dim.PaddingRight(2)
+			default:
+				return lipgloss.NewStyle().PaddingRight(2)
+			}
+		})
+	for _, l := range d.Layers {
+		t.Row(shortArtifactType(l.MediaType), humanBytes(l.Size), l.Digest)
+	}
+	_, err := fmt.Fprintln(w, t.Render())
+	return err
 }
 
 // shortArtifactType compacts a vnd media type for display.

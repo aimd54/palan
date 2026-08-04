@@ -8,7 +8,12 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
+
+	"github.com/aimd54/palan/internal/ui"
 )
 
 // update rewrites the golden files instead of comparing against them.
@@ -63,6 +68,69 @@ func describeFixture() modelDetail {
 			{MediaType: "application/vnd.cncf.model.doc.v1.raw", Size: 11_357, Digest: "sha256:6666666666666666666666666666666666666666666666666666666666666666"},
 		},
 	}
+}
+
+// TestStyledRenderersKeepEveryValue guards the second renderer. The golden
+// tests above only ever exercise the plain path, so a styled path that lost a
+// column, or dropped a field, would satisfy all of them.
+//
+// The assertion is on content rather than on exact bytes: colour codes are the
+// styling library's business and would make this brittle, but a value that
+// stopped being shown is a defect either way.
+func TestStyledRenderersKeepEveryValue(t *testing.T) {
+	styles := ui.Styles{
+		Header:  lipgloss.NewStyle().Bold(true),
+		Key:     lipgloss.NewStyle().Bold(true),
+		Dim:     lipgloss.NewStyle().Foreground(lipgloss.BrightBlack),
+		Accent:  lipgloss.NewStyle().Foreground(lipgloss.Cyan),
+		Success: lipgloss.NewStyle().Foreground(lipgloss.Green),
+		Warn:    lipgloss.NewStyle().Foreground(lipgloss.Yellow),
+		Error:   lipgloss.NewStyle().Foreground(lipgloss.Red),
+	}
+
+	t.Run("ls", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := renderRowsStyled(&buf, lsFixture(), styles); err != nil {
+			t.Fatal(err)
+		}
+		got := buf.String()
+		for _, want := range lsColumns {
+			if !strings.Contains(got, want) {
+				t.Errorf("styled listing lost the %q column", want)
+			}
+		}
+		for _, r := range lsFixture() {
+			for _, cell := range lsCells(r) {
+				if !strings.Contains(got, cell) {
+					t.Errorf("styled listing lost the value %q", cell)
+				}
+			}
+		}
+	})
+
+	t.Run("describe", func(t *testing.T) {
+		var buf bytes.Buffer
+		d := describeFixture()
+		if err := renderDetailStyled(&buf, d, styles); err != nil {
+			t.Fatal(err)
+		}
+		got := buf.String()
+		for _, f := range detailFields(d) {
+			if !strings.Contains(got, f[0]) || !strings.Contains(got, f[1]) {
+				t.Errorf("styled detail lost the field %q = %q", f[0], f[1])
+			}
+		}
+		for k, v := range d.Annotations {
+			if !strings.Contains(got, k) || !strings.Contains(got, v) {
+				t.Errorf("styled detail lost the annotation %q", k)
+			}
+		}
+		for _, l := range d.Layers {
+			if !strings.Contains(got, l.Digest) {
+				t.Errorf("styled detail lost the layer %q", l.Digest)
+			}
+		}
+	})
 }
 
 // TestRenderGolden pins the bytes written when the destination is not a
