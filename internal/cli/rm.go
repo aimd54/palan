@@ -21,9 +21,20 @@ func newRmCmd(v *viper.Viper) *cobra.Command {
   palan rm llm/qwen3:8b-q4
   palan gc`,
 		Long: "rm removes references; blob content stays on disk until `palan gc` reclaims it.",
-		Args: cobra.MinimumNArgs(1),
+		// At a terminal, no reference opens the store to choose from; anywhere
+		// else it stays an error, so a script cannot hang waiting for input.
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// Picked before the store is locked for writing: the picker reads
+			// the store itself, and would deadlock against an exclusive lock.
+			if len(args) == 0 {
+				chosen, err := refOrPick(ctx, cmd, args, "Remove which model?")
+				if err != nil {
+					return err
+				}
+				args = []string{chosen}
+			}
 			st, err := openStore(ctx)
 			if err != nil {
 				return err

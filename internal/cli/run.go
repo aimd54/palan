@@ -52,10 +52,17 @@ func newRunCmd(v *viper.Viper) *cobra.Command {
 llama-server on the raw weight blob straight from the store (no copy), and
 opens an interactive chat. With --prompt it answers once and exits; with
 --web it serves llama-server's UI until interrupted.`,
-		Args: cobra.ExactArgs(1),
+		// At a terminal, a missing reference opens the store to choose from.
+		// Without one it stays an error, so a script that omits the argument
+		// fails instead of waiting for a keystroke that will never come.
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
+			target, err := refOrPick(ctx, cmd, args, "Run which model?")
+			if err != nil {
+				return err
+			}
+			ref, err := refname.Parse(target, v.GetString(keyRegistryDefault))
 			if err != nil {
 				return err
 			}
