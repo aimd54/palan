@@ -53,10 +53,20 @@ palan rm llm/mymodel:q4 && palan gc     # simulate a second machine
 palan pull llm/mymodel:q4
 palan run llm/mymodel:q4               # interactive chat; /bye to quit
 palan run llm/mymodel:q4 -p "One-line haiku about registries"
+palan run                              # choose from the store
 ```
 
 `run` spawns `llama-server` directly on the store's blob; the model is
 never copied or unpacked.
+
+At a terminal, replies are rendered as markdown once they finish arriving, so
+headings, lists and code blocks read as such. Naming no model opens a
+filterable list of what is in the store; `rm` does the same.
+
+Everything above works the same when the output is a pipe or a file, only
+without the formatting: no colour, no list, and a missing model reference stays
+an error rather than a prompt. Colour also goes away under `NO_COLOR` or
+`--no-color`, and `GLAMOUR_STYLE=light` suits a light terminal.
 
 ## 4. Serve several models
 

@@ -86,6 +86,13 @@ curl localhost:11500/v1/chat/completions -d '{
 
 Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
 
+At a terminal `palan run` renders replies as markdown and keeps the
+conversation in scrollback, and naming no model opens a filterable list of
+what is in the store. Piped or redirected, every command produces the same
+plain text it always has, `--json` included, because that is what scripts
+parse; `NO_COLOR` and `--no-color` turn colour off at a terminal too
+([ADR-0011](docs/adr/0011-terminal-output-is-decoration.md)).
+
 ## Documentation
 
 | Document | What it covers |
