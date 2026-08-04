@@ -1,0 +1,25 @@
+[
+  {
+    "ref": "registry.internal/llm/qwen3:8b-q4",
+    "kind": "model",
+    "family": "qwen3",
+    "params": "8B",
+    "quantization": "Q4_K_M",
+    "format": "gguf",
+    "size": 4920000000,
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  {
+    "ref": "llm/tiny:v1",
+    "kind": "model",
+    "format": "gguf",
+    "size": 1048576,
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  {
+    "ref": "registry.internal/runtimes/llama-server:b4567-cuda12",
+    "kind": "runtime",
+    "size": 87000000,
+    "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  }
+]

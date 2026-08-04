@@ -1,0 +1,28 @@
+{
+  "ref": "registry.internal/llm/qwen3:8b-q4",
+  "kind": "model",
+  "family": "qwen3",
+  "params": "8B",
+  "quantization": "Q4_K_M",
+  "format": "gguf",
+  "size": 4920000000,
+  "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "artifactType": "application/vnd.cncf.model.manifest.v1+json",
+  "annotations": {
+    "io.palan.origin.sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "org.opencontainers.image.source": "https://example.invalid/models"
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.cncf.model.weight.v1.raw",
+      "size": 4900000000,
+      "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "mediaType": "application/vnd.cncf.model.doc.v1.raw",
+      "size": 11357,
+      "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  ],
+  "source": ""
+}

@@ -1,0 +1,4 @@
+REF                                                   KIND     FAMILY  PARAMS  QUANT   FORMAT  SIZE      DIGEST
+registry.internal/llm/qwen3:8b-q4                     model    qwen3   8B      Q4_K_M  gguf    4.6 GiB   sha256:111111111111
+llm/tiny:v1                                           model    -       -       -       gguf    1.0 MiB   sha256:222222222222
+registry.internal/runtimes/llama-server:b4567-cuda12  runtime  -       -       -       -       83.0 MiB  sha256:333333333333
