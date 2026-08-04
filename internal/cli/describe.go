@@ -98,6 +98,11 @@ func newDescribeCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "describe REF",
 		Short: "Show a model's metadata, annotations, and layer digests",
+		Example: `  # Inspect a model without downloading its weights
+  palan describe registry.internal/llm/qwen3:8b-q4
+
+  # Machine-readable form
+  palan describe llm/qwen3:8b-q4 --json`,
 		Long: `Describe answers metadata questions without touching weights: it reads
 only the manifest and the small ModelPack config blob. REF is resolved in
 the local store first, then on its registry.`,

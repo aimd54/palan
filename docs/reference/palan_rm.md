@@ -10,6 +10,14 @@ rm removes references; blob content stays on disk until `palan gc` reclaims it.
 palan rm REF... [flags]
 ```
 
+### Examples
+
+```
+  # Unlink a model, then reclaim its blobs
+  palan rm llm/qwen3:8b-q4
+  palan gc
+```
+
 ### Options
 
 ```

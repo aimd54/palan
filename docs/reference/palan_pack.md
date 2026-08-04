@@ -29,6 +29,16 @@ modelcars; tagged REF-car), or "both".
 palan pack PATH... -t REF [flags]
 ```
 
+### Examples
+
+```
+  # Pack a local GGUF with its licence and serving defaults
+  palan pack qwen3-8b-q4.gguf LICENSE -t llm/qwen3:8b-q4 --ctx 8192 --ngl 99
+
+  # Pack straight from Hugging Face, then push
+  palan pack hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf -t llm/qwen3:8b-q4 --push
+```
+
 ### Options
 
 ```

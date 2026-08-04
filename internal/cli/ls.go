@@ -27,7 +27,12 @@ func newLsCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List models in the local store or a remote registry",
-		Args:  cobra.NoArgs,
+		Example: `  # Models held locally
+  palan ls
+
+  # Models on a registry, as JSON
+  palan ls --remote registry.internal --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			var rows []modelRow

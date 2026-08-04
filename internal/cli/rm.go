@@ -17,8 +17,11 @@ func newRmCmd(v *viper.Viper) *cobra.Command {
 	return &cobra.Command{
 		Use:   "rm REF...",
 		Short: "Unlink model references from the local store",
-		Long:  "rm removes references; blob content stays on disk until `palan gc` reclaims it.",
-		Args:  cobra.MinimumNArgs(1),
+		Example: `  # Unlink a model, then reclaim its blobs
+  palan rm llm/qwen3:8b-q4
+  palan gc`,
+		Long: "rm removes references; blob content stays on disk until `palan gc` reclaims it.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			st, err := openStore(ctx)

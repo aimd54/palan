@@ -33,6 +33,9 @@ func newSignCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sign REF --key FILE",
 		Short: "Sign a pushed model with a cosign-compatible key",
+		Example: `  # Sign after pushing; the signature lands beside the model
+  palan push registry.internal/llm/qwen3:8b-q4
+  palan sign registry.internal/llm/qwen3:8b-q4 --key cosign.key`,
 		Long: `Sign resolves REF on its registry and attaches a cosign-compatible
 signature next to it (the sha256-<digest>.sig tag convention), so
 'cosign verify --key' and 'palan verify' both accept it. The signature also
@@ -87,6 +90,8 @@ func newVerifyCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify REF --key FILE",
 		Short: "Verify a model's signature against a public key",
+		Example: `  # Verify against a registry, or from the local store when it holds the signature
+  palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub`,
 		Long: `Verify checks a model's signature against a public key.
 
 A model already in the local store is verified from there, so verification

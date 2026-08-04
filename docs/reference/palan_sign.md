@@ -19,6 +19,14 @@ the password comes from COSIGN_PASSWORD or an interactive prompt.
 palan sign REF --key FILE [flags]
 ```
 
+### Examples
+
+```
+  # Sign after pushing; the signature lands beside the model
+  palan push registry.internal/llm/qwen3:8b-q4
+  palan sign registry.internal/llm/qwen3:8b-q4 --key cosign.key
+```
+
 ### Options
 
 ```

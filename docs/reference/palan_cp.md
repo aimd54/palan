@@ -12,6 +12,13 @@ registry into an offline one.
 palan cp SRC DST [flags]
 ```
 
+### Examples
+
+```
+  # Mirror a model and its signature without unpacking it locally
+  palan cp registry.internal/llm/qwen3:8b-q4 mirror.internal/llm/qwen3:8b-q4
+```
+
 ### Options
 
 ```

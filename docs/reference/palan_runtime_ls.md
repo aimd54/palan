@@ -6,6 +6,13 @@ List runtime artifacts in the local store
 palan runtime ls [flags]
 ```
 
+### Examples
+
+```
+  # Runtimes held locally, with their build identifiers
+  palan runtime ls
+```
+
 ### Options
 
 ```

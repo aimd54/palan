@@ -6,6 +6,16 @@ List models in the local store or a remote registry
 palan ls [flags]
 ```
 
+### Examples
+
+```
+  # Models held locally
+  palan ls
+
+  # Models on a registry, as JSON
+  palan ls --remote registry.internal --json
+```
+
 ### Options
 
 ```

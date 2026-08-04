@@ -6,6 +6,13 @@ Print version information
 palan version [flags]
 ```
 
+### Examples
+
+```
+  # Version, commit and build details
+  palan version
+```
+
 ### Options
 
 ```

@@ -15,6 +15,8 @@ func newGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
 		Short: "Reclaim disk space from unreferenced blobs",
+		Example: `  # Reclaim what nothing refers to any more
+  palan gc`,
 		Long: `Gc reclaims blobs no tagged manifest refers to.
 
 A signature left behind by a removed model is unlinked first. A signature

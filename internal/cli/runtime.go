@@ -20,6 +20,9 @@ func newRuntimeCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runtime",
 		Short: "Manage inference runtimes distributed as OCI artifacts",
+		Example: `  # Runtimes travel the same way models do
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12
+  palan runtime ls`,
 		Long: `Runtimes are version-pinned llama-server builds distributed through the
 same registries as the models (conventionally under runtimes/), so air-gapped
 hosts receive inference engines through the already-established channel.`,
@@ -32,7 +35,9 @@ func newRuntimePullCmd(v *viper.Viper) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull REF",
 		Short: "Pull a runtime artifact and materialize its executable",
-		Args:  cobra.ExactArgs(1),
+		Example: `  # Fetch a llama-server build and unpack it ready to run
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
@@ -74,7 +79,9 @@ func newRuntimeLsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "List runtime artifacts in the local store",
-		Args:  cobra.NoArgs,
+		Example: `  # Runtimes held locally, with their build identifiers
+  palan runtime ls`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			st, err := openStore(ctx)
@@ -123,6 +130,8 @@ func newRuntimePackCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pack PATH... -t REF --build BUILD",
 		Short: "Pack a llama-server build as a runtime artifact",
+		Example: `  # Pack a build with the shared libraries it loads at run time
+  palan runtime pack llama-server lib*.so -t runtimes/llama-server:b4567-cuda12 --build b4567`,
 		Long: `Pack stores runtime files (the llama-server binary plus any shared
 libraries) as an OCI artifact. The publisher-side counterpart of
 'runtime pull'.

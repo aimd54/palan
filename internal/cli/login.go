@@ -24,6 +24,11 @@ func newLoginCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login REGISTRY",
 		Short: "Log in to a registry",
+		Example: `  # Prompt for the password
+  palan login registry.internal -u alice
+
+  # Read it from a pipe, so it never reaches the shell history
+  printf '%s' "$TOKEN" | palan login registry.internal -u alice --password-stdin`,
 		Long: `Login validates credentials against the registry and saves them in the
 Docker credentials store (a configured credential helper, or
 ~/.docker/config.json otherwise).`,
@@ -83,7 +88,9 @@ func newLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout REGISTRY",
 		Short: "Remove stored credentials for a registry",
-		Args:  cobra.ExactArgs(1),
+		Example: `  # Forget the credentials held for a registry
+  palan logout registry.internal`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := transfer.Logout(cmd.Context(), args[0]); err != nil {
 				return err

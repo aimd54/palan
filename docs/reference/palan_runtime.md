@@ -8,6 +8,14 @@ Runtimes are version-pinned llama-server builds distributed through the
 same registries as the models (conventionally under runtimes/), so air-gapped
 hosts receive inference engines through the already-established channel.
 
+### Examples
+
+```
+  # Runtimes travel the same way models do
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12
+  palan runtime ls
+```
+
 ### Options
 
 ```

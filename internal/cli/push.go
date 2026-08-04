@@ -16,6 +16,8 @@ func newPushCmd(v *viper.Viper) *cobra.Command {
 	return &cobra.Command{
 		Use:   "push REF",
 		Short: "Push a locally-stored model to its registry",
+		Example: `  # Push a model already tagged for its destination
+  palan push registry.internal/llm/qwen3:8b-q4`,
 		Long: `Push uploads the model tagged REF in the local store to its registry.
 Blobs the registry already has are skipped, and where supported, blobs known
 from sibling repositories are mounted server-side instead of re-uploaded.`,

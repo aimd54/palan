@@ -13,6 +13,16 @@ opens an interactive chat. With --prompt it answers once and exits; with
 palan run REF [flags]
 ```
 
+### Examples
+
+```
+  # Interactive chat; /bye or Ctrl-D to leave
+  palan run llm/qwen3:8b-q4
+
+  # Answer one prompt and exit, for scripts
+  palan run llm/qwen3:8b-q4 -p "One-line haiku about registries"
+```
+
 ### Options
 
 ```

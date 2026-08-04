@@ -19,6 +19,13 @@ though it carries no tag.
 palan verify REF --key FILE [flags]
 ```
 
+### Examples
+
+```
+  # Verify against a registry, or from the local store when it holds the signature
+  palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
+```
+
 ### Options
 
 ```

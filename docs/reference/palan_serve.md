@@ -19,6 +19,16 @@ to no offload will serve from CPU on a GPU host.
 palan serve [REF...] [flags]
 ```
 
+### Examples
+
+```
+  # Serve every model in the store, loading each on first request
+  palan serve
+
+  # Keep one model resident and cap what may be loaded at once
+  palan serve --keep-loaded llm/qwen3:8b-q4 --memory-budget 9GiB
+```
+
 ### Options
 
 ```

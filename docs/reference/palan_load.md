@@ -15,6 +15,16 @@ deciding. Verification reads the bundle itself and needs no registry.
 palan load -i FILE [flags]
 ```
 
+### Examples
+
+```
+  # Import on a host with no registry in reach
+  palan load -i qwen3.tar
+
+  # Refuse anything in the bundle that does not verify
+  palan load -i qwen3.tar --verify --verify-key cosign.pub
+```
+
 ### Options
 
 ```

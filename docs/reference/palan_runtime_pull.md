@@ -6,6 +6,13 @@ Pull a runtime artifact and materialize its executable
 palan runtime pull REF [flags]
 ```
 
+### Examples
+
+```
+  # Fetch a llama-server build and unpack it ready to run
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12
+```
+
 ### Options
 
 ```

@@ -11,6 +11,13 @@ as a tar of a standard OCI image layout. "-o -" writes to stdout.
 palan save REF... -o FILE [flags]
 ```
 
+### Examples
+
+```
+  # Write a bundle to carry across a gap; signatures travel with it
+  palan save llm/qwen3:8b-q4 -o qwen3.tar
+```
+
 ### Options
 
 ```

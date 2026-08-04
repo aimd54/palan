@@ -33,9 +33,18 @@ func New() *cobra.Command {
 	v := viper.New()
 
 	root := &cobra.Command{
-		Use:           "palan",
-		Short:         "Distribute and serve GGUF models as OCI artifacts",
-		Long:          "palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry. Daemonless, in one binary.",
+		Use:   "palan",
+		Short: "Distribute and serve GGUF models as OCI artifacts",
+		Long:  "palan pulls, pushes, packs, and serves GGUF models as CNCF ModelPack artifacts\nagainst any OCI 1.1 registry. Daemonless, in one binary.",
+		Example: `  # Pack a GGUF as an OCI artifact and push it
+  palan pack qwen3-8b-q4.gguf -t registry.internal/llm/qwen3:8b-q4 --push
+
+  # Pull it anywhere and chat with it
+  palan pull registry.internal/llm/qwen3:8b-q4
+  palan run  registry.internal/llm/qwen3:8b-q4
+
+  # Or serve every local model behind one OpenAI-compatible endpoint
+  palan serve`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

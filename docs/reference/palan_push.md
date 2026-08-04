@@ -12,6 +12,13 @@ from sibling repositories are mounted server-side instead of re-uploaded.
 palan push REF [flags]
 ```
 
+### Examples
+
+```
+  # Push a model already tagged for its destination
+  palan push registry.internal/llm/qwen3:8b-q4
+```
+
 ### Options
 
 ```

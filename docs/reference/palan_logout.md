@@ -6,6 +6,13 @@ Remove stored credentials for a registry
 palan logout REGISTRY [flags]
 ```
 
+### Examples
+
+```
+  # Forget the credentials held for a registry
+  palan logout registry.internal
+```
+
 ### Options
 
 ```

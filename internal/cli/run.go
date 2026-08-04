@@ -39,6 +39,11 @@ func newRunCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run REF",
 		Short: "Run a model interactively (pulling it if needed)",
+		Example: `  # Interactive chat; /bye or Ctrl-D to leave
+  palan run llm/qwen3:8b-q4
+
+  # Answer one prompt and exit, for scripts
+  palan run llm/qwen3:8b-q4 -p "One-line haiku about registries"`,
 		Long: `Run ensures the model and a llama-server runtime are available, spawns
 llama-server on the raw weight blob straight from the store (no copy), and
 opens an interactive chat. With --prompt it answers once and exits; with

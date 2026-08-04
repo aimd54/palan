@@ -30,6 +30,11 @@ func newPullCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pull REF",
 		Short: "Pull a model from a registry into the local store",
+		Example: `  # Pull into the local store
+  palan pull registry.internal/llm/qwen3:8b-q4
+
+  # Refuse the model unless it carries a valid signature
+  palan pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub`,
 		Long: `Pull resolves REF on its registry and fetches missing blobs concurrently,
 verifying digests. Interrupted downloads resume from where they stopped,
 including across process restarts.

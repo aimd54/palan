@@ -17,6 +17,16 @@ any llama-server image.
 palan pull REF [flags]
 ```
 
+### Examples
+
+```
+  # Pull into the local store
+  palan pull registry.internal/llm/qwen3:8b-q4
+
+  # Refuse the model unless it carries a valid signature
+  palan pull registry.internal/llm/qwen3:8b-q4 --verify --verify-key cosign.pub
+```
+
 ### Options
 
 ```

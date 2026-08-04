@@ -12,6 +12,16 @@ Docker credentials store (a configured credential helper, or
 palan login REGISTRY [flags]
 ```
 
+### Examples
+
+```
+  # Prompt for the password
+  palan login registry.internal -u alice
+
+  # Read it from a pipe, so it never reaches the shell history
+  printf '%s' "$TOKEN" | palan login registry.internal -u alice --password-stdin
+```
+
 ### Options
 
 ```

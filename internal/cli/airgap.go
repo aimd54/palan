@@ -22,6 +22,8 @@ func newCpCmd(v *viper.Viper) *cobra.Command {
 	return &cobra.Command{
 		Use:   "cp SRC DST",
 		Short: "Copy a model between registries",
+		Example: `  # Mirror a model and its signature without unpacking it locally
+  palan cp registry.internal/llm/qwen3:8b-q4 mirror.internal/llm/qwen3:8b-q4`,
 		Long: `cp streams an artifact from one registry to another without touching the
 local store: the mirroring workhorse for moving artifacts from a connected
 registry into an offline one.`,
@@ -58,6 +60,8 @@ func newSaveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "save REF... -o FILE",
 		Short: "Export models to a tar bundle for offline transfer",
+		Example: `  # Write a bundle to carry across a gap; signatures travel with it
+  palan save llm/qwen3:8b-q4 -o qwen3.tar`,
 		Long: `save writes the given references (with all their blobs, deduplicated)
 as a tar of a standard OCI image layout. "-o -" writes to stdout.`,
 		Args: cobra.MinimumNArgs(1),
@@ -109,6 +113,11 @@ func newLoadCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "load -i FILE",
 		Short: "Import models from a tar bundle",
+		Example: `  # Import on a host with no registry in reach
+  palan load -i qwen3.tar
+
+  # Refuse anything in the bundle that does not verify
+  palan load -i qwen3.tar --verify --verify-key cosign.pub`,
 		Long: `load imports every tagged reference from a bundle created by save (or any tar'd OCI image layout). "-i -" reads from stdin.
 
 With --verify, or with verify.required set in the config, every model in the

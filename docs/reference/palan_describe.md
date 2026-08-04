@@ -12,6 +12,16 @@ the local store first, then on its registry.
 palan describe REF [flags]
 ```
 
+### Examples
+
+```
+  # Inspect a model without downloading its weights
+  palan describe registry.internal/llm/qwen3:8b-q4
+
+  # Machine-readable form
+  palan describe llm/qwen3:8b-q4 --json
+```
+
 ### Options
 
 ```

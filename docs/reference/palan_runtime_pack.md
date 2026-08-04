@@ -18,6 +18,13 @@ them installed.
 palan runtime pack PATH... -t REF --build BUILD [flags]
 ```
 
+### Examples
+
+```
+  # Pack a build with the shared libraries it loads at run time
+  palan runtime pack llama-server lib*.so -t runtimes/llama-server:b4567-cuda12 --build b4567
+```
+
 ### Options
 
 ```

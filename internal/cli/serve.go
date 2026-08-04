@@ -54,6 +54,11 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve [REF...]",
 		Short: "Serve local models behind one OpenAI-compatible endpoint",
+		Example: `  # Serve every model in the store, loading each on first request
+  palan serve
+
+  # Keep one model resident and cap what may be loaded at once
+  palan serve --keep-loaded llm/qwen3:8b-q4 --memory-budget 9GiB`,
 		Long: `Serve exposes /v1/chat/completions, /v1/completions, /v1/embeddings, and
 /v1/models for all local models (or only the given REFs) and routes by the
 request's "model" field. Models load lazily on first use, unload after

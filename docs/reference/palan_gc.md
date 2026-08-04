@@ -14,6 +14,13 @@ reachable, so an orphaned one would otherwise hold the whole model on disk.
 palan gc [flags]
 ```
 
+### Examples
+
+```
+  # Reclaim what nothing refers to any more
+  palan gc
+```
+
 ### Options
 
 ```
