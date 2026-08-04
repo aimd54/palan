@@ -16,6 +16,7 @@ import (
 
 	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/internal/transfer"
+	"github.com/aimd54/palan/internal/ui"
 	"github.com/aimd54/palan/internal/version"
 )
 
@@ -48,6 +49,11 @@ func New() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			// Before any command writes anything, so no output escapes the
+			// decision the user made on the command line.
+			if noColor, err := cmd.Flags().GetBool("no-color"); err == nil {
+				ui.SetNoColor(noColor)
+			}
 			return initConfig(v, cmd)
 		},
 	}
@@ -60,6 +66,7 @@ func New() *cobra.Command {
 	pf.Bool("insecure-skip-tls-verify", false, "skip TLS certificate verification (dangerous; lab bring-up only)")
 	pf.Int("concurrency", transfer.DefaultConcurrency, "parallel blob streams for transfers")
 	pf.Bool("quiet", false, "suppress progress output")
+	pf.Bool("no-color", false, "disable styled output (NO_COLOR is honoured too)")
 
 	must(v.BindPFlag(keyRegistryDefault, pf.Lookup("registry")))
 	must(v.BindPFlag(keyRegistryPlainHTTP, pf.Lookup("plain-http")))
