@@ -9,6 +9,11 @@ quantization, size, context length) and stores a ModelPack artifact in the
 local store under REF. Packing is reproducible: identical inputs yield an
 identical digest.
 
+A model split across parts (model-00001-of-00003.gguf) is packed whole:
+naming any part brings its siblings in from the same directory, and a part
+that is missing is an error, since one part alone would pack and describe
+itself like a complete model and then fail to load.
+
 A PATH may be a local file or a Hugging Face source,
 hf://<org>/<repo>/<file>, which is downloaded first:
 
@@ -16,10 +21,9 @@ hf://<org>/<repo>/<file>, which is downloaded first:
 
 The bytes are checked against the SHA-256 the repository publishes and
 refused if they differ, that digest becomes io.palan.origin.sha256, and the
-repository page becomes the source annotation. A split GGUF brings every
-sibling part, and a licence file in the repository travels with the weights.
-Naming a repository without a file lists what it publishes. Gated
-repositories read HF_TOKEN.
+repository page becomes the source annotation. Split parts and a licence
+file in the repository travel with the weights. Naming a repository without
+a file lists what it publishes. Gated repositories read HF_TOKEN.
 
 Profiles: "artifact" (raw GGUF layers; the default), "car" (an OCI image
 with one tar layer under models/, for Kubernetes image volumes and KServe

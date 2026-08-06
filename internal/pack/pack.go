@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -136,11 +137,73 @@ func Model(ctx context.Context, st *store.Store, files []File, ref string, opts 
 	return pushManifest(ctx, st, manifest, ref)
 }
 
+// splitPart matches llama.cpp's multi-part naming, model-00001-of-00003.gguf.
+// The name states how many parts the model has, so a set that is short of that
+// count is detectable before anything is packed.
+var splitPart = regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})(\.gguf)$`)
+
+// gatherSplitParts completes a multi-part GGUF from the directory the named
+// part came from. Packing one part alone yields an artifact that carries a
+// readable header, describes itself like any other model, and cannot load, so
+// the siblings are collected and a part that is nowhere to be found is an
+// error rather than a smaller model.
+func gatherSplitParts(files []File) ([]File, error) {
+	abs := func(p string) string {
+		a, err := filepath.Abs(p)
+		if err != nil {
+			return p
+		}
+		return a
+	}
+	have := make(map[string]bool, len(files))
+	for _, f := range files {
+		have[abs(f.Path)] = true
+	}
+
+	out := make([]File, len(files), len(files)+4)
+	copy(out, files)
+	for _, f := range files {
+		m := splitPart.FindStringSubmatch(filepath.Base(f.Path))
+		if m == nil {
+			continue
+		}
+		stem, total, ext := m[1], m[3], m[4]
+		n, err := strconv.Atoi(total)
+		if err != nil || n == 0 {
+			continue
+		}
+		dir := filepath.Dir(f.Path)
+		var missing []string
+		for i := 1; i <= n; i++ {
+			name := fmt.Sprintf("%s-%05d-of-%s%s", stem, i, total, ext)
+			p := filepath.Join(dir, name)
+			if have[abs(p)] {
+				continue
+			}
+			if _, err := os.Stat(p); err != nil {
+				missing = append(missing, name)
+				continue
+			}
+			have[abs(p)] = true
+			out = append(out, File{Path: p})
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("%s belongs to a %d-part model and %d part(s) are not in %s: %s",
+				filepath.Base(f.Path), n, len(missing), dir, strings.Join(missing, ", "))
+		}
+	}
+	return out, nil
+}
+
 // prepare validates inputs, applies kind auto-detection, and returns files
 // in the canonical deterministic order plus the primary weight's GGUF info.
 func prepare(files []File) ([]File, *gguf.Info, error) {
 	if len(files) == 0 {
 		return nil, nil, fmt.Errorf("no input files")
+	}
+	files, err := gatherSplitParts(files)
+	if err != nil {
+		return nil, nil, err
 	}
 	ordered := make([]File, len(files))
 	copy(ordered, files)
