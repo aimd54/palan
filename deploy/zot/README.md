@@ -62,6 +62,8 @@ Options, in increasing automation:
 - [ ] The redirect target resolves from wherever clients run. The presigned
       URL carries the host named in `regionendpoint`, so a name that resolves
       only inside the cluster leaves external pulls failing against a registry
-      that reports itself healthy
+      that reports itself healthy. A node counts as such a client: containerd
+      pulling an image volume resolves names in the host network namespace, so
+      a `*.svc.cluster.local` endpoint fails there while pods succeed
 - [ ] zot `/metrics` scraped by your Prometheus-compatible stack, with the
       scraper's username listed under `accessControl.metrics`

@@ -31,11 +31,35 @@ No error appears at any layer. A workload pointed at a raw tag starts, mounts
 nothing, and fails once the inference server cannot find its model file, which
 is a long way from the cause. The `-car` tag exists for this reason.
 
+The same holds on Kubernetes 1.36.2 with containerd 2.3.2: the car tag mounts
+with the weight file intact, and the raw tag mounts nothing while the pod
+reports itself ready.
+
+## A redirecting registry must redirect somewhere the node can reach
+
+If the registry offloads blobs to object storage, the client follows the
+redirect, and for an image volume that client is containerd rather than a pod.
+containerd resolves names in the **host** network namespace, so an object-store
+endpoint that only exists in cluster DNS cannot be reached:
+
+```text
+failed to copy: httpReadSeeker: failed open: failed to do request:
+Get "http://minio.internal.svc.cluster.local:9000/...":
+dial tcp: lookup minio.internal.svc.cluster.local: Try again
+```
+
+The registry is healthy throughout, and pods pulling the same reference
+succeed, because a pod does resolve cluster DNS. Only the image volume fails.
+Give the storage endpoint an address the nodes themselves can resolve, or serve
+blobs through the registry instead of redirecting.
+
 **Validation checklist for image volumes on K3s** (run on the actual cluster,
 since K3s embeds its own containerd):
 
 - [ ] `k3s --version` and embedded containerd ≥ 2.1
 - [ ] `kubectl apply -f image-volume.yaml` mounts and the file is visible
+- [ ] The registry's blob-storage endpoint resolves from a node, not only from
+      a pod, whenever blob redirection is enabled
 - [ ] After a containerd upgrade, retest the raw artifact by pointing the same
       manifest at the non-car tag. Check that the mount has contents rather
       than that the pod starts: an empty mount is the failure mode, and it
