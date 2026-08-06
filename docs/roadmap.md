@@ -9,7 +9,7 @@ Status of palan's build-out milestones as of August 2026.
 | M2 | Pack + interop (reproducible digests; `oras`/`modctl` round-trips) | ☑ shipped, interop in CI |
 | M3 | Run + serve single model (`runtime pull`, `run`) | ☑ shipped; a CUDA runtime artifact serves on a 12 GB NVIDIA host |
 | M4 | Router (lazy load, idle unload, LRU eviction, metrics) | ☑ shipped; acceptance measured on GPU (below) |
-| M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 |
+| M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
 
 ## Validated outside CI
@@ -31,8 +31,11 @@ a Kubernetes cluster, and a GPU host:
   starting baseline, and the automatic budget probe resolves to 90% of device
   memory.
 - **Image volumes**: the car profile mounts on Kubernetes 1.36 with containerd
-  2.3.1. A raw ModelPack artifact does not, and reports no error while failing,
-  which is why the car profile remains necessary. See
+  2.3.1 and with the 2.3.2 build K3s embeds. A raw ModelPack artifact does not,
+  and reports no error while failing, which is why the car profile remains
+  necessary. A registry that redirects blobs to object storage needs an
+  endpoint the nodes can resolve, since containerd follows the redirect from
+  the host network namespace. See
   [`deploy/k8s-examples/README.md`](../deploy/k8s-examples/README.md).
 - **Init-container puller**: end to end from a registry into an `emptyDir`,
   including with a GPU attached to the serving container.
@@ -52,12 +55,14 @@ a Kubernetes cluster, and a GPU host:
 
 ## Still outstanding
 
-- zot on a cluster with OIDC rather than htpasswd, and `/metrics` scraped by a
-  Prometheus-compatible collector
-  ([deploy/zot/README.md](../deploy/zot/README.md)).
-- Image volumes on K3s, which embeds its own containerd build. The result
-  above is strong evidence rather than proof for that runtime.
+- zot on a cluster with OIDC rather than htpasswd. `/metrics` answers correctly
+  for a listed user and refuses everyone else, but has not been scraped by a
+  Prometheus-compatible collector ([deploy/zot/README.md](../deploy/zot/README.md)).
+- A registry whose object storage sits on a different network from the cluster,
+  which is where the blob redirect is most likely to break.
 - KServe modelcars, the third Kubernetes consumption pattern.
+- Router acceptance with two models large enough that the memory budget has to
+  arbitrate between them, rather than a forced small budget.
 
 ## Planned / open
 
