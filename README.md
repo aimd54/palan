@@ -104,7 +104,7 @@ parse; `NO_COLOR` and `--no-color` turn colour off at a terminal too
 | [Security guide](docs/guides/security.md) | signing, verification policy, TLS, auth |
 | [CLI reference](docs/reference/palan.md) | generated from the command tree (`make docs`) |
 | [Configuration](docs/reference/configuration.md) | config file, env vars, precedence |
-| [Registry deployment](deploy/zot/README.md) | zot + MinIO + OIDC reference setup |
+| [Registry deployment](deploy/zot/README.md) | zot + object storage + OIDC reference setup |
 | [ADRs](docs/adr/README.md) | decisions and their reasoning |
 | [Roadmap](docs/roadmap.md) | shipped vs. planned |
 

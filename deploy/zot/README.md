@@ -21,14 +21,23 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
 
 1. **Secrets** (manage with your usual tooling: SOPS, sealed-secrets, ...):
    - `zot-s3-credentials` with `access-key`/`secret-key` for a dedicated
-     bucket (`zot-models`) on any S3-compatible store (MinIO, ...).
+     bucket (`zot-models`) on your object store.
    - `zot-oidc-credentials` with zot's `oidc-credentials.json`
      (`clientid`/`clientsecret` for your issuer).
-2. **MinIO**: create the bucket; the `redirectBlobURL: true` knob makes blob
-   GETs answer with a 307 to a presigned MinIO URL, so multi-GB GGUF pulls
-   stream straight from MinIO instead of proxying through zot. This is the
-   single most important performance setting for model-sized blobs (see
+2. **Object storage**: create the bucket. The `redirectBlobURL: true` knob
+   makes blob GETs answer with a 307 to a presigned URL, so multi-GB GGUF
+   pulls stream straight from the object store instead of proxying through
+   zot. This is the single most important performance setting for
+   model-sized blobs (see
    [Registry layer](../../docs/architecture.md#registry-layer)).
+
+   Any store implementing the S3 API works, and zot's driver needs a small
+   part of it: presigned URLs, signature v4, path-style addressing
+   (`forcepathstyle`), ranged reads and multipart upload. Versioning, ACLs,
+   object locking and replication are never used, so a store that omits them
+   is fine. Garage, SeaweedFS and AWS S3 itself all satisfy this; the
+   worked example below uses Garage because it is a single binary and
+   self-hosts comfortably.
 3. **TLS**: terminate at the ingress with the internal CA, or configure
    `http.tls` in `config.json` with a mounted certificate. Clients that
    don't trust the internal CA system-wide can pass `--ca-file`.
@@ -37,6 +46,32 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
    Tighten to your needs. For workload identity (pods pulling with
    projected ServiceAccount tokens, no static credentials), see zot's OIDC
    docs and pair with the init-puller example.
+
+## Worked example: Garage as the object store
+
+Create the bucket and a key scoped to it, then read the credentials back:
+
+```sh
+garage bucket create zot-models
+garage key create zot-models-rw
+garage bucket allow --read --write zot-models --key zot-models-rw
+garage key info --show-secret zot-models-rw
+```
+
+Put those two values in the `zot-s3-credentials` Secret, then match
+`values.yaml` to the deployment:
+
+- `regionendpoint` to the address clients reach the store on, which includes
+  nodes if image volumes are in use
+- `region` to whatever the store advertises as its S3 region, which Garage
+  sets in its own configuration rather than inferring
+- `secure: false` only while bringing up a store without TLS
+- `forcepathstyle: true` stays as it ships: path-style addressing needs no
+  per-bucket DNS
+
+A store on a different network segment from the cluster is the case worth
+testing deliberately, because the client follows the redirect. See the
+checklist below.
 
 ## Air-gap mirroring
 

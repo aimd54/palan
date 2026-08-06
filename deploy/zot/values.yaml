@@ -49,7 +49,7 @@ configFiles:
         "storageDriver": {
           "name": "s3",
           "region": "main",
-          "regionendpoint": "https://minio.internal:9000",
+          "regionendpoint": "https://s3.internal:9000",
           "bucket": "zot-models",
           "secure": true,
           "forcepathstyle": true
@@ -105,7 +105,7 @@ extraVolumeMounts:
     mountPath: /secret
     readOnly: true
 
-# Blob data lives in MinIO; no PVC needed beyond zot's small local state.
+# Blob data lives in the object store; no PVC needed beyond zot's small local state.
 persistence: false
 
 podSecurityContext:

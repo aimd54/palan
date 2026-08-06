@@ -44,8 +44,8 @@ endpoint that only exists in cluster DNS cannot be reached:
 
 ```text
 failed to copy: httpReadSeeker: failed open: failed to do request:
-Get "http://minio.internal.svc.cluster.local:9000/...":
-dial tcp: lookup minio.internal.svc.cluster.local: Try again
+Get "http://s3.internal.svc.cluster.local:9000/...":
+dial tcp: lookup s3.internal.svc.cluster.local: Try again
 ```
 
 The registry is healthy throughout, and pods pulling the same reference
