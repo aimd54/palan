@@ -17,6 +17,10 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+  # A run that never started cannot be re-run, and a push event is not
+  # replayable, so a commit whose run was lost has no other way back to a
+  # verdict short of an empty commit.
+  workflow_dispatch:
 
 # Default to no permissions; each job requests exactly what it needs.
 permissions: {}
