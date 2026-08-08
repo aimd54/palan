@@ -1,13 +1,30 @@
 # How palan compares
 
-palan combines three properties: models live in any standard OCI registry,
-nothing runs as a daemon or needs a container engine, and several models are
-managed behind one endpoint. Each is ordinary on its own, and the tools below
-supply one or two of them.
+palan distributes model weights as OCI artifacts, verifies them before use, and
+serves GGUF locally through llama.cpp.
+
+Those are two separate jobs, and the neighbouring tools differ in which one
+they do. For **distribution**: modctl, KitOps, ORAS and Docker Model Runner.
+For **local serving**: Ollama, RamaLama and Docker Model Runner. A tool can be
+strong at one and absent from the other, so the two are compared separately
+below.
 
 This page records where those tools stood as of August 2026. Any of it can go
 out of date without notice, so corrections are welcome in
 [Q&A](https://github.com/aimd54/palan/discussions/categories/q-a).
+
+## Distribution
+
+|                     | any standard registry | signature gate before use | air-gap bundles | no container runtime |
+|---------------------|:---:|:---:|:---:|:---:|
+| modctl              | ✓ | ✗ | ✗ | ✓ |
+| KitOps              | ✓ | ✗ | ✓ | ✓ |
+| ORAS                | ✓ | ✗ | ✓ | ✓ |
+| Docker Model Runner | ✓ | not documented | ✗ | standalone `dmr` |
+| Ollama              | own dialect | ✗ | manual blob copy | ✓ |
+| **palan**           | ✓ | ✓ | ✓ | ✓ |
+
+## Local serving
 
 |                        | standard OCI registries | daemonless | managed multi-model serving |
 |------------------------|:---:|:---:|:---:|
@@ -80,6 +97,17 @@ solution are the user's to supply.
 palan reads and writes the same ModelPack artifacts, so these tools and palan
 operate on each other's output. That interoperability is exercised in CI
 against modctl, `oras` and `cosign` on every commit.
+
+## Serving scope
+
+palan serves GGUF through llama.cpp, and no other weight format. llama.cpp
+cannot read safetensors, and vLLM is a Python process carrying CUDA and torch,
+so it cannot travel as a static binary or start without a container runtime.
+Serving it would cost the daemonless property, which is what lets palan run as
+an init container and on hosts where no container engine is installed.
+
+For safetensors, palan is the distribution and verification layer in front of
+whichever inference stack is already running.
 
 ## Sources
 
