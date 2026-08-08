@@ -1,7 +1,8 @@
 # palan
 
-> **Serve** GGUF models straight from any OCI registry.
-> Daemonless, runs offline, one static binary.
+> **Distribute** LLM weights through the OCI registry you already run, with
+> signatures verified before a byte moves.
+> Daemonless, runs offline, one static binary. Serves GGUF locally too.
 
 [![Release](https://img.shields.io/github/v/release/aimd54/palan)](https://github.com/aimd54/palan/releases/latest)
 [![CI](https://github.com/aimd54/palan/actions/workflows/ci.yml/badge.svg)](https://github.com/aimd54/palan/actions/workflows/ci.yml)
@@ -14,6 +15,14 @@ palan treats local LLMs the way `docker` treats images: models are
 [CNCF ModelPack](https://modelpack.org) artifacts in **any** OCI 1.1 registry
 (zot, Harbor, distribution, GHCR, ...), served locally through managed
 llama.cpp `llama-server` processes behind one OpenAI-compatible endpoint.
+
+palan is used two ways:
+
+- **Edge and on-prem operators** serving models on modest hardware, often
+  offline. palan does the whole job: pull, verify, serve through llama.cpp.
+- **Platform teams** distributing weights into an inference stack they already
+  run, such as vLLM under KServe or KAITO. palan pulls, verifies and places
+  the weights; that runtime serves them.
 
 A *palan* is the French block-and-tackle hoist for lifting heavy loads.
 This one pulls weights.
@@ -102,8 +111,10 @@ parse; `NO_COLOR` and `--no-color` turn colour off at a terminal too
 
 ## Status
 
-Pre-1.0, under active development. Scope is deliberately sharp: **GGUF +
-llama.cpp** (safetensors/vLLM are format-compatible later, not now).
+Pre-1.0, under active development. **Serving** is deliberately scoped to GGUF
+through llama.cpp. **Distribution** is format-neutral: weight layers are raw
+and the media type does not name a format, so any weight format travels and
+is verified the same way.
 `palan` is the project's release name; early ADRs predate it and use the
 working codename `moci`
 ([ADR-0006](docs/adr/0006-rename-to-palan.md)).
