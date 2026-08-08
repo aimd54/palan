@@ -35,6 +35,9 @@ archives:
   - formats: [tar.gz]
     files:
       - LICENSE
+      # Apache-2.0 section 4(d): the binaries link dependencies whose own
+      # NOTICE text has to travel with any distribution of them.
+      - NOTICE
       - README.md
 
 checksum:
@@ -74,6 +77,11 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # Placed at the context root, unlike the binary, which goreleaser lays
+    # out per platform. Dockerfile.release copies both to /.
+    extra_files:
+      - LICENSE
+      - NOTICE
     labels:
       org.opencontainers.image.source: https://github.com/aimd54/palan
       org.opencontainers.image.licenses: Apache-2.0
