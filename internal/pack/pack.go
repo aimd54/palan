@@ -36,6 +36,7 @@ import (
 	"oras.land/oras-go/v2/errdef"
 
 	"github.com/aimd54/palan/internal/gguf"
+	"github.com/aimd54/palan/internal/modelmeta"
 	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
@@ -101,7 +102,7 @@ func Model(ctx context.Context, st *store.Store, files []File, ref string, opts 
 		ModelFS: modelspec.ModelFS{Type: modelspec.ModelFSTypeLayers, DiffIDs: diffIDs},
 		Config: modelspec.ModelConfig{
 			Architecture: info.Architecture,
-			Format:       "gguf",
+			Format:       info.Format,
 			ParamSize:    info.SizeLabel,
 			Quantization: info.Quantization,
 		},
@@ -196,14 +197,14 @@ func gatherSplitParts(files []File) ([]File, error) {
 }
 
 // prepare validates inputs, applies kind auto-detection, and returns files
-// in the canonical deterministic order plus the primary weight's GGUF info.
-func prepare(files []File) ([]File, *gguf.Info, error) {
+// in the canonical deterministic order plus the primary weight's metadata.
+func prepare(files []File) ([]File, modelmeta.Info, error) {
 	if len(files) == 0 {
-		return nil, nil, fmt.Errorf("no input files")
+		return nil, modelmeta.Info{}, fmt.Errorf("no input files")
 	}
 	files, err := gatherSplitParts(files)
 	if err != nil {
-		return nil, nil, err
+		return nil, modelmeta.Info{}, err
 	}
 	ordered := make([]File, len(files))
 	copy(ordered, files)
@@ -230,18 +231,18 @@ func prepare(files []File) ([]File, *gguf.Info, error) {
 		}
 	}
 	if primary == nil {
-		return nil, nil, fmt.Errorf("no weight file (.gguf) among inputs")
+		return nil, modelmeta.Info{}, fmt.Errorf("no weight file (.gguf) among inputs")
 	}
 	info, err := gguf.ReadFile(primary.Path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading GGUF header: %w", err)
+		return nil, modelmeta.Info{}, fmt.Errorf("reading GGUF header: %w", err)
 	}
-	return ordered, info, nil
+	return ordered, modelmeta.FromGGUF(info), nil
 }
 
 // manifestAnnotations assembles the manifest annotation set (see
 // docs/architecture.md, "Artifact format").
-func manifestAnnotations(info *gguf.Info, layers []ocispec.Descriptor, opts Options, license string) (map[string]string, error) {
+func manifestAnnotations(info modelmeta.Info, layers []ocispec.Descriptor, opts Options, license string) (map[string]string, error) {
 	a := map[string]string{}
 	if opts.SourceURL != "" {
 		a[ocispec.AnnotationSource] = opts.SourceURL
