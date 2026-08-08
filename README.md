@@ -18,15 +18,6 @@ llama.cpp `llama-server` processes behind one OpenAI-compatible endpoint.
 A *palan* is the French block-and-tackle hoist for lifting heavy loads.
 This one pulls weights.
 
-Every neighbouring tool concedes one leg of the triangle palan occupies:
-
-|                                | standard OCI registries | daemonless | managed multi-model serving |
-|--------------------------------|:---:|:---:|:---:|
-| Ollama                         | ✗ (own dialect) | ✓ | ✓ |
-| RamaLama / Docker Model Runner | ✓ | ✗ (needs a container engine) | ✓ |
-| modctl / KitOps / ORAS         | ✓ | ✓ | ✗ |
-| **palan**                       | ✓ | ✓ | ✓ |
-
 Artifacts are plain ModelPack. They round-trip against
 [modctl](https://github.com/modelpack/modctl), `oras`, and `cosign` in CI,
 so whatever packs a model for an OCI registry can feed palan, and whatever
@@ -99,6 +90,7 @@ parse; `NO_COLOR` and `--no-color` turn colour off at a terminal too
 | --- | --- |
 | [Quickstart](docs/quickstart.md) | zero to served model in ~5 minutes |
 | [Architecture](docs/architecture.md) | how the pieces fit together |
+| [Comparison](docs/comparison.md) | how palan relates to neighbouring tools, and where they overlap |
 | [Air-gap guide](docs/guides/air-gap.md) | offline bundles, mirroring, offline verification |
 | [Kubernetes guide](docs/guides/kubernetes.md) | init puller, image volumes, KServe |
 | [Security guide](docs/guides/security.md) | signing, verification policy, TLS, auth |
