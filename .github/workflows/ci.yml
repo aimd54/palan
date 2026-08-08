@@ -92,8 +92,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Format, vet, tidy, unit tests
-        run: make fmt-check vet tidy-check test
+      # notice-check runs here rather than in a job of its own: it needs the
+      # module cache this job already has, and a dependency bump is the event
+      # that makes NOTICE incomplete.
+      - name: Format, vet, tidy, attribution, unit tests
+        run: make fmt-check vet tidy-check notice-check test
       - name: Build and smoke-test the binary
         run: |
           make build

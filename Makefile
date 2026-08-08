@@ -57,8 +57,16 @@ tidy: ## Tidy go.mod/go.sum
 tidy-check: ## Fail if go.mod/go.sum are not tidy
 	go mod tidy -diff
 
+.PHONY: notice
+notice: ## Regenerate NOTICE from the modules linked into the released binaries
+	go run ./hack/gennotice
+
+.PHONY: notice-check
+notice-check: ## Fail if NOTICE no longer matches the module graph
+	go run ./hack/gennotice -check
+
 .PHONY: check
-check: fmt-check vet lint tidy-check test ## All local gates (run before every commit; mirrored in CI)
+check: fmt-check vet lint tidy-check notice-check test ## All local gates (run before every commit; mirrored in CI)
 
 .PHONY: docs
 docs: ## Regenerate the CLI reference under docs/reference
