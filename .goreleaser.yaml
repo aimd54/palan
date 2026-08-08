@@ -86,6 +86,9 @@ dockers_v2:
       org.opencontainers.image.source: https://github.com/aimd54/palan
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.description: Distribute and serve GGUF models as OCI artifacts
+      # Names the party publishing the image, so the labels above are not read
+      # as coming from any of the projects palan interoperates with.
+      org.opencontainers.image.vendor: The palan Authors
 
 changelog:
   use: git

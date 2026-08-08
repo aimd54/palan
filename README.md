@@ -125,4 +125,11 @@ Commits are required. Security reports: [SECURITY.md](SECURITY.md).
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE). Third-party notices are in [NOTICE](NOTICE).
+
+## Trademarks
+
+Other project and product names appearing in this documentation, and in the
+published image labels, identify the software palan interoperates with.
+They belong to their respective owners. Their use here is descriptive and
+implies neither endorsement nor affiliation.
