@@ -3,6 +3,9 @@
 
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and help
+    url: https://github.com/aimd54/palan/discussions/categories/q-a
+    about: Ask how something works, or whether a behaviour is intended, in Q&A.
   - name: Security vulnerability
     url: https://github.com/aimd54/palan/security/advisories/new
     about: Please report security issues privately, never as public issues.
