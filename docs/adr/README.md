@@ -22,5 +22,6 @@ decisions and the reasoning behind them.
 | [ADR-0009](0009-hugging-face-as-a-pack-source.md) | Hugging Face as a pack source, compiled in and verified | accepted |
 | [ADR-0010](0010-referrers-alongside-the-signature-tag.md) | Signatures are indexed as referrers as well as tagged (extends ADR-0007) | accepted |
 | [ADR-0011](0011-terminal-output-is-decoration.md) | Terminal output is decoration; the machine-readable form is the contract | accepted |
+| [ADR-0012](0012-distribution-is-format-neutral.md) | Distribution is format-neutral; serving is GGUF | accepted |
 
 Use [`template.md`](template.md) for new ADRs.
