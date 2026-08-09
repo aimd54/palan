@@ -1,7 +1,7 @@
 # palan
 
-> **Distribute** LLM weights through the OCI registry you already run, with
-> signatures verified before a byte moves.
+> **Distribute** GGUF and safetensors weights through the OCI registry you
+> already run, with signatures verified before a byte moves.
 > Daemonless, runs offline, one static binary. Serves GGUF locally too.
 
 [![Release](https://img.shields.io/github/v/release/aimd54/palan)](https://github.com/aimd54/palan/releases/latest)
@@ -40,9 +40,11 @@ places where no container engine exists and no internet ever will.
 - **Transfer**: pull/push/cp against any OCI registry, concurrent and
   digest-verified; interrupted pulls **resume across process restarts**
   (HTTP Range). Blobs dedup across tags and repositories (cross-repo mount).
-- **Reproducible packing**: the same GGUF in ⇒ the same digest out.
-  Metadata (architecture, quantization, context length, license) is read
-  from the GGUF header into the ModelPack config.
+- **Reproducible packing**: the same weights in ⇒ the same digest out.
+  Metadata goes into the ModelPack config from wherever the format publishes
+  it: a GGUF header states architecture, quantization, context length and
+  license; a safetensors model states architecture and context length in
+  `config.json`, and its parameter count comes from the shard headers.
 - **Serving**: `palan run` for a REPL; `palan serve` for an OpenAI-compatible
   router on `:11500`: lazy load, idle unload, memory-budget LRU eviction
   (two models on a 10 GB GPU evict instead of OOMing), SSE streaming,
