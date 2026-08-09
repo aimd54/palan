@@ -1,0 +1,233 @@
+// Copyright The palan Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package pack
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/aimd54/palan/internal/safetensors"
+	"github.com/aimd54/palan/internal/safetensors/safetensorstest"
+)
+
+// Fixture shards carry one BF16 tensor whose payload dwarfs the header, so a
+// declared total taken from the tensor bytes alone stays clearly below the
+// size of the files that hold them, as it does for a published model.
+const (
+	fixtureDim         = 128
+	fixtureTensorBytes = fixtureDim * fixtureDim * 2
+)
+
+// writeShardedModel materializes an n-shard safetensors model with a config
+// and an index that names every shard.
+func writeShardedModel(t *testing.T, dir string, n int) []string {
+	t.Helper()
+	cfg := `{"model_type":"llama","max_position_embeddings":4096,"torch_dtype":"bfloat16"}`
+	if err := os.WriteFile(filepath.Join(dir, safetensors.ConfigName), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	weightMap := map[string]string{}
+	paths := []string{}
+	for i := 1; i <= n; i++ {
+		name := fmt.Sprintf("model-%05d-of-%05d.safetensors", i, n)
+		body := safetensorstest.Shard(
+			safetensorstest.Tensor{
+				Name:  fmt.Sprintf("t%d", i),
+				DType: "BF16",
+				Shape: []int64{fixtureDim, fixtureDim},
+			})
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		weightMap[fmt.Sprintf("t%d", i)] = name
+		paths = append(paths, p)
+	}
+	// total_size counts tensor bytes, not file bytes: each shard adds its own
+	// header on top of the figure the index publishes.
+	ix, err := json.Marshal(map[string]any{
+		"metadata":   map[string]any{"total_size": n * fixtureTensorBytes},
+		"weight_map": weightMap,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, safetensors.IndexName), ix, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return paths
+}
+
+func TestShardedModelGathersEveryShardAndItsConfig(t *testing.T) {
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 3)
+
+	// Naming one shard must pull in the other two, the index and the config.
+	ordered, info, err := prepare([]File{{Path: paths[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Format != "safetensors" {
+		t.Errorf("Format = %q, want safetensors", info.Format)
+	}
+	if info.ContextLength != 4096 {
+		t.Errorf("ContextLength = %d, want 4096", info.ContextLength)
+	}
+	if info.Architecture != "llama" {
+		t.Errorf("Architecture = %q, want llama", info.Architecture)
+	}
+	names := map[string]bool{}
+	for _, f := range ordered {
+		names[filepath.Base(f.Path)] = true
+	}
+	for _, want := range []string{
+		"model-00001-of-00003.safetensors",
+		"model-00002-of-00003.safetensors",
+		"model-00003-of-00003.safetensors",
+		safetensors.IndexName,
+		safetensors.ConfigName,
+	} {
+		if !names[want] {
+			t.Errorf("%s missing from the packed set; got %v", want, names)
+		}
+	}
+}
+
+func TestShardedModelRefusesAnIncompleteSet(t *testing.T) {
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 3)
+	if err := os.Remove(paths[2]); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := prepare([]File{{Path: paths[0]}})
+	if err == nil {
+		t.Fatal("prepare accepted a model whose index names a shard that is not present")
+	}
+	if !strings.Contains(err.Error(), "model-00003-of-00003.safetensors") {
+		t.Errorf("error does not name the missing shard: %v", err)
+	}
+}
+
+func TestShardedModelRefusesADeclaredSizeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 2)
+	// Cut one shard short inside its payload: every file the index names is
+	// present, the header still parses and still claims every tensor, and the
+	// bytes on disk no longer add up to what the index declares.
+	if err := os.Truncate(paths[1], fixtureTensorBytes/2); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := prepare([]File{{Path: paths[0]}})
+	if err == nil {
+		t.Fatal("prepare accepted shards whose total size contradicts the index")
+	}
+}
+
+// TestShardedModelRefusesAnIndexNamingAPathOutsideItself: the index arrives
+// with the download, so its shard names are publisher-supplied text. A name
+// that walks out of the model directory would otherwise be hashed, stored and
+// pushed as a layer of the model.
+func TestShardedModelRefusesAnIndexNamingAPathOutsideItself(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "model")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	paths := writeShardedModel(t, dir, 1)
+	if err := os.WriteFile(filepath.Join(root, "secret.pem"), []byte("private key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"total_size": fixtureTensorBytes},
+		"weight_map": map[string]string{
+			"t1":     filepath.Base(paths[0]),
+			"stolen": "../secret.pem",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, safetensors.IndexName), ix, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = prepare([]File{{Path: paths[0]}})
+	if err == nil {
+		t.Fatal("prepare followed a path out of the model directory named by the index")
+	}
+	if !strings.Contains(err.Error(), "secret.pem") {
+		t.Errorf("error does not name the rejected entry: %v", err)
+	}
+}
+
+// TestStrayWeightFileLeavesTheMetadataAlone: recorded metadata must describe
+// the layers the artifact carries. An adapter sitting beside a model is not
+// part of it, so neither its bytes nor its parameters belong in the artifact.
+func TestStrayWeightFileLeavesTheMetadataAlone(t *testing.T) {
+	const wantLabel = "16.4K" // one 128x128 tensor
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 1)
+
+	_, info, err := prepare([]File{{Path: paths[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SizeLabel != wantLabel {
+		t.Fatalf("SizeLabel = %q for the model alone, want %q", info.SizeLabel, wantLabel)
+	}
+
+	stray := filepath.Join(dir, "adapter_model.safetensors")
+	body := safetensorstest.Shard(
+		safetensorstest.Tensor{Name: "adapter", DType: "F32", Shape: []int64{512, 512}})
+	if err := os.WriteFile(stray, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ordered, info, err := prepare([]File{{Path: paths[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SizeLabel != wantLabel {
+		t.Errorf("SizeLabel = %q with an adapter beside the model, want %q", info.SizeLabel, wantLabel)
+	}
+	for _, f := range ordered {
+		if filepath.Base(f.Path) == "adapter_model.safetensors" {
+			t.Error("an adapter the index does not name was packed into the artifact")
+		}
+	}
+}
+
+// TestShardedModelRequiresItsConfig drives the gather directly: config.json
+// carries the architecture and the context length, and a runtime handed the
+// weights without it has nothing to build the model from.
+func TestShardedModelRequiresItsConfig(t *testing.T) {
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 2)
+	if err := os.Remove(filepath.Join(dir, safetensors.ConfigName)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := gatherSafetensorsShards([]File{{Path: paths[0]}})
+	if err == nil {
+		t.Fatal("gather accepted a safetensors model with no config.json")
+	}
+	if !strings.Contains(err.Error(), safetensors.ConfigName) {
+		t.Errorf("error does not name the missing file: %v", err)
+	}
+}
+
+func TestSafetensorsAndGGUFCannotShareAnArtifact(t *testing.T) {
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 1)
+	gg := filepath.Join(dir, "other.gguf")
+	if err := os.WriteFile(gg, []byte("GGUF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepare([]File{{Path: paths[0]}, {Path: gg}}); err == nil {
+		t.Fatal("prepare accepted a mixed GGUF and safetensors input set")
+	}
+}

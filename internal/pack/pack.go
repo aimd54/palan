@@ -202,10 +202,32 @@ func prepare(files []File) ([]File, modelmeta.Info, error) {
 	if len(files) == 0 {
 		return nil, modelmeta.Info{}, fmt.Errorf("no input files")
 	}
-	files, err := gatherSplitParts(files)
+
+	safe := hasSafetensors(files)
+	gg := false
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.Path), ".gguf") {
+			gg = true
+		}
+	}
+	// The model config records one format, and a runtime loads one format, so
+	// an artifact that carried both would describe itself wrongly whichever it
+	// claimed.
+	if safe && gg {
+		return nil, modelmeta.Info{}, fmt.Errorf(
+			"inputs mix GGUF and safetensors; pack one weight format per artifact")
+	}
+
+	var err error
+	if safe {
+		files, err = gatherSafetensorsShards(files)
+	} else {
+		files, err = gatherSplitParts(files)
+	}
 	if err != nil {
 		return nil, modelmeta.Info{}, err
 	}
+
 	ordered := make([]File, len(files))
 	copy(ordered, files)
 	for i := range ordered {
@@ -231,8 +253,25 @@ func prepare(files []File) ([]File, modelmeta.Info, error) {
 		}
 	}
 	if primary == nil {
-		return nil, modelmeta.Info{}, fmt.Errorf("no weight file (.gguf) among inputs")
+		return nil, modelmeta.Info{}, fmt.Errorf(
+			"no weight file (.gguf or .safetensors) among inputs")
 	}
+
+	if safe {
+		dir := filepath.Dir(primary.Path)
+		shards := make([]string, 0, len(ordered))
+		for _, f := range ordered {
+			if f.Kind == modelspec.LayerKindWeight {
+				shards = append(shards, f.Path)
+			}
+		}
+		cfg, hdr, err := safetensorsMeta(dir, shards)
+		if err != nil {
+			return nil, modelmeta.Info{}, err
+		}
+		return ordered, modelmeta.FromSafetensors(cfg, hdr, filepath.Base(dir)), nil
+	}
+
 	info, err := gguf.ReadFile(primary.Path)
 	if err != nil {
 		return nil, modelmeta.Info{}, fmt.Errorf("reading GGUF header: %w", err)
@@ -278,7 +317,7 @@ func detectKind(name string) modelspec.LayerKind {
 	lower := strings.ToLower(name)
 	base := strings.TrimSuffix(lower, filepath.Ext(lower))
 	switch {
-	case strings.HasSuffix(lower, ".gguf"):
+	case strings.HasSuffix(lower, ".gguf"), strings.HasSuffix(lower, ".safetensors"):
 		return modelspec.LayerKindWeight
 	case base == "license" || base == "notice" || base == "readme" || strings.HasSuffix(lower, ".md"):
 		return modelspec.LayerKindDoc
