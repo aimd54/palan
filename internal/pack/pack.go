@@ -1,7 +1,10 @@
 // Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package pack builds ModelPack artifacts from GGUF files.
+// Package pack builds ModelPack artifacts from GGUF or safetensors weights.
+// The metadata reader is the only part of the path that depends on which one
+// it is; the model config records the format for everything downstream
+// (ADR-0012).
 //
 // Packing is reproducible (see docs/architecture.md, "Artifact format"):
 // layer ordering is fixed (weights, then weight-configs, then docs, each
@@ -10,9 +13,10 @@
 // every run.
 //
 // Two profiles ship the same content in two envelopes: the primary
-// "artifact" profile (raw GGUF layers, zero-copy servable from
-// the store) and the secondary "car" profile (a single-tar-layer OCI image
-// for Kubernetes image volumes and KServe modelcars).
+// "artifact" profile (raw weight layers, which a GGUF model is served from
+// in place in the store) and the secondary "car" profile (a
+// single-tar-layer OCI image for Kubernetes image volumes and KServe
+// modelcars).
 package pack
 
 import (
@@ -203,6 +207,11 @@ func prepare(files []File) ([]File, modelmeta.Info, error) {
 		return nil, modelmeta.Info{}, fmt.Errorf("no input files")
 	}
 
+	files, err := expandDirs(files)
+	if err != nil {
+		return nil, modelmeta.Info{}, err
+	}
+
 	safe := hasSafetensors(files)
 	gg := false
 	for _, f := range files {
@@ -218,7 +227,6 @@ func prepare(files []File) ([]File, modelmeta.Info, error) {
 			"inputs mix GGUF and safetensors; pack one weight format per artifact")
 	}
 
-	var err error
 	if safe {
 		files, err = gatherSafetensorsShards(files)
 	} else {

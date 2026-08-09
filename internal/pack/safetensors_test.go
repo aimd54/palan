@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aimd54/palan/internal/safetensors"
 	"github.com/aimd54/palan/internal/safetensors/safetensorstest"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // Fixture shards carry one BF16 tensor whose payload dwarfs the header, so a
@@ -217,6 +219,99 @@ func TestShardedModelRequiresItsConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), safetensors.ConfigName) {
 		t.Errorf("error does not name the missing file: %v", err)
+	}
+}
+
+// TestDirectoryInputPacksTheModelInsideIt: a safetensors model is published as
+// a directory of shards rather than as a single file, so the directory is the
+// name a user has for the model.
+func TestDirectoryInputPacksTheModelInsideIt(t *testing.T) {
+	dir := t.TempDir()
+	writeShardedModel(t, dir, 3)
+
+	ordered, info, err := prepare([]File{{Path: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Format != "safetensors" {
+		t.Errorf("Format = %q, want safetensors", info.Format)
+	}
+	names := map[string]bool{}
+	weights := 0
+	for _, f := range ordered {
+		names[filepath.Base(f.Path)] = true
+		if f.Kind == modelspec.LayerKindWeight {
+			weights++
+		}
+	}
+	for _, want := range []string{
+		"model-00001-of-00003.safetensors",
+		"model-00002-of-00003.safetensors",
+		"model-00003-of-00003.safetensors",
+		safetensors.IndexName,
+		safetensors.ConfigName,
+	} {
+		if !names[want] {
+			t.Errorf("%s missing from the packed set; got %v", want, names)
+		}
+	}
+	if weights != 3 {
+		t.Errorf("packed %d weight file(s) from a 3-shard model, want 3", weights)
+	}
+	if len(ordered) != 5 {
+		t.Errorf("packed %d file(s), want 3 shards plus the index and the config", len(ordered))
+	}
+}
+
+// TestDirectoryInputPacksTheShardsTheIndexNames: the index states which shards
+// the model is made of, so a second set of weights in the same directory is a
+// different model. Taking every .safetensors file in the directory would pack
+// an adapter into the artifact and count its tensors as the model's parameters.
+func TestDirectoryInputPacksTheShardsTheIndexNames(t *testing.T) {
+	const wantLabel = "32.8K" // two 128x128 tensors
+	dir := t.TempDir()
+	writeShardedModel(t, dir, 2)
+	body := safetensorstest.Shard(
+		safetensorstest.Tensor{Name: "adapter", DType: "F32", Shape: []int64{512, 512}})
+	if err := os.WriteFile(filepath.Join(dir, "adapter_model.safetensors"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ordered, info, err := prepare([]File{{Path: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SizeLabel != wantLabel {
+		t.Errorf("SizeLabel = %q, want %q for the two shards the index names", info.SizeLabel, wantLabel)
+	}
+	weights := []string{}
+	for _, f := range ordered {
+		if f.Kind == modelspec.LayerKindWeight {
+			weights = append(weights, filepath.Base(f.Path))
+		}
+	}
+	want := []string{
+		"model-00001-of-00002.safetensors",
+		"model-00002-of-00002.safetensors",
+	}
+	if !slices.Equal(weights, want) {
+		t.Errorf("weight files = %v, want %v", weights, want)
+	}
+}
+
+// TestDirectoryInputWithoutWeightsIsRefused: naming a directory is how a
+// safetensors model is packed, so a directory holding none says so.
+func TestDirectoryInputWithoutWeightsIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tiny.gguf"), []byte("GGUF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := prepare([]File{{Path: dir}})
+	if err == nil {
+		t.Fatal("prepare accepted a directory with no safetensors shard in it")
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error does not name the directory: %v", err)
 	}
 }
 

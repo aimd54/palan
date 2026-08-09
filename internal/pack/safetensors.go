@@ -46,6 +46,71 @@ func absPath(p string) string {
 	return a
 }
 
+// expandDirs replaces a directory input with the shards of the safetensors
+// model inside it. A safetensors model is published as a directory, so that is
+// the name a user has for it, and a path that is not a directory is passed
+// through for the rest of the pack path to read.
+//
+// A path that cannot be stat'ed is passed through too, so that a mistyped
+// filename is reported where the file is opened rather than here.
+func expandDirs(files []File) ([]File, error) {
+	out := make([]File, 0, len(files))
+	for _, f := range files {
+		fi, err := os.Stat(f.Path)
+		if err != nil || !fi.IsDir() {
+			out = append(out, f)
+			continue
+		}
+		shards, err := shardsInDir(f.Path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, shards...)
+	}
+	return out, nil
+}
+
+// shardsInDir lists the weight files of the model dir holds, reading the shard
+// index when one is present.
+//
+// The index states which shards the model is made of, so weights it does not
+// name are a different model: an adapter, or a second quantization, published
+// beside this one. Packing those would put another model's bytes in the
+// artifact and count its tensors as this model's parameters. Names come from
+// the directory listing, so nothing the index says can select a file outside
+// dir; the index is read again in gatherSafetensorsShards, which is where a
+// name that reaches outside the directory is refused.
+func shardsInDir(dir string) ([]File, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	named := map[string]bool{}
+	if ix, err := safetensors.ReadIndex(filepath.Join(dir, safetensors.IndexName)); err == nil {
+		for _, shard := range ix.Shards() {
+			named[shard] = true
+		}
+	}
+	out := make([]File, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !isSafetensors(e.Name()) {
+			continue
+		}
+		if len(named) > 0 && !named[e.Name()] {
+			continue
+		}
+		out = append(out, File{Path: filepath.Join(dir, e.Name())})
+	}
+	if len(out) == 0 {
+		if len(named) > 0 {
+			return nil, fmt.Errorf("%s names %d shard(s) and none of them is in %s",
+				safetensors.IndexName, len(named), dir)
+		}
+		return nil, fmt.Errorf("%s holds no .safetensors file; name a GGUF file to pack GGUF weights", dir)
+	}
+	return out, nil
+}
+
 // gatherSafetensorsShards completes a safetensors input set from the shard
 // index beside it, and refuses a set the index says is incomplete.
 //

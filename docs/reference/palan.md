@@ -44,7 +44,7 @@ against any OCI 1.1 registry. Daemonless, in one binary.
 * [palan login](palan_login.md)	 - Log in to a registry
 * [palan logout](palan_logout.md)	 - Remove stored credentials for a registry
 * [palan ls](palan_ls.md)	 - List models in the local store or a remote registry
-* [palan pack](palan_pack.md)	 - Build a ModelPack artifact from GGUF and companion files
+* [palan pack](palan_pack.md)	 - Build a ModelPack artifact from GGUF or safetensors weights
 * [palan pull](palan_pull.md)	 - Pull a model from a registry into the local store
 * [palan push](palan_push.md)	 - Push a locally-stored model to its registry
 * [palan rm](palan_rm.md)	 - Unlink model references from the local store

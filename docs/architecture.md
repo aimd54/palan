@@ -107,10 +107,10 @@ inspectable by generic OCI tooling. palan-specific needs go in
 
 ### Manifest: the "artifact" profile
 
-Each GGUF file is stored as its own weight layer, **raw and
-uncompressed**: GGUF is already high-entropy, so compression wastes CPU for
-close to zero size gain, and a raw layer means the blob in the local store
-*is* the file `llama-server` mmaps, with no unpack step and no double
+Each weight file is stored as its own weight layer, **raw and
+uncompressed**: weight data is already high-entropy, so compression wastes
+CPU for close to zero size gain, and a raw layer means the blob in the local
+store *is* the file `llama-server` mmaps, with no unpack step and no double
 storage.
 
 ```json
@@ -155,12 +155,41 @@ answer `palan ls --remote` or `palan describe` questions, and to check
 whether a model will fit in VRAM, without touching any weight bytes. See
 `palan describe` in the [CLI reference](reference/palan_describe.md).
 
+### Weight formats
+
+The weight media type, `application/vnd.cncf.model.weight.v1.raw`, is
+format-agnostic: a layer under it holds whatever bytes the publisher
+released, a GGUF file or one shard of a safetensors model. The config blob's
+`format` field is what distinguishes them. It reads `gguf` or `safetensors`,
+and it surfaces in the `FORMAT` column of `palan ls` and in
+`palan describe`.
+
+Everything between `pack` and the weights landing on a node addresses layers
+by digest and media type. Push, pull, signing, verification, garbage
+collection, offline bundles and the car profile read no weight file at all,
+so they behave identically on either format. Serving is where the two part
+company: `llama-server` reads GGUF, so `palan serve` and `palan run` load a
+GGUF artifact and refuse one whose config declares another format, naming
+that format in the refusal. A safetensors artifact is distributed and
+verified here and served by a runtime that reads it, vLLM being the usual
+one. See [ADR-0012](adr/0012-distribution-is-format-neutral.md).
+
+A safetensors model is packed from its directory, since that is the shape a
+repository publishes it in. The shard index
+(`model.safetensors.index.json`) states which shards the model consists of;
+all of them are packed, together with `config.json` and any tokenizer files
+beside them, and a set the index says is short is refused. What each format
+publishes decides what the artifact can record: a GGUF header states
+quantization, context length and a license, while a safetensors repository
+states architecture and context length in `config.json` and leaves
+`--license` as the only source of a license.
+
 ### "Car" profile for image volumes
 
 Kubernetes image volumes mount OCI *objects* directly via the container
 runtime. Not every runtime supports raw-layer artifacts for this yet, so
 `palan pack --profile car` additionally produces a modelcar-style OCI
-*image*: the same GGUF wrapped in a single tar layer with a standard image
+*image*: the same files wrapped in a single tar layer with a standard image
 config, tagged `<tag>-car`. Same content, two envelopes. The artifact
 profile serves palan and ORAS clients, the car profile serves kubelet and
 KServe. See the [Kubernetes guide](guides/kubernetes.md) for when to use
