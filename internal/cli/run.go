@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
+	"github.com/aimd54/palan/internal/modelmeta"
 	"github.com/aimd54/palan/internal/refname"
 	palanruntime "github.com/aimd54/palan/internal/runtime"
 	"github.com/aimd54/palan/internal/store"
@@ -197,6 +198,9 @@ func loadModelInfo(ctx context.Context, st *store.Store, ref string, desc ocispe
 	if !modelspec.IsRaw(weight.MediaType) {
 		return nil, fmt.Errorf("%s stores weights as %s; only raw weight layers are directly servable", ref, weight.MediaType)
 	}
+	if err := requireGGUF(ctx, st, ref, manifest, weight); err != nil {
+		return nil, err
+	}
 	blobPath, err := st.BlobPath(weight.Digest)
 	if err != nil {
 		return nil, err
@@ -208,6 +212,45 @@ func loadModelInfo(ctx context.Context, st *store.Store, ref string, desc ocispe
 		}
 	}
 	return info, nil
+}
+
+// requireGGUF refuses an artifact whose weights llama.cpp cannot load
+// (ADR-0012). The declared format decides when the config states one. The
+// bytes decide otherwise, because an artifact packed by another tool may leave
+// the field empty, and a label is not evidence.
+func requireGGUF(ctx context.Context, st *store.Store, ref string, manifest ocispec.Manifest, weight *ocispec.Descriptor) error {
+	declared := ""
+	if manifest.Config.MediaType == modelspec.MediaTypeModelConfig {
+		model, err := store.FetchJSON[modelspec.Model](ctx, st.OCI(), manifest.Config)
+		if err != nil {
+			return err
+		}
+		declared = model.Config.Format
+	}
+	if declared != "" && declared != modelmeta.FormatGGUF {
+		return fmt.Errorf("%s holds %s weights, which llama.cpp cannot load; "+
+			"pull and verify it here, and serve it from a runtime that reads %s",
+			ref, declared, declared)
+	}
+
+	path, err := st.BlobPath(weight.Digest)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path) // #nosec G304 -- a blob path from the local store
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return fmt.Errorf("%s: reading the weight header: %w", ref, err)
+	}
+	if string(magic[:]) != "GGUF" {
+		return fmt.Errorf("%s: the primary weight layer does not begin with the GGUF magic, "+
+			"so llama.cpp cannot load it", ref)
+	}
+	return nil
 }
 
 // chat opens the interactive session, choosing the interface the destination
