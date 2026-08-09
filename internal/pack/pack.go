@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package pack builds ModelPack artifacts from GGUF or safetensors weights.
-// The metadata reader is the only part of the path that depends on which one
-// it is; the model config records the format for everything downstream
-// (ADR-0012).
+// Either format's metadata lands in one modelmeta.Info record, and the model
+// config carries the format for everything downstream (ADR-0012). What depends
+// on the format here is the metadata readers, the gathering of the files a
+// model consists of, and the refusal of an input set that mixes the two.
 //
 // Packing is reproducible (see docs/architecture.md, "Artifact format"):
 // layer ordering is fixed (weights, then weight-configs, then docs, each
@@ -108,6 +109,7 @@ func Model(ctx context.Context, st *store.Store, files []File, ref string, opts 
 			Architecture: info.Architecture,
 			Format:       info.Format,
 			ParamSize:    info.SizeLabel,
+			Precision:    info.Precision,
 			Quantization: info.Quantization,
 		},
 	}
@@ -215,8 +217,9 @@ func prepare(files []File) ([]File, modelmeta.Info, error) {
 	safe := hasSafetensors(files)
 	gg := false
 	for _, f := range files {
-		if strings.HasSuffix(strings.ToLower(f.Path), ".gguf") {
+		if isGGUF(f.Path) {
 			gg = true
+			break
 		}
 	}
 	// The model config records one format, and a runtime loads one format, so

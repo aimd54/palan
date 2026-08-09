@@ -4,6 +4,7 @@
 package pack
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/aimd54/palan/internal/safetensors"
 	"github.com/aimd54/palan/internal/safetensors/safetensorstest"
+	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
 
@@ -324,5 +326,61 @@ func TestSafetensorsAndGGUFCannotShareAnArtifact(t *testing.T) {
 	}
 	if _, _, err := prepare([]File{{Path: paths[0]}, {Path: gg}}); err == nil {
 		t.Fatal("prepare accepted a mixed GGUF and safetensors input set")
+	}
+}
+
+// TestDirectoryHoldingBothFormatsIsRefused: expanding a directory yields its
+// safetensors shards, so the GGUF beside them is gone before the mixed-format
+// check sees the input set. Packing the shards and leaving the GGUF out gives
+// a user an artifact that is missing the file they named the directory for.
+func TestDirectoryHoldingBothFormatsIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeShardedModel(t, dir, 2)
+	if err := os.WriteFile(filepath.Join(dir, "tiny.gguf"), []byte("GGUF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ordered, _, err := prepare([]File{{Path: dir}})
+	if err == nil {
+		t.Fatalf("prepare packed %d file(s) from a directory holding both weight formats", len(ordered))
+	}
+	for _, want := range []string{dir, "GGUF", "safetensors"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// TestSafetensorsConfigRecordsTheDtypeAsPrecision: the ModelPack config keeps
+// precision and quantization apart, precision holding a numeric type such as
+// bf16 and quantization a scheme such as awq. Writing bfloat16 into
+// quantization describes weights that were never quantized as quantized
+// everywhere the config is read: ls, describe and any other ModelPack tool.
+func TestSafetensorsConfigRecordsTheDtypeAsPrecision(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeShardedModel(t, dir, 2)
+	st := openTestStore(t)
+
+	desc, err := Model(ctx, st, []File{{Path: dir}}, "registry.example/llm/st:v1", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := store.FetchJSON[modelspec.Model](ctx, st.OCI(), manifest.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Config.Format != "safetensors" {
+		t.Errorf("format = %q, want safetensors", model.Config.Format)
+	}
+	if model.Config.Precision != "bfloat16" {
+		t.Errorf("precision = %q, want the dtype bfloat16", model.Config.Precision)
+	}
+	if model.Config.Quantization != "" {
+		t.Errorf("quantization = %q, want it empty for unquantized weights", model.Config.Quantization)
 	}
 }

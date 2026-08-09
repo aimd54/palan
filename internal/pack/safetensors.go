@@ -36,6 +36,30 @@ func isSafetensors(path string) bool {
 	return strings.HasSuffix(strings.ToLower(path), ".safetensors")
 }
 
+func isGGUF(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".gguf")
+}
+
+// weightFormatsInDir reports which weight formats sit directly in dir.
+func weightFormatsInDir(dir string) (gg, safe bool, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, false, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch {
+		case isGGUF(e.Name()):
+			gg = true
+		case isSafetensors(e.Name()):
+			safe = true
+		}
+	}
+	return gg, safe, nil
+}
+
 // absPath resolves p for identity comparison, falling back to p itself when
 // the working directory cannot be read.
 func absPath(p string) string {
@@ -53,6 +77,11 @@ func absPath(p string) string {
 //
 // A path that cannot be stat'ed is passed through too, so that a mistyped
 // filename is reported where the file is opened rather than here.
+//
+// A directory holding both weight formats is refused here. Expansion yields
+// safetensors shards alone, so the GGUF is gone by the time prepare checks the
+// input set for a mix of formats, and the artifact would come out without the
+// file the directory was named for.
 func expandDirs(files []File) ([]File, error) {
 	out := make([]File, 0, len(files))
 	for _, f := range files {
@@ -60,6 +89,15 @@ func expandDirs(files []File) ([]File, error) {
 		if err != nil || !fi.IsDir() {
 			out = append(out, f)
 			continue
+		}
+		gg, safe, err := weightFormatsInDir(f.Path)
+		if err != nil {
+			return nil, err
+		}
+		if gg && safe {
+			return nil, fmt.Errorf(
+				"%s holds both GGUF and safetensors weights; name the weight file to pack, one format per artifact",
+				f.Path)
 		}
 		shards, err := shardsInDir(f.Path)
 		if err != nil {

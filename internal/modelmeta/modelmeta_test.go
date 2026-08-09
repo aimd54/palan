@@ -49,7 +49,7 @@ func TestFromSafetensorsCarriesEveryFieldPackRecords(t *testing.T) {
 		Architecture:  "llama",
 		Name:          "tiny",
 		SizeLabel:     "7.3M",
-		Quantization:  "bfloat16",
+		Precision:     "bfloat16",
 		ContextLength: 4096,
 		Format:        "safetensors",
 	}
@@ -58,6 +58,11 @@ func TestFromSafetensorsCarriesEveryFieldPackRecords(t *testing.T) {
 	}
 	if got.License != "" {
 		t.Errorf("License = %q; safetensors publishes none, so only a caller supplies it", got.License)
+	}
+	// A dtype is a precision. The ModelPack config reserves quantization for a
+	// scheme such as awq or gptq, which unquantized weights do not have.
+	if got.Quantization != "" {
+		t.Errorf("Quantization = %q; a dtype belongs in Precision", got.Quantization)
 	}
 }
 
@@ -75,8 +80,8 @@ func TestFromSafetensorsFallsBackWhenTheConfigIsSparse(t *testing.T) {
 	if got.Architecture != "MistralForCausalLM" {
 		t.Errorf("Architecture = %q, want MistralForCausalLM", got.Architecture)
 	}
-	if got.Quantization != "F16" {
-		t.Errorf("Quantization = %q, want the dominant shard dtype F16", got.Quantization)
+	if got.Precision != "F16" {
+		t.Errorf("Precision = %q, want the dominant shard dtype F16", got.Precision)
 	}
 	if got.ContextLength != 0 {
 		t.Errorf("ContextLength = %d; an unstated context length must stay unset", got.ContextLength)

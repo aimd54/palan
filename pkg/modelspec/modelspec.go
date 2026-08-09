@@ -27,9 +27,11 @@ const (
 	// MediaTypeModelConfig is the media type of the model config blob.
 	MediaTypeModelConfig = specv1.MediaTypeModelConfig
 
-	// Raw (unarchived, uncompressed) layer media types. palan packs GGUF
-	// weights raw: the blob in the local store is the file llama-server
-	// mmaps, with no unpack step and no double storage.
+	// Raw (unarchived, uncompressed) layer media types. palan packs weights
+	// raw in either format: the blob in the local store is the file the
+	// publisher released, a GGUF file or one shard of a safetensors model,
+	// with no unpack step and no double storage. A GGUF blob is the file
+	// llama-server mmaps.
 	MediaTypeModelWeightRaw       = specv1.MediaTypeModelWeightRaw
 	MediaTypeModelWeightConfigRaw = specv1.MediaTypeModelWeightConfigRaw
 	MediaTypeModelDocRaw          = specv1.MediaTypeModelDocRaw

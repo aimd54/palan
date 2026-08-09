@@ -3,7 +3,8 @@
 
 // Package modelmeta carries the model metadata pack records in an artifact,
 // independently of the weight format it was read from. Distribution is
-// format-neutral (ADR-0012); only the reader that fills this struct is not.
+// format-neutral (ADR-0012); a constructor per format fills this struct, and
+// nothing downstream of it reads a weight file.
 package modelmeta
 
 import (
@@ -25,9 +26,15 @@ const (
 // Every field is optional except Format: a weight format that cannot supply
 // one leaves it empty rather than inventing a value.
 type Info struct {
-	Architecture  string
-	Name          string
-	SizeLabel     string
+	Architecture string
+	Name         string
+	SizeLabel    string
+	// Precision is the numeric type the weights are stored in, bf16 or fp16
+	// for example, and Quantization names a quantization scheme such as awq
+	// or gptq. The ModelPack config keeps the two apart, so a value goes to
+	// the field its source describes: a GGUF file type is a quantization, a
+	// safetensors dtype is a precision.
+	Precision     string
 	Quantization  string
 	License       string
 	ContextLength uint64
@@ -51,20 +58,23 @@ func FromGGUF(g *gguf.Info) Info {
 // the model name, which safetensors does not publish; callers pass the source
 // directory or repository name. License stays empty for the same reason: a
 // safetensors model carries no license field, so only a caller can supply one.
+// The dtype fills Precision, from config.json when it states one and from the
+// shard headers otherwise. Quantization stays empty, since weights that were
+// never quantized name no scheme.
 func FromSafetensors(c *safetensors.Config, h *safetensors.Header, name string) Info {
 	arch := c.ModelType
 	if arch == "" && len(c.Architectures) > 0 {
 		arch = c.Architectures[0]
 	}
-	quant := c.TorchDType
-	if quant == "" {
-		quant = h.DominantDType()
+	prec := c.TorchDType
+	if prec == "" {
+		prec = h.DominantDType()
 	}
 	return Info{
 		Architecture:  arch,
 		Name:          name,
 		SizeLabel:     FormatParamSize(h.ParamCount()),
-		Quantization:  quant,
+		Precision:     prec,
 		ContextLength: c.MaxPositionEmbeddings,
 		Format:        FormatSafetensors,
 	}

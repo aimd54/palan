@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
+	"github.com/aimd54/palan/internal/gguf"
 	"github.com/aimd54/palan/internal/modelmeta"
 	"github.com/aimd54/palan/internal/refname"
 	palanruntime "github.com/aimd54/palan/internal/runtime"
@@ -246,9 +247,11 @@ func requireGGUF(ctx context.Context, st *store.Store, ref string, manifest ocis
 	if _, err := io.ReadFull(f, magic[:]); err != nil {
 		return fmt.Errorf("%s: reading the weight header: %w", ref, err)
 	}
-	if string(magic[:]) != "GGUF" {
-		return fmt.Errorf("%s: the primary weight layer does not begin with the GGUF magic, "+
-			"so llama.cpp cannot load it", ref)
+	if string(magic[:]) != gguf.Magic {
+		return fmt.Errorf("%s: the primary weight layer begins with %q rather than the %s magic, "+
+			"so llama.cpp cannot load it; pull and verify it here, and serve it from a "+
+			"runtime that reads the format those bytes belong to",
+			ref, magic[:], gguf.Magic)
 	}
 	return nil
 }

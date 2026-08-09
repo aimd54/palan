@@ -181,8 +181,9 @@ all of them are packed, together with `config.json` and any tokenizer files
 beside them, and a set the index says is short is refused. What each format
 publishes decides what the artifact can record: a GGUF header states
 quantization, context length and a license, while a safetensors repository
-states architecture and context length in `config.json` and leaves
-`--license` as the only source of a license.
+states architecture and context length in `config.json`, publishes a dtype
+that lands in the config's `precision` field, and leaves `--license` as the
+only source of a license.
 
 ### "Car" profile for image volumes
 

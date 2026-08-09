@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aimd54/palan/internal/gguf"
 	"github.com/aimd54/palan/internal/gguf/gguftest"
 	"github.com/aimd54/palan/internal/pack"
 	"github.com/aimd54/palan/internal/safetensors"
@@ -173,7 +174,15 @@ func TestServingRefusesWeightsThatAreNotGGUFBytes(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadModelInfo(ctx, st, "llm/tiny:v1", desc); err == nil {
+	_, err = loadModelInfo(ctx, st, "llm/tiny:v1", desc)
+	if err == nil {
 		t.Fatal("loadModelInfo accepted a weight blob that is not a GGUF file")
+	}
+	// The refusal reports the bytes it found and where the artifact is still
+	// usable, so a reader is not left looking for a flag (ADR-0012).
+	for _, want := range []string{`"XXXX"`, gguf.Magic, "runtime"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not mention %s: %v", want, err)
+		}
 	}
 }

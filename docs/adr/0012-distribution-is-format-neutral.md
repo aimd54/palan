@@ -55,9 +55,10 @@ format-neutral**, and **keep serving on GGUF**.
 - `pack` accepts a safetensors model, including a sharded one, which is packed
   whole or refused rather than in part. The ModelPack config records
   `format: safetensors`.
-- Metadata reading moves behind one interface with an implementation per
-  format, which leaves the reader as the only format-specific code on the pack
-  path.
+- Metadata reading fills one format-neutral record through a constructor per
+  format, and the rest of `pack` reads that record instead of a weight file.
+  Format-specific code stays in the readers, in the gathering of the files a
+  model consists of, and in the refusal of an input set that mixes the two.
 - Everything downstream of `pack` is unchanged, because none of it reads
   weights. A safetensors artifact pushes, pulls, signs, verifies, mirrors
   through an air gap and mounts as a volume on the same code path a GGUF does.
