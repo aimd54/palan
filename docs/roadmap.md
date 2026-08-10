@@ -18,7 +18,7 @@ and refuses anything else, for the reasons in
 | M4 | Router (lazy load, idle unload, LRU eviction, metrics) | ☑ shipped; acceptance measured on GPU (below) |
 | M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
-| M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); interop in CI, not yet run against a published model |
+| M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); a published single-file model packs, a sharded one and the registry round trip are untested |
 
 ## Validated outside CI
 
@@ -63,13 +63,14 @@ a Kubernetes cluster, and a GPU host:
 
 ## Still outstanding
 
-- **A published safetensors model.** The packing path is covered by unit tests
-  and by an interop round trip in CI, both of which build shards whose tensor
-  payload is synthetic. One case deserves naming: a model that sets
-  `tie_word_embeddings` shares a tensor between two names, and a shard index can
-  then declare more bytes than the files hold. Completeness is proved by
-  refusing a shard set smaller than the index declares, so that arrangement is
-  the one that could be refused wrongly.
+- **A safetensors model that arrives already sharded.** A published single-file
+  model packs correctly, and the shard-index comparison has been exercised
+  against real bytes by writing a legitimate one-shard index from a model's own
+  header. What no run has used is an index naming several files, since the
+  smallest published sharded model is around 5 GB.
+- **A safetensors artifact through a registry.** Packing has been run against a
+  published model. Push, pull into a fresh store with a digest comparison, and
+  sign then verify have so far only run against synthetic shards in CI.
 - zot on a cluster with OIDC rather than htpasswd. `/metrics` answers correctly
   for a listed user and refuses everyone else, but has not been scraped by a
   Prometheus-compatible collector ([deploy/zot/README.md](../deploy/zot/README.md)).
@@ -90,6 +91,10 @@ a Kubernetes cluster, and a GPU host:
   into the model config's `precision` field, since `quantization` names a scheme
   such as awq or gptq rather than a numeric type. Neither `ls`, `describe` nor
   their JSON output reads that field yet, so the value is currently invisible.
+- **`/v1/models` lists references that cannot be served.** A safetensors
+  artifact appears in the listing and is then refused on use, as an unsigned
+  model already is under the verification policy. Filtering the listing to what
+  a request would actually be served would spare a client the round trip.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.
 - `verify.required` as the default once signing pipelines are ubiquitous.
