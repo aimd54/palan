@@ -46,6 +46,29 @@ make help       # list all targets
 
 Run `make check` before every commit; CI runs the same gates.
 
+The demonstration in the README is generated. Its source is
+[docs/assets/demo.tape](docs/assets/demo.tape), a VHS script; `make demo`
+re-records the GIF from it, so change the tape and never the image. Recording
+needs `vhs`, `ttyd`, `ffmpeg`, `gifsicle`, `docker` for the registry it
+publishes to and then deletes, `cosign` for the key pair, and network access,
+since the model comes from Hugging Face.
+
+Four rules apply to anything recorded. Run it against a scratch `PALAN_HOME`,
+because whatever appears on screen is baked into an image that no later search
+of this repository can find. Keep the result under 1 MiB, which the target
+checks. Show the timings it really took, since trimming a wait until an
+operation looks faster than it is makes the GIF another thing that reports a
+success it did not earn. And record commands whose output the project decides:
+the current tape ends on a signature verified against a local store rather than
+on a model's answer, because the quality of an answer is not a property of this
+tool and a recording that turns on it is only as good as whichever model
+happened to be loaded.
+
+A refusal is worth recording only if it is real. Verify what the tape proves
+before trusting it: an earlier draft pushed byte-identical content under a
+second tag and recorded a refusal that never happened, because a signature
+covers a digest rather than a tag.
+
 ## Testing policy
 
 New functionality comes with new tests, and bug fixes come with a test that

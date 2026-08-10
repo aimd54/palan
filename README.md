@@ -27,6 +27,12 @@ palan is used two ways:
 A *palan* is the French block-and-tackle hoist for lifting heavy loads.
 This one pulls weights.
 
+![One command fetches a model from Hugging Face, packs it and pushes it to a
+local registry, and it is then signed. On a host that requires a signature, an
+unsigned artifact is refused and the store is left empty; the signed one is
+verified and pulled. The registry is deleted, and verification still succeeds
+from the local store.](docs/assets/demo.gif)
+
 Artifacts are plain ModelPack. They round-trip against
 [modctl](https://github.com/modelpack/modctl), `oras`, and `cosign` in CI,
 so whatever packs a model for an OCI registry can feed palan, and whatever

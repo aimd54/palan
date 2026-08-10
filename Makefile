@@ -72,6 +72,17 @@ check: fmt-check vet lint tidy-check notice-check test ## All local gates (run b
 docs: ## Regenerate the CLI reference under docs/reference
 	go run ./hack/gendocs
 
+.PHONY: demo
+demo: build ## Re-record docs/assets/demo.gif (requires vhs, ttyd, ffmpeg, gifsicle)
+	PATH="$(CURDIR)/bin:$$PATH" vhs docs/assets/demo.tape
+	gifsicle --batch -O3 --lossy=80 docs/assets/demo.gif
+	@size=$$(wc -c < docs/assets/demo.gif); \
+	  printf 'docs/assets/demo.gif: %s bytes\n' "$$size"; \
+	  if [ "$$size" -gt 1048576 ]; then \
+	    printf 'warning: over the 1 MiB budget for a tracked asset; shorten the\n' >&2; \
+	    printf 'tape or lower the framerate rather than committing it as is.\n' >&2; \
+	  fi
+
 .PHONY: lint-docs
 lint-docs: ## Lint markdown files (requires Node; config in .markdownlint-cli2.yaml)
 	npx --yes markdownlint-cli2 "**/*.md"
