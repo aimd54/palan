@@ -2,6 +2,13 @@
 
 Status of palan's build-out milestones as of August 2026.
 
+Two scopes run at different widths, and the distinction decides where most
+items below belong. **Distribution** covers packing, transfer, signing,
+verification and air-gap handling, and is format-neutral: weight layers travel
+raw and the media type names no format. **Serving** is GGUF through llama.cpp
+and refuses anything else, for the reasons in
+[ADR-0012](adr/0012-distribution-is-format-neutral.md).
+
 | Milestone | Scope | Status |
 |---|---|---|
 | M0 | Spike + decision gate | ☑ decided (ADR-0001/0005); hands-on tool trials recorded as deferred |
@@ -11,6 +18,7 @@ Status of palan's build-out milestones as of August 2026.
 | M4 | Router (lazy load, idle unload, LRU eviction, metrics) | ☑ shipped; acceptance measured on GPU (below) |
 | M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
+| M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); interop in CI, not yet run against a published model |
 
 ## Validated outside CI
 
@@ -55,6 +63,13 @@ a Kubernetes cluster, and a GPU host:
 
 ## Still outstanding
 
+- **A published safetensors model.** The packing path is covered by unit tests
+  and by an interop round trip in CI, both of which build shards whose tensor
+  payload is synthetic. One case deserves naming: a model that sets
+  `tie_word_embeddings` shares a tensor between two names, and a shard index can
+  then declare more bytes than the files hold. Completeness is proved by
+  refusing a shard set smaller than the index declares, so that arrangement is
+  the one that could be refused wrongly.
 - zot on a cluster with OIDC rather than htpasswd. `/metrics` answers correctly
   for a listed user and refuses everyone else, but has not been scraped by a
   Prometheus-compatible collector ([deploy/zot/README.md](../deploy/zot/README.md)).
@@ -63,12 +78,30 @@ a Kubernetes cluster, and a GPU host:
 - KServe modelcars, the third Kubernetes consumption pattern.
 - Router acceptance with two models large enough that the memory budget has to
   arbitrate between them, rather than a forced small budget.
+- TLS end to end, which needs a certificate issuer the cluster trusts.
 
 ## Planned / open
 
+- **`pack hf://` fetches a single file.** A safetensors model is published as a
+  directory, so it comes down with another tool first and is packed from disk.
+  Resolving a whole repository through the same path is the obvious next step
+  for the import route (ADR-0009 covers the single-file case).
+- **`precision` is recorded and not shown.** A safetensors model's dtype goes
+  into the model config's `precision` field, since `quantization` names a scheme
+  such as awq or gptq rather than a numeric type. Neither `ls`, `describe` nor
+  their JSON output reads that field yet, so the value is currently invisible.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
 - Keyless (Fulcio/Rekor) signing for connected environments.
 - `verify.required` as the default once signing pipelines are ubiquitous.
-- Upstreaming the GGUF packing path to modctl if welcome (see ADR-0005).
-- Stretch goals: LoRA adapter artifacts, multimodal mmproj, safetensors/vLLM
-  profile.
+- Upstreaming the packing path to modctl if welcome (see ADR-0005).
+- Stretch goals: LoRA adapter artifacts, multimodal mmproj.
+
+## Decided against
+
+- **Serving safetensors.** llama.cpp does not read them, and vLLM is a Python
+  process carrying CUDA and torch, so it cannot travel as a static binary or
+  start without a container runtime. Serving it would cost the property that
+  lets palan run as an init container and on hosts with no container engine.
+  For those weights palan is the distribution and verification layer in front of
+  whichever inference stack is already running
+  ([ADR-0012](adr/0012-distribution-is-format-neutral.md)).
