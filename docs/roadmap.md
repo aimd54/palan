@@ -18,7 +18,7 @@ and refuses anything else, for the reasons in
 | M4 | Router (lazy load, idle unload, LRU eviction, metrics) | ☑ shipped; acceptance measured on GPU (below) |
 | M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
-| M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); a published single-file model packs, a sharded one and the registry round trip are untested |
+| M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
 
 ## Validated outside CI
 
@@ -60,17 +60,16 @@ a Kubernetes cluster, and a GPU host:
   referrers API as well as tagged, and a signature written by an OCI 1.1
   signing tool, which carries no tag, verifies. Both checked against zot and
   the cosign binary (ADR-0010).
+- **Safetensors, end to end**: a published model packed, pushed, pulled into a
+  store that had never seen it with the digest unchanged, signed, verified,
+  carried through an air gap and verified again with the registry deleted. Run
+  both as a single file and as three shards named by an index, where naming one
+  shard packs the whole model. The weight layer's digest equals the checksum of
+  the file the publisher released, so nothing rewrites the weights in transit.
+  Serving refuses these artifacts by name (ADR-0012).
 
 ## Still outstanding
 
-- **A safetensors model that arrives already sharded.** A published single-file
-  model packs correctly, and the shard-index comparison has been exercised
-  against real bytes by writing a legitimate one-shard index from a model's own
-  header. What no run has used is an index naming several files, since the
-  smallest published sharded model is around 5 GB.
-- **A safetensors artifact through a registry.** Packing has been run against a
-  published model. Push, pull into a fresh store with a digest comparison, and
-  sign then verify have so far only run against synthetic shards in CI.
 - zot on a cluster with OIDC rather than htpasswd. `/metrics` answers correctly
   for a listed user and refuses everyone else, but has not been scraped by a
   Prometheus-compatible collector ([deploy/zot/README.md](../deploy/zot/README.md)).
