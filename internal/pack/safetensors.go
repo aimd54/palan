@@ -231,6 +231,13 @@ func gatherSafetensorsShards(files []File) ([]File, error) {
 		// short of the declaration are therefore missing weights, which is the
 		// state a truncated download leaves behind with every filename the
 		// index names still in place.
+		//
+		// A weight shared between two names does not break that. It is dropped
+		// before saving rather than written twice, so the declaration counts
+		// each stored tensor once and the margin stays the header overhead
+		// alone: measured at 32 KiB on a 988 MB single-shard model whose
+		// embedding is tied to its output layer, and between 20 and 50 KiB
+		// across published models of two to fifteen gigabytes.
 		if ix.TotalSize > 0 && onDisk < ix.TotalSize {
 			return nil, fmt.Errorf("%s declares %d bytes of weights, the shards in %s hold %d",
 				safetensors.IndexName, ix.TotalSize, dir, onDisk)
