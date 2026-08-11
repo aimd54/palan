@@ -60,6 +60,18 @@ a Kubernetes cluster, and a GPU host:
   referrers API as well as tagged, and a signature written by an OCI 1.1
   signing tool, which carries no tag, verifies. Both checked against zot and
   the cosign binary (ADR-0010).
+- **A redirect the client cannot follow**: with object storage on a network the
+  client cannot reach, a pull fails while the registry answers healthily, since
+  the client and not the registry follows the redirect. Reproduced with two
+  container networks, and the message names both the registry it asked and the
+  redirect target it could not reach. The same pull from the storage-side
+  network succeeds. Note that `redirectBlobURL` belongs beside `storageDriver`
+  rather than inside it: nested one level deeper it is ignored without an error.
+- **Transport security**: against a private certificate authority, palan
+  verifies the chain and refuses an untrusted certificate rather than
+  continuing, and `--ca-file` is what makes a private authority usable.
+- **Metrics collection**: `/metrics` is scraped by a Prometheus-compatible
+  collector, which records the series rather than only receiving a 200.
 - **Safetensors, end to end**: a published model packed, pushed, pulled into a
   store that had never seen it with the digest unchanged, signed, verified,
   carried through an air gap and verified again with the registry deleted. Run
@@ -70,15 +82,30 @@ a Kubernetes cluster, and a GPU host:
 
 ## Still outstanding
 
-- zot on a cluster with OIDC rather than htpasswd. `/metrics` answers correctly
-  for a listed user and refuses everyone else, but has not been scraped by a
-  Prometheus-compatible collector ([deploy/zot/README.md](../deploy/zot/README.md)).
-- A registry whose object storage sits on a different network from the cluster,
-  which is where the blob redirect is most likely to break.
-- KServe modelcars, the third Kubernetes consumption pattern.
-- Router acceptance with two models large enough that the memory budget has to
-  arbitrate between them, rather than a forced small budget.
-- TLS end to end, which needs a certificate issuer the cluster trusts.
+Each of these names what it actually waits on. None of them waits on a
+particular network or a particular building: the boundary cases that looked
+like they did have since been reproduced with container networks on one
+machine, and are recorded above.
+
+- **Two models large enough that the memory budget has to arbitrate between
+  them**, rather than a budget set deliberately small. Waits on a GPU with
+  enough memory for both, and on the models being present. Eviction, idle
+  unload and the automatic budget probe are all measured; what is untested is
+  the arithmetic when a wrong estimate would surface as an allocation failure
+  instead of an eviction.
+- **KServe modelcars**, the third Kubernetes consumption pattern. Waits on a
+  cluster running KServe. Its raw deployment mode would do, which avoids
+  pulling in a service mesh, so this is reachable on a laptop cluster rather
+  than needing a permanent one
+  ([deploy/k8s-examples/](../deploy/k8s-examples/README.md)).
+- **zot with OIDC rather than htpasswd.** Waits on an identity provider to
+  point it at; one in a container is enough. Note that palan's own `login`
+  takes a username and password today, so what this proves is zot honouring a
+  provider and palan carrying a token obtained elsewhere.
+- **A publicly trusted certificate.** The client half is done: palan verifies a
+  chain and refuses an untrusted one, tested against a private CA. What remains
+  is an ACME issuer the wider world trusts, which exercises the issuer rather
+  than palan.
 
 ## Planned / open
 

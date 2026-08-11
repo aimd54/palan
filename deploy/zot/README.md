@@ -31,6 +31,12 @@ For GitOps, wrap the same chart + values in an Argo CD `Application`.
    model-sized blobs (see
    [Registry layer](../../docs/architecture.md#registry-layer)).
 
+   It belongs beside `storageDriver`, not inside it, as in
+   [values.yaml](values.yaml). Nested one level deeper it is ignored: zot
+   starts, serves blobs and logs nothing, and an unranged GET answers 200
+   where it should answer 307. Check for the 307 rather than assume the
+   setting took.
+
    Any store implementing the S3 API works, and zot's driver needs a small
    part of it: presigned URLs, signature v4, path-style addressing
    (`forcepathstyle`), ranged reads and multipart upload. Versioning, ACLs,
