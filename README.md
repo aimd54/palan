@@ -6,6 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/aimd54/palan)](https://github.com/aimd54/palan/releases/latest)
 [![CI](https://github.com/aimd54/palan/actions/workflows/ci.yml/badge.svg)](https://github.com/aimd54/palan/actions/workflows/ci.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14026/badge)](https://www.bestpractices.dev/projects/14026)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/aimd54/palan/badge)](https://scorecard.dev/viewer/?uri=github.com/aimd54/palan)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aimd54/palan.svg)](https://pkg.go.dev/github.com/aimd54/palan)
 [![Go](https://img.shields.io/github/go-mod/go-version/aimd54/palan)](go.mod)
