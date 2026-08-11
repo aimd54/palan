@@ -1,13 +1,14 @@
-Ref:     registry.internal/llm/qwen3:8b-q4
-Kind:    model
-Family:  qwen3
-Params:  8B
-Quant:   Q4_K_M
-Format:  gguf
-Size:    4.6 GiB
-Digest:  sha256:1111111111111111111111111111111111111111111111111111111111111111
-Type:    application/vnd.cncf.model.manifest.v1+json
-Source:  
+Ref:        registry.internal/llm/qwen3:8b-q4
+Kind:       model
+Family:     qwen3
+Params:     8B
+Quant:      Q4_K_M
+Precision:  -
+Format:     gguf
+Size:       4.6 GiB
+Digest:     sha256:1111111111111111111111111111111111111111111111111111111111111111
+Type:       application/vnd.cncf.model.manifest.v1+json
+Source:     
 Annotations:
   io.palan.origin.sha256:           sha256:4444444444444444444444444444444444444444444444444444444444444444
   org.opencontainers.image.source:  https://example.invalid/models

@@ -22,6 +22,15 @@ var companionNames = []string{
 	"generation_config.json", "tokenizer.model", "vocab.json", "merges.txt",
 }
 
+// docNames are the files stating the terms the weights were released under,
+// and the notes published with them. They travel for a different reason than
+// the companions above: a redistributed model whose licence stayed behind
+// reaches the next reader with no terms attached. detectKind files these as
+// documentation layers, so they never count as weights or configuration.
+var docNames = []string{
+	"LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "NOTICE", "README.md",
+}
+
 // hasSafetensors reports whether any input is a safetensors shard.
 func hasSafetensors(files []File) bool {
 	for _, f := range files {
@@ -254,6 +263,9 @@ func gatherSafetensorsShards(files []File) ([]File, error) {
 			safetensors.ConfigName, err)
 	}
 	for _, name := range companionNames {
+		_ = addNamed(name)
+	}
+	for _, name := range docNames {
 		_ = addNamed(name)
 	}
 	return out, nil

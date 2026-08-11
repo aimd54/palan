@@ -384,3 +384,39 @@ func TestSafetensorsConfigRecordsTheDtypeAsPrecision(t *testing.T) {
 		t.Errorf("quantization = %q, want it empty for unquantized weights", model.Config.Quantization)
 	}
 }
+
+func TestModelDirectoryLicenceTravels(t *testing.T) {
+	// A published model ships the licence its weights are released under. A
+	// tool that redistributes the weights and drops that file hands the next
+	// reader an artifact with no terms attached, so the licence and readme
+	// travel as documentation layers.
+	dir := t.TempDir()
+	paths := writeShardedModel(t, dir, 2)
+	for name, body := range map[string]string{
+		"LICENSE":   "Apache License, Version 2.0\n",
+		"README.md": "# a model\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ordered, _, err := prepare([]File{{Path: paths[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]modelspec.LayerKind{}
+	for _, f := range ordered {
+		kinds[filepath.Base(f.Path)] = f.Kind
+	}
+	for _, want := range []string{"LICENSE", "README.md"} {
+		kind, ok := kinds[want]
+		if !ok {
+			t.Errorf("%s is beside the model and was not packed; got %v", want, kinds)
+			continue
+		}
+		if kind != modelspec.LayerKindDoc {
+			t.Errorf("%s packed as kind %v, want a documentation layer", want, kind)
+		}
+	}
+}

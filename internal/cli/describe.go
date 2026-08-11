@@ -31,10 +31,14 @@ type modelRow struct {
 	Kind   string `json:"kind"`
 	Family string `json:"family,omitempty"`
 	Params string `json:"params,omitempty"`
-	Quant  string `json:"quantization,omitempty"`
-	Format string `json:"format,omitempty"`
-	Size   int64  `json:"size"`
-	Digest string `json:"digest"`
+	// Quant names a quantization scheme such as awq or gptq, Precision the
+	// numeric type the weights are stored in. A model states one or the other,
+	// so listings show whichever is set under a single heading.
+	Quant     string `json:"quantization,omitempty"`
+	Precision string `json:"precision,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Size      int64  `json:"size"`
+	Digest    string `json:"digest"`
 }
 
 // layerDetail is one manifest layer in describe output.
@@ -86,6 +90,7 @@ func fillFromManifest(ctx context.Context, fetcher content.Fetcher, manifest oci
 		row.Family = model.Descriptor.Family
 		row.Params = model.Config.ParamSize
 		row.Quant = model.Config.Quantization
+		row.Precision = model.Config.Precision
 		row.Format = model.Config.Format
 
 	case manifest.Config.MediaType == ocispec.MediaTypeImageConfig:
@@ -180,6 +185,7 @@ func detailFields(d modelDetail) [][2]string {
 		{"Family", orDash(d.Family)},
 		{"Params", orDash(d.Params)},
 		{"Quant", orDash(d.Quant)},
+		{"Precision", orDash(d.Precision)},
 		{"Format", orDash(d.Format)},
 		{"Size", humanBytes(d.Size)},
 		{"Digest", d.Digest},

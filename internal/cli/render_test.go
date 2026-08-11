@@ -47,6 +47,19 @@ func lsFixture() []modelRow {
 			Digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
 		},
 		{
+			// A safetensors model states a precision and no quantization, which
+			// is the other half of the encoding column and the only fixture
+			// that puts the precision field into the JSON output at all.
+			Ref:       "registry.internal/llm/qwen3:8b-bf16",
+			Kind:      "model",
+			Family:    "qwen2",
+			Params:    "8B",
+			Precision: "bfloat16",
+			Format:    "safetensors",
+			Size:      16_400_000_000,
+			Digest:    "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+		},
+		{
 			Ref:    "registry.internal/runtimes/llama-server:b4567-cuda12",
 			Kind:   "runtime",
 			Size:   87_000_000,

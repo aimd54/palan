@@ -137,7 +137,7 @@ func listRemote(ctx context.Context, v *viper.Viper, host string) ([]modelRow, e
 
 // lsColumns is the listing's shape, shared by both renderers so the styled
 // and plain forms cannot drift into showing different things.
-var lsColumns = []string{"REF", "KIND", "FAMILY", "PARAMS", "QUANT", "FORMAT", "SIZE", "DIGEST"}
+var lsColumns = []string{"REF", "KIND", "FAMILY", "PARAMS", "ENCODING", "FORMAT", "SIZE", "DIGEST"}
 
 func lsCells(r modelRow) []string {
 	digest := r.Digest
@@ -146,8 +146,19 @@ func lsCells(r modelRow) []string {
 	}
 	return []string{
 		r.Ref, r.Kind, orDash(r.Family), orDash(r.Params),
-		orDash(r.Quant), orDash(r.Format), humanBytes(r.Size), digest,
+		orDash(encoding(r)), orDash(r.Format), humanBytes(r.Size), digest,
 	}
+}
+
+// encoding is how the weights are stored: a quantization scheme when the model
+// names one, the numeric type otherwise. A model states one or the other, so a
+// single column reports both without losing anything, and a listing of GGUF
+// models is not left with a column that is always empty.
+func encoding(r modelRow) string {
+	if r.Quant != "" {
+		return r.Quant
+	}
+	return r.Precision
 }
 
 // renderRows writes the listing.
