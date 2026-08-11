@@ -18,6 +18,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,8 +71,46 @@ func TestMain(m *testing.M) {
 	if regCleanup != nil {
 		regCleanup()
 	}
+	// A supervised llama-server that outlives the test that started it leaves
+	// nothing failing: the suite passes, the process keeps running, and it is
+	// found days later by accident. Fail here instead.
+	if leaked := survivingChildren(runtimeDir); len(leaked) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"e2e: %d supervised child process(es) outlived the suite: %v\n"+
+				"serve is expected to stop them on shutdown, so a survivor means a test\n"+
+				"killed it in a way that skipped that shutdown.\n", len(leaked), leaked)
+		code = 1
+	}
 	_ = os.RemoveAll(tmp)
 	os.Exit(code)
+}
+
+// survivingChildren returns the pids of processes still running from dir.
+// Reading /proc is Linux-only; elsewhere it reports nothing rather than
+// pretending to have checked.
+func survivingChildren(dir string) []int {
+	if runtime.GOOS != "linux" || dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil {
+			continue // exited between the listing and the read
+		}
+		if strings.Contains(string(cmdline), dir) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // registryHost returns a ready registry host:port, starting a zot container

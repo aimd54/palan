@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -33,6 +34,12 @@ func startServe(t *testing.T, home string, args ...string) string {
 	full := append([]string{"--plain-http", "--quiet", "serve", "--addr", addr,
 		"--memory-budget", "8GiB"}, args...)
 	cmd := exec.CommandContext(ctx, palanBin, full...)
+	// Cancelling a CommandContext sends SIGKILL by default, which serve cannot
+	// handle, so its shutdown never runs and the llama-server it supervises is
+	// orphaned rather than stopped. Signal instead, and keep the kill only as
+	// the fallback for a process that ignores it.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 15 * time.Second
 	cmd.Env = append(os.Environ(), "PALAN_HOME="+home, "PATH="+runtimeDir+":"+os.Getenv("PATH"))
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
