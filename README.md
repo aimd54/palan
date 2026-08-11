@@ -72,6 +72,53 @@ places where no container engine exists and no internet ever will.
   manifest ships alongside them and has not been run yet. See
   [`deploy/k8s-examples/`](deploy/k8s-examples/README.md).
 
+## Install
+
+Each release carries static binaries for linux amd64, linux arm64 and darwin
+arm64, an SBOM per archive, a checksum file signed with cosign, and SLSA
+provenance over every artifact.
+
+**A signed release archive.** Verify the signature on the checksum file first,
+then check the archive against the checksums it now vouches for. Doing it in
+that order is the point: a checksum you have not authenticated only tells you
+the download was not corrupted.
+
+```sh
+V=0.4.0; OS=linux; ARCH=amd64          # or OS=darwin ARCH=arm64
+B=https://github.com/aimd54/palan/releases/download/v$V
+curl -sSLO $B/palan_${V}_${OS}_${ARCH}.tar.gz
+curl -sSLO $B/checksums.txt
+curl -sSLO $B/checksums.txt.sigstore.json
+
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'github.com/aimd54/palan' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+
+tar xzf palan_${V}_${OS}_${ARCH}.tar.gz palan
+install -m 0755 palan ~/.local/bin/palan
+```
+
+**Container image**, distroless, with `palan` as the entrypoint:
+
+```sh
+docker run --rm ghcr.io/aimd54/palan:0.4.0 version
+```
+
+**From source**, needing Go ≥ 1.26. A binary built this way reports no commit
+or build date, since those are stamped when a release is built:
+
+```sh
+go install github.com/aimd54/palan/cmd/palan@latest
+```
+
+Or from a clone, which is also how you would develop against it:
+
+```sh
+git clone https://github.com/aimd54/palan && cd palan && make build
+```
+
 ## Quickstart
 
 ```sh
