@@ -8,14 +8,27 @@ for the overview. Pick the first one that fits your cluster:
 |---|---|---|---|---|
 | [Init-container puller](init-puller.yaml) | any Kubernetes | artifact | works everywhere today; palan handles auth/resume/verification | model copied into an emptyDir per pod |
 | [Image volume](image-volume.yaml) | K8s ≥ 1.36 (GA), containerd ≥ 2.1 | car (`...-car` tag) | kubelet-managed caching and dedup per node; no init container; digest-pinnable in GitOps | needs a recent runtime; car profile only |
-| [KServe modelcar](kserve.yaml) | KServe ≥ 0.12 | car | full serving platform (scaling, canary) | brings all of KServe |
+| [KServe modelcar](kserve.yaml) | KServe ≥ 0.12 | car | full serving platform (scaling, canary) | brings all of KServe; **not yet exercised**, see below |
 
 ## Rules of thumb
 
 - Starting out or on an older cluster → init-container puller.
 - K3s/containerd new enough and models change rarely → image volumes;
   pin `@sha256:` digests in your GitOps repo.
-- Already running KServe for other models → modelcars.
+- Already running KServe for other models → modelcars, with the caveat below.
+
+## What the KServe manifest has and has not been through
+
+The init-container puller and the image volume have both been run end to end
+against real clusters, on two containerd builds, including with a GPU attached
+to the serving container. Those rows describe measured behaviour.
+
+`kserve.yaml` has not. It uses the same car-profile artifact the image-volume
+path uses, and KServe's modelcar support reads an `oci://` reference the same
+way, so there is no known reason it would fail. That is a different statement
+from having watched it work, and no cluster here has run KServe. Treat it as a
+starting point rather than a tested recipe, and check the mount holds the
+weights rather than trusting that the pod reached `Running`.
 
 ## Why image volumes need the car profile
 

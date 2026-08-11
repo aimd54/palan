@@ -30,7 +30,9 @@ explains the moving parts.
    artifacts natively.
 
 3. **KServe modelcars**: `storageUri: oci://...-car` if KServe is already in
-   the picture.
+   the picture. The manifest ships in
+   [`deploy/k8s-examples/kserve.yaml`](../../deploy/k8s-examples/kserve.yaml)
+   and has not been run against a cluster, unlike the two patterns above.
 
 ## Registry authentication for pods
 

@@ -67,8 +67,9 @@ places where no container engine exists and no internet ever will.
 - **Supply chain**: cosign-compatible key-based signing that works fully
   offline; `palan pull --verify` refuses unsigned or foreign-signed models
   before a single weight byte moves.
-- **Kubernetes**: init-container puller image, image volumes (K8s ≥ 1.36)
-  via the car profile, KServe modelcars. See
+- **Kubernetes**: init-container puller image and image volumes (K8s ≥ 1.36)
+  via the car profile, both exercised on real clusters. A KServe modelcar
+  manifest ships alongside them and has not been run yet. See
   [`deploy/k8s-examples/`](deploy/k8s-examples/README.md).
 
 ## Quickstart
