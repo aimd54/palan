@@ -127,9 +127,16 @@ palan ships it opt-in.
 - Optional bearer auth: `serve.bearer-token` in the config (compared in
   constant time).
 
-## Out of scope in v0.1 (tracked on the roadmap)
+## Not implemented yet (tracked on the roadmap)
 
 - Keyless (Fulcio/Rekor) signing, which requires online infrastructure.
-- OIDC device-flow login from the CLI.
-- Signature verification for `save`/`load` bundles (verify against the
-  registry after import instead).
+- OIDC device-flow login from the CLI. `palan login` takes a username with a
+  prompt or `--password-stdin`, and stores the result in the Docker credentials
+  store.
+
+Bundle verification used to sit in this list. It does not any more:
+`palan load --verify` refuses any model in a bundle whose signature does not
+check out, and `palan verify` reads a signature from the local store when it
+holds one, naming the source so a local answer is never mistaken for a remote
+one (ADR-0007). Verifying against a registry after import is not a workaround
+an air-gapped host can use, because there is no registry there to ask.

@@ -52,9 +52,9 @@ places where no container engine exists and no internet ever will.
   license; a safetensors model states architecture and context length in
   `config.json`, and its parameter count comes from the shard headers.
 - **Serving**: `palan run` for a REPL; `palan serve` for an OpenAI-compatible
-  router on `:11500`: lazy load, idle unload, memory-budget LRU eviction
-  (two models on a 10 GB GPU evict instead of OOMing), SSE streaming,
-  Prometheus metrics.
+  router on `:11500`: lazy load, idle unload, memory-budget LRU eviction that
+  frees device memory rather than overcommitting it, SSE streaming, Prometheus
+  metrics.
 - **Runtime distribution**: `llama-server` builds travel as OCI artifacts
   through the same registry as the weights: version-pinned per release,
   signable like any other artifact, and swappable without rebuilding palan.

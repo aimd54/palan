@@ -88,7 +88,10 @@ Options, in increasing automation:
 
 ## Validation checklist (run on your cluster, not automatable from CI)
 
-- [ ] `palan login registry.internal` (OIDC device flow or API key)
+- [ ] `palan login registry.internal -u <user> --password-stdin`, which stores
+      the credential in the Docker credentials store. A device flow is on the
+      roadmap rather than in the binary, so an interactive OIDC login is not
+      available yet
 - [ ] `palan push registry.internal/llm/smoke:test` of a small packed model
 - [ ] Pull from a pod using a projected SA token (no static secret)
 - [ ] Blob GET redirects to object storage (curl -v shows the 307). Use an
