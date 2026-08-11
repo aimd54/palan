@@ -59,8 +59,9 @@ places where no container engine exists and no internet ever will.
   through the same registry as the weights: version-pinned per release,
   signable like any other artifact, and swappable without rebuilding palan.
   Offline hosts get engine upgrades through the channel they already have.
-- **Zero-copy**: weight layers are raw, so the blob in the store *is* the
-  file `llama-server` mmaps. No unpack step, no double storage.
+- **Zero-copy**: weight layers are raw, so the blob in the store *is* the file
+  the runtime opens, whether that is `llama-server` mmapping a GGUF or another
+  engine reading safetensors shards. No unpack step, no double storage.
 - **Air gap**: `save`/`load` tar bundles (standard OCI layout) and direct
   registry-to-registry `cp`; models and runtimes travel the same two paths.
 - **Supply chain**: cosign-compatible key-based signing that works fully
@@ -79,6 +80,13 @@ docker run -d --rm -p 5000:5000 ghcr.io/project-zot/zot-linux-amd64:v2.1.18
 # Pack a GGUF you already have, push it
 palan pack qwen3-8b-instruct-q4_k_m.gguf -t localhost:5000/llm/qwen3:8b-q4 \
   --plain-http --ctx 8192 --push
+
+# Or pack a safetensors model, which is published as a directory. Naming the
+# directory packs every shard the index lists, plus config.json and the
+# tokenizer files. These travel and verify like any other artifact; serving
+# them is another runtime's job.
+palan pack ./Qwen3-8B/ -t localhost:5000/llm/qwen3:8b-bf16 \
+  --plain-http --license Apache-2.0 --push
 
 # Anywhere else: pull and chat (llama-server in PATH, or `palan runtime pull`)
 palan pull localhost:5000/llm/qwen3:8b-q4 --plain-http
