@@ -85,7 +85,10 @@ dockers_v2:
     labels:
       org.opencontainers.image.source: https://github.com/aimd54/palan
       org.opencontainers.image.licenses: Apache-2.0
-      org.opencontainers.image.description: Distribute and serve GGUF models as OCI artifacts
+      # Distribution is format-neutral and serving is not, so the two are named
+      # separately (ADR-0012). A label saying "GGUF" alone described the tool
+      # before safetensors packing existed.
+      org.opencontainers.image.description: Distribute GGUF and safetensors weights as OCI artifacts, and serve GGUF locally
       # Names the party publishing the image, so the labels above are not read
       # as coming from any of the projects palan interoperates with.
       org.opencontainers.image.vendor: The palan Authors
