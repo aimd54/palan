@@ -19,6 +19,19 @@ and refuses anything else, for the reasons in
 | M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
+| M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☐ planned |
+| M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☐ planned |
+| M10 | Trust policy (identities per reference; keyless verification offline) | ☐ planned |
+| M11 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
+| M12 | Ecosystem validations (KServe modelcar, OIDC auth, mirrors, upstreaming) | ☐ planned |
+| M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
+
+M8 through M13 build out one property end to end: that the bytes a host
+loads are the bytes a publisher released and an identity approved, checkable
+on any host, connected or not. Signing and verification exist today (M6);
+what these milestones add is the stretch before signing, a policy above one
+key, and the surfaces that show and enforce the result. Each is described
+under [Planned milestones](#planned-milestones).
 
 ## Validated outside CI
 
@@ -80,12 +93,99 @@ a Kubernetes cluster, and a GPU host:
   the file the publisher released, so nothing rewrites the weights in transit.
   Serving refuses these artifacts by name (ADR-0012).
 
-## Still outstanding
+## Planned milestones
 
-Each of these names what it actually waits on. None of them waits on a
-particular network or a particular building: the boundary cases that looked
-like they did have since been reproduced with container networks on one
-machine, and are recorded above.
+In dependency order. Each lands the way the shipped ones did: with tests
+that were seen to fail before the change, and validations recorded above
+once they run against real infrastructure.
+
+### M8: import checks what the publisher states
+
+`pack hf://` handles a single file today, and a safetensors model is
+published as a directory. M8 resolves a whole repository through the same
+path: the shard index, `config.json` and the tokenizer files, every file
+checked against the digest its repository publishes and its origin recorded
+per file, which extends ADR-0009 to the shape models are actually released
+in. Where a repository publishes a signature in the OpenSSF model-signing
+format, the import verifies it and records the identity it verified, and
+interop with that format's reference implementation joins the cosign
+round-trip in CI. Accepted when a deliberately corrupted shard refuses the
+whole pack and leaves the store without a partial artifact, and a published
+signature over different bytes refuses.
+
+### M9: an attestation binds the upstream files to the layers
+
+`pack` records the origin digest of what it read; nothing yet states, in a
+verifiable form, that the layers hold byte-for-byte those files. M9 emits a
+signed statement binding upstream file digests to layer digests, stored as a
+referrer of the model manifest and carried by `pull`, `save` and `cp` the
+way signatures already are. `verify` reads it, so the chain from a
+repository's published digests to the blobs in a store is checkable against
+a registry, a bundle, or a store with no network. Accepted when the
+statement survives a registry-to-bundle-to-second-store round trip and still
+verifies offline, and a tampered statement, a missing subject, or subjects
+that do not match the layers refuse.
+
+### M10: a trust policy over identities
+
+Verification answers whether the configured key signed the model; a registry
+with more than one publisher asks which identities may sign which
+references. M10 adds a policy mapping reference patterns to the identities
+allowed to sign them, covering cosign keys and OpenSSF model-signing
+identities, enforced at the four points `verify.required` already covers:
+`pull`, `load`, `run` and `serve`. The same milestone verifies a keyless
+signature from a carried bundle against a pinned trusted root, on a host
+where no transparency log is reachable. Accepted when a model signed by a
+valid key the policy does not name for that reference refuses while the same
+signature verifies under its own pattern, and a carried keyless signature
+verifies with no network and refuses with its inclusion proof stripped.
+
+### M11: the chain, shown and enforced
+
+- `verify --explain`, plain text and `--json`: origin, attestation,
+  signature identity, and every hop it can prove, so "prove what is on this
+  host" becomes one command's output. For an artifact palan did not produce
+  it says plainly which links it cannot prove.
+- The gate pattern, documented and measured: an init container that refuses
+  on the policy so the serving container never starts, with example
+  manifests for a plain Deployment whose runtime reads safetensors, and for
+  KServe. A refusal must leave the shared volume empty and must be prompt
+  rather than a hang.
+- An opt-in re-hash of weight blobs at load, closing the gap ADR-0008
+  deferred: a substituted blob behind an intact manifest refuses. Opt-in,
+  because it re-reads gigabytes.
+- The runtime channel gains the same gate, so an engine build is checked the
+  way a model is when it is installed or spawned.
+
+### M12: ecosystem validations
+
+Independent items, each a validation with a recorded result rather than a
+feature:
+
+- KServe modelcars, the third Kubernetes consumption pattern. Raw deployment
+  mode suffices, which avoids pulling in a service mesh, so a laptop cluster
+  reaches it ([deploy/k8s-examples/](../deploy/k8s-examples/README.md)).
+- zot behind OIDC rather than htpasswd, with palan carrying a token obtained
+  from the provider; an identity provider in a container is enough.
+- A publicly trusted certificate, once an ACME issuer exists to test
+  against. The client half is done: palan verifies a chain and refuses an
+  untrusted one, tested against a private CA.
+- A pull through a Dragonfly mirror, validated once and documented.
+- A palan bundle inside a Zarf package, so a workload and its models cross
+  an air gap together.
+- Offering the packing path and the origin and attestation conventions
+  upstream to modctl if welcome (ADR-0005's standing plan), and a CNCF
+  landscape entry.
+
+### M13: 1.0
+
+`verify.required` becomes the default, with a first-run path that does not
+strand a store predating signing. The policy file format is documented as
+stable, and a transfer benchmark against modctl and oras is published with
+its methodology. The README's claims are then re-read against what ships,
+since 1.0 is a statement about defaults as much as about features.
+
+## Alongside the milestones
 
 - **Two models large enough that the memory budget has to arbitrate between
   them**, rather than a budget set deliberately small. Waits on a GPU with
@@ -93,45 +193,6 @@ machine, and are recorded above.
   unload and the automatic budget probe are all measured; what is untested is
   the arithmetic when a wrong estimate would surface as an allocation failure
   instead of an eviction.
-- **KServe modelcars**, the third Kubernetes consumption pattern. Waits on a
-  cluster running KServe. Its raw deployment mode would do, which avoids
-  pulling in a service mesh, so this is reachable on a laptop cluster rather
-  than needing a permanent one
-  ([deploy/k8s-examples/](../deploy/k8s-examples/README.md)).
-- **zot with OIDC rather than htpasswd.** Waits on an identity provider to
-  point it at; one in a container is enough. Note that palan's own `login`
-  takes a username and password today, so what this proves is zot honouring a
-  provider and palan carrying a token obtained elsewhere.
-- **A publicly trusted certificate.** The client half is done: palan verifies a
-  chain and refuses an untrusted one, tested against a private CA. What remains
-  is an ACME issuer the wider world trusts, which exercises the issuer rather
-  than palan.
-
-## Planned / open
-
-- **`pack hf://` fetches a single file.** A safetensors model is published as a
-  directory, so it comes down with another tool first and is packed from disk.
-  Resolving a whole repository through the same path, checking every file
-  against the digest its repository publishes and recording each file's
-  origin, extends what ADR-0009 established for one file to the shape models
-  are actually published in.
-- **Publisher signatures in the OpenSSF model-signing format.** Model
-  repositories are beginning to publish signatures in that format. An import
-  that verifies such a signature when one is present, and records the
-  identity it verified, would extend the origin check from digests to
-  signatures. Interop with the reference implementation belongs in CI beside
-  the existing cosign round-trip.
-- **An attestation binding the upstream files to the layers.** `pack` records
-  the origin digest of what it read; nothing yet states, in a verifiable
-  form, that the layers in the artifact hold byte-for-byte those files. A
-  signed statement carried as a referrer, travelling through `save` and `cp`
-  like a signature does, would let `verify` walk the chain from a
-  repository's published digests to the blobs in a store.
-- **A trust policy rather than one key.** Verification answers whether the
-  configured key signed the model. A policy naming which identities may sign
-  which references answers what a registry with more than one publisher
-  actually asks, and would be enforced at the same four points
-  `verify.required` already covers.
 - **`precision` is recorded and not shown.** A safetensors model's dtype goes
   into the model config's `precision` field, since `quantization` names a scheme
   such as awq or gptq rather than a numeric type. Neither `ls`, `describe` nor
@@ -140,12 +201,12 @@ machine, and are recorded above.
   artifact appears in the listing and is then refused on use, as an unsigned
   model already is under the verification policy. Filtering the listing to what
   a request would actually be served would spare a client the round trip.
+
+## Deferred
+
 - OIDC device-flow `login` (basic/token + credential helpers work today).
-- Keyless (Fulcio/Rekor) signing for connected environments, and
-  verification of a keyless signature from a carried bundle on a host where
-  no transparency log is reachable.
-- `verify.required` as the default once signing pipelines are ubiquitous.
-- Upstreaming the packing path to modctl if welcome (see ADR-0005).
+- Keyless (Fulcio/Rekor) signing for connected environments; M10 covers the
+  verification half.
 - Stretch goals: LoRA adapter artifacts, multimodal mmproj.
 
 ## Decided against
@@ -157,3 +218,12 @@ machine, and are recorded above.
   For those weights palan is the distribution and verification layer in front of
   whichever inference stack is already running
   ([ADR-0012](adr/0012-distribution-is-format-neutral.md)).
+- **A Kubernetes operator.** palan appears in a cluster as an init container
+  and as artifacts. Controllers, custom resources and admission webhooks
+  belong to the platforms that already run them, and a second control plane
+  would cost the property that palan needs no daemon anywhere.
+- **Transport acceleration beyond resume and concurrency.** Peer-to-peer
+  distribution and cache hierarchies are what registry mirrors and Dragonfly
+  are for; palan pulls through them rather than reimplementing them.
+- **A model scanner.** The store is a plain OCI layout precisely so existing
+  scanners and OCI tooling can read it.
