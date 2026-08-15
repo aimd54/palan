@@ -111,8 +111,27 @@ machine, and are recorded above.
 
 - **`pack hf://` fetches a single file.** A safetensors model is published as a
   directory, so it comes down with another tool first and is packed from disk.
-  Resolving a whole repository through the same path is the obvious next step
-  for the import route (ADR-0009 covers the single-file case).
+  Resolving a whole repository through the same path, checking every file
+  against the digest its repository publishes and recording each file's
+  origin, extends what ADR-0009 established for one file to the shape models
+  are actually published in.
+- **Publisher signatures in the OpenSSF model-signing format.** Model
+  repositories are beginning to publish signatures in that format. An import
+  that verifies such a signature when one is present, and records the
+  identity it verified, would extend the origin check from digests to
+  signatures. Interop with the reference implementation belongs in CI beside
+  the existing cosign round-trip.
+- **An attestation binding the upstream files to the layers.** `pack` records
+  the origin digest of what it read; nothing yet states, in a verifiable
+  form, that the layers in the artifact hold byte-for-byte those files. A
+  signed statement carried as a referrer, travelling through `save` and `cp`
+  like a signature does, would let `verify` walk the chain from a
+  repository's published digests to the blobs in a store.
+- **A trust policy rather than one key.** Verification answers whether the
+  configured key signed the model. A policy naming which identities may sign
+  which references answers what a registry with more than one publisher
+  actually asks, and would be enforced at the same four points
+  `verify.required` already covers.
 - **`precision` is recorded and not shown.** A safetensors model's dtype goes
   into the model config's `precision` field, since `quantization` names a scheme
   such as awq or gptq rather than a numeric type. Neither `ls`, `describe` nor
@@ -122,7 +141,9 @@ machine, and are recorded above.
   model already is under the verification policy. Filtering the listing to what
   a request would actually be served would spare a client the round trip.
 - OIDC device-flow `login` (basic/token + credential helpers work today).
-- Keyless (Fulcio/Rekor) signing for connected environments.
+- Keyless (Fulcio/Rekor) signing for connected environments, and
+  verification of a keyless signature from a carried bundle on a host where
+  no transparency log is reachable.
 - `verify.required` as the default once signing pipelines are ubiquitous.
 - Upstreaming the packing path to modctl if welcome (see ADR-0005).
 - Stretch goals: LoRA adapter artifacts, multimodal mmproj.
