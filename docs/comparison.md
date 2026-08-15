@@ -18,7 +18,7 @@ out of date without notice, so corrections are welcome in
 |                     | any standard registry | signature gate before use | air-gap bundles | no container runtime |
 |---------------------|:---:|:---:|:---:|:---:|
 | modctl              | ✓ | ✗ | ✗ | ✓ |
-| KitOps              | ✓ | ✗ | ✓ | ✓ |
+| KitOps              | ✓ | init container, opt-in | ✓ | ✓ |
 | ORAS                | ✓ | ✗ | ✓ | ✓ |
 | Docker Model Runner | ✓ | not documented | ✗ | standalone `dmr` |
 | Ollama              | own dialect | ✗ | manual blob copy | ✓ |
@@ -94,6 +94,15 @@ and shared container runtimes; its documentation states that KitOps does not
 provide inference serving, and that the inference endpoint, routing and serving
 solution are the user's to supply.
 
+KitOps signs ModelKits by invoking cosign directly, and its documentation
+shows verification as a step a pipeline runs. Its Kubernetes init container
+verifies a ModelKit's cosign signature when the pod sets a key path or a
+signing identity, which gates that pod alone; a pull or an unpack elsewhere
+is not refused. That is why its cell above reads "init container, opt-in"
+rather than a plain yes or no. palan's gate is a store-wide policy: with
+`verify.required` set, `pull`, `load`, `run` and `serve` each refuse an
+unsigned or foreign-signed model, wherever the request came from.
+
 palan reads and writes the same ModelPack artifacts, so these tools and palan
 operate on each other's output. That interoperability is exercised in CI
 against modctl, `oras` and `cosign` on every commit.
@@ -120,5 +129,8 @@ whichever inference stack is already running.
 - Docker Model Runner general availability:
   <https://www.docker.com/blog/announcing-docker-model-runner-ga/>
 - KitOps deployment documentation: <https://kitops.org/docs/deploy/>
+- KitOps signing and verification: <https://kitops.org/docs/security/>
+- KitOps Kubernetes init container:
+  <https://kitops.org/docs/integrations/k8s-init-container/>
 - Ollama OCI registry request:
   <https://github.com/ollama/ollama/issues/2745>
