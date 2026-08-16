@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aimd54/palan/internal/safetensors"
 	"github.com/aimd54/palan/internal/transfer"
 )
 
@@ -241,7 +242,7 @@ func (c *Client) pathsInfo(ctx context.Context, ref Ref, paths []string) ([]File
 // licence when it has one.
 func (c *Client) Resolve(ctx context.Context, ref Ref) ([]File, error) {
 	if ref.Path == "" {
-		return nil, c.suggestFiles(ctx, ref)
+		return c.resolveRepo(ctx, ref)
 	}
 	listing, err := c.listFiles(ctx, ref)
 	if err != nil {
@@ -269,6 +270,95 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) ([]File, error) {
 		return nil, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
 	}
 	return files, nil
+}
+
+// resolveRepo selects the files a whole published model consists of. A
+// safetensors model is published as a directory, so the repository is the
+// name a reader has for it.
+//
+// The shard index states which weight files the model is made of, so weights
+// it does not name are a different model published beside this one: an
+// adapter, or a second quantisation. Selecting those would put another
+// model's bytes in the artifact.
+func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
+	listing, err := c.listFiles(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	present := make(map[string]bool, len(listing))
+	for _, p := range listing {
+		present[p] = true
+	}
+
+	var want []string
+	switch {
+	case present[safetensors.IndexName]:
+		data, err := c.fetchSmall(ctx, ref, safetensors.IndexName)
+		if err != nil {
+			return nil, err
+		}
+		ix, err := safetensors.ParseIndex(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s of %s: %w", safetensors.IndexName, ref.Repo, err)
+		}
+		want = append(want, safetensors.IndexName)
+		for _, shard := range ix.Shards() {
+			if !present[shard] {
+				return nil, fmt.Errorf(
+					"%s names the shard %s and %s does not publish it; the model would pack incomplete",
+					safetensors.IndexName, shard, ref.Repo)
+			}
+			want = append(want, shard)
+		}
+	case present["model.safetensors"]:
+		want = append(want, "model.safetensors")
+	default:
+		return nil, c.suggestFiles(ctx, ref)
+	}
+
+	for _, name := range append([]string{safetensors.ConfigName}, safetensors.CompanionNames...) {
+		if present[name] {
+			want = append(want, name)
+		}
+	}
+	for _, name := range safetensors.DocNames {
+		if present[name] {
+			want = append(want, name)
+		}
+	}
+
+	files, err := c.pathsInfo(ctx, ref, want)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) != len(want) {
+		return nil, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
+	}
+	return files, nil
+}
+
+// fetchSmall reads a small file whole. It is for the index and the signature,
+// never for weights, which stream through Download so an interrupted transfer
+// resumes.
+func (c *Client) fetchSmall(ctx context.Context, ref Ref, name string) ([]byte, error) {
+	url := c.endpoint() + "/" + ref.Repo + "/resolve/main/" + name
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", name, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, c.gatedError(ref, resp.StatusCode)
+	default:
+		return nil, fmt.Errorf("fetching %s: unexpected status %q", name, resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
 // suggestFiles turns "which quantisation did you mean" into an answer rather
