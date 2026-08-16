@@ -244,3 +244,67 @@ func mustFetch(t *testing.T, st *store.Store, desc ocispec.Descriptor) io.Reader
 	t.Cleanup(func() { _ = rc.Close() })
 	return rc
 }
+
+func TestLayerRecordsTheDigestItsFileWasPublishedUnder(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	dir := t.TempDir()
+	weights := filepath.Join(dir, "model.gguf")
+	data := gguftest.TinyModel("llama", "tiny", "15M", 2048, 15, []byte("deterministic-fake-weights"))
+	if err := os.WriteFile(weights, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := filepath.Join(dir, "LICENSE")
+	if err := os.WriteFile(doc, []byte("Apache-2.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := Model(ctx, st, []File{
+		{Path: weights, OriginSHA256: "1111111111111111111111111111111111111111111111111111111111111111"},
+		{Path: doc, OriginSHA256: "2222222222222222222222222222222222222222222222222222222222222222"},
+	}, "registry.example/llm/test:v1", Options{})
+	if err != nil {
+		t.Fatalf("Model: %v", err)
+	}
+
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetch manifest: %v", err)
+	}
+	found := map[string]string{}
+	for _, l := range manifest.Layers {
+		found[l.Annotations[modelspec.AnnotationFilepath]] = l.Annotations[modelspec.AnnotationOriginSHA256]
+	}
+	if got := found["model.gguf"]; got != "1111111111111111111111111111111111111111111111111111111111111111" {
+		t.Errorf("weight layer origin = %q, want the digest the publisher released it under", got)
+	}
+	if got := found["LICENSE"]; got != "2222222222222222222222222222222222222222222222222222222222222222" {
+		t.Errorf("doc layer origin = %q, want its own published digest", got)
+	}
+}
+
+func TestLayerWithoutAPublishedDigestCarriesNoOriginAnnotation(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	dir := t.TempDir()
+	weights := filepath.Join(dir, "model.gguf")
+	data := gguftest.TinyModel("llama", "tiny", "15M", 2048, 15, []byte("deterministic-fake-weights"))
+	if err := os.WriteFile(weights, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := Model(ctx, st, []File{{Path: weights}}, "registry.example/llm/test:v2", Options{})
+	if err != nil {
+		t.Fatalf("Model: %v", err)
+	}
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetch manifest: %v", err)
+	}
+	for _, l := range manifest.Layers {
+		if _, ok := l.Annotations[modelspec.AnnotationOriginSHA256]; ok {
+			t.Errorf("layer %s claims an upstream digest for a file packed from disk",
+				l.Annotations[modelspec.AnnotationFilepath])
+		}
+	}
+}
