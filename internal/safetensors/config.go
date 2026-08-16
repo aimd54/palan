@@ -46,23 +46,34 @@ type Index struct {
 	WeightMap map[string]string
 }
 
-// ReadIndex parses a shard index.
+// ReadIndex reads the shard index at path.
 func ReadIndex(path string) (*Index, error) {
 	b, err := os.ReadFile(path) // #nosec G304 -- caller-supplied model path is the point of this API
 	if err != nil {
 		return nil, err
 	}
+	ix, err := ParseIndex(b)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return ix, nil
+}
+
+// ParseIndex decodes a shard index. An index fetched over HTTP and one read
+// from disk go through here alike, so the two cannot disagree about which
+// shards a model consists of.
+func ParseIndex(data []byte) (*Index, error) {
 	var raw struct {
 		Metadata struct {
 			TotalSize int64 `json:"total_size"`
 		} `json:"metadata"`
 		WeightMap map[string]string `json:"weight_map"`
 	}
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return nil, fmt.Errorf("%s: parsing index: %w", path, err)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parsing index: %w", err)
 	}
 	if len(raw.WeightMap) == 0 {
-		return nil, fmt.Errorf("%s: index names no shards", path)
+		return nil, fmt.Errorf("index names no shards")
 	}
 	return &Index{TotalSize: raw.Metadata.TotalSize, WeightMap: raw.WeightMap}, nil
 }

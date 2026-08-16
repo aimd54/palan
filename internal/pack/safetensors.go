@@ -14,23 +14,6 @@ import (
 	"github.com/aimd54/palan/internal/safetensors"
 )
 
-// companionNames are the files a served safetensors model wants beside its
-// weights. They travel when present; a model without them is still a valid
-// artifact, so their absence is not an error.
-var companionNames = []string{
-	"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
-	"generation_config.json", "tokenizer.model", "vocab.json", "merges.txt",
-}
-
-// docNames are the files stating the terms the weights were released under,
-// and the notes published with them. They travel for a different reason than
-// the companions above: a redistributed model whose licence stayed behind
-// reaches the next reader with no terms attached. detectKind files these as
-// documentation layers, so they never count as weights or configuration.
-var docNames = []string{
-	"LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "NOTICE", "README.md",
-}
-
 // hasSafetensors reports whether any input is a safetensors shard.
 func hasSafetensors(files []File) bool {
 	for _, f := range files {
@@ -181,7 +164,7 @@ func gatherSafetensorsShards(files []File) ([]File, error) {
 	for _, f := range files {
 		have[absPath(f.Path)] = true
 	}
-	out := make([]File, len(files), len(files)+len(companionNames)+8)
+	out := make([]File, len(files), len(files)+len(safetensors.CompanionNames)+8)
 	copy(out, files)
 
 	include := func(p string) {
@@ -262,10 +245,10 @@ func gatherSafetensorsShards(files []File) ([]File, error) {
 		return nil, fmt.Errorf("%s is required beside a safetensors model: %w",
 			safetensors.ConfigName, err)
 	}
-	for _, name := range companionNames {
+	for _, name := range safetensors.CompanionNames {
 		_ = addNamed(name)
 	}
-	for _, name := range docNames {
+	for _, name := range safetensors.DocNames {
 		_ = addNamed(name)
 	}
 	return out, nil
