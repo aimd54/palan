@@ -55,6 +55,10 @@ type File struct {
 	Name string
 	// Kind classifies the layer; zero means auto-detect from the name.
 	Kind modelspec.LayerKind
+	// OriginSHA256 is the SHA-256 the file's publisher released it under,
+	// hex, no algorithm prefix. Empty for a file packed from disk, where
+	// palan knows the bytes it read and nothing about where they came from.
+	OriginSHA256 string
 }
 
 // Options carries pack-time metadata.
@@ -376,11 +380,15 @@ func fileDescriptor(f File) (ocispec.Descriptor, error) {
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("hashing %s: %w", f.Path, err)
 	}
+	ann := map[string]string{modelspec.AnnotationFilepath: f.Name}
+	if f.OriginSHA256 != "" {
+		ann[modelspec.AnnotationOriginSHA256] = f.OriginSHA256
+	}
 	return ocispec.Descriptor{
 		MediaType:   rawMediaType(f.Kind),
 		Digest:      digest.NewDigest(digest.SHA256, h),
 		Size:        n,
-		Annotations: map[string]string{modelspec.AnnotationFilepath: f.Name},
+		Annotations: ann,
 	}, nil
 }
 
