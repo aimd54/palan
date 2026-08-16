@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -93,7 +94,7 @@ modelcars; tagged REF-car), or "both".`,
 				return fmt.Errorf("invalid --profile %q (artifact|car|both)", profile)
 			}
 
-			paths, fetched, err := resolveSources(ctx, cmd, args)
+			files, fetched, err := resolveSources(ctx, cmd, args)
 			if err != nil {
 				return err
 			}
@@ -101,10 +102,6 @@ modelcars; tagged REF-car), or "both".`,
 				defer func() { _ = os.RemoveAll(fetched.tempDir) }()
 			}
 
-			files := make([]pack.File, 0, len(paths))
-			for _, p := range paths {
-				files = append(files, pack.File{Path: p})
-			}
 			// What the source published beats what palan can infer: the
 			// upstream digest is the point of the annotation, and the
 			// repository page is a better provenance link than nothing.
@@ -203,17 +200,22 @@ type fetchedSources struct {
 	originSHA256 string
 }
 
-// resolveSources turns pack arguments into local paths, downloading any
+// resolveSources turns pack arguments into pack.File inputs, downloading any
 // hf:// references first. Local paths pass through untouched, so a command can
 // mix a fetched model with a licence or template already on disk.
 //
-// The weight file's upstream digest and the repository URL are carried back,
-// because a model fetched from a known source should say so rather than
-// annotating itself with its own digest.
-func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]string, fetchedSources, error) {
+// Each fetched file carries the digest the repository published for it, and
+// the named weight file's digest and the repository URL are also carried back
+// in fetchedSources, because a model fetched from a known source should say
+// so rather than annotating itself with its own digest.
+func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]pack.File, fetchedSources, error) {
 	var info fetchedSources
 	if !slices.ContainsFunc(args, hf.IsRef) {
-		return args, info, nil
+		out := make([]pack.File, 0, len(args))
+		for _, a := range args {
+			out = append(out, pack.File{Path: a})
+		}
+		return out, info, nil
 	}
 
 	tmp, err := os.MkdirTemp("", "palan-fetch-*")
@@ -222,11 +224,11 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]s
 	}
 	info.tempDir = tmp
 	client := hf.NewClient()
-	out := make([]string, 0, len(args))
+	out := make([]pack.File, 0, len(args))
 
 	for _, arg := range args {
 		if !hf.IsRef(arg) {
-			out = append(out, arg)
+			out = append(out, pack.File{Path: arg})
 			continue
 		}
 		ref, err := hf.ParseRef(arg)
@@ -246,12 +248,13 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]s
 			if err != nil {
 				return nil, info, err
 			}
-			// The named weight file is the one whose provenance matters; a
-			// licence fetched alongside it is not what the artifact is.
+			// The named weight file is the one whose provenance the
+			// manifest states; a licence fetched alongside it is not
+			// what the artifact is.
 			if f.Path == ref.Path && f.SHA256 != "" {
 				info.originSHA256 = "sha256:" + f.SHA256
 			}
-			out = append(out, path)
+			out = append(out, pack.File{Path: path, Name: filepath.Base(f.Path), OriginSHA256: f.SHA256})
 		}
 	}
 	return out, info, nil

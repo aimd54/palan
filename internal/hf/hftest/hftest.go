@@ -1,0 +1,130 @@
+// Copyright The palan Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package hftest serves a Hugging Face API against files held in memory, so
+// the import path can be exercised without the network.
+package hftest
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// Hub is a fake Hugging Face API.
+type Hub struct {
+	// Files is the repository content, keyed by path within the repository.
+	Files map[string][]byte
+	// Inline names files paths-info reports with no LFS digest, matching how
+	// the real API serves small files stored inline rather than in LFS.
+	Inline map[string]bool
+	// Status, when non-zero, is returned for every request.
+	Status int
+	// IgnoreRange serves the whole body even when a Range is asked for,
+	// which some content delivery networks do.
+	IgnoreRange bool
+	// TruncateAt, when > 0, serves only that many bytes and drops.
+	TruncateAt int
+	// Corrupt serves bytes that do not match the advertised digest.
+	Corrupt bool
+	// Ranges records the Range header of every download request.
+	Ranges []string
+
+	srv *httptest.Server
+}
+
+// New starts a hub serving files, stopped when the test ends.
+func New(t *testing.T, files map[string][]byte) *Hub {
+	t.Helper()
+	h := &Hub{Files: files}
+	h.srv = httptest.NewServer(h)
+	t.Cleanup(h.srv.Close)
+	return h
+}
+
+// URL is the endpoint to point HF_ENDPOINT or Client.Endpoint at.
+func (h *Hub) URL() string { return h.srv.URL }
+
+// Client returns an HTTP client that reaches this hub.
+func (h *Hub) Client() *http.Client { return h.srv.Client() }
+
+func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.Status != 0 {
+		w.WriteHeader(h.Status)
+		return
+	}
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/paths-info/main"):
+		var req struct {
+			Paths []string `json:"paths"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		type lfs struct {
+			OID string `json:"oid"`
+		}
+		var out []map[string]any
+		for _, p := range req.Paths {
+			b, ok := h.Files[p]
+			if !ok {
+				continue
+			}
+			if h.Inline[p] {
+				out = append(out, map[string]any{"path": p, "size": len(b)})
+				continue
+			}
+			sum := sha256.Sum256(b)
+			out = append(out, map[string]any{
+				"path": p, "size": len(b),
+				"lfs": lfs{OID: hex.EncodeToString(sum[:])},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+
+	case strings.Contains(r.URL.Path, "/api/models/"):
+		type sib struct {
+			Filename string `json:"rfilename"`
+		}
+		var sibs []sib
+		for p := range h.Files {
+			sibs = append(sibs, sib{Filename: p})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"siblings": sibs})
+
+	case strings.Contains(r.URL.Path, "/resolve/main/"):
+		i := strings.Index(r.URL.Path, "/resolve/main/")
+		name := r.URL.Path[i+len("/resolve/main/"):]
+		b, ok := h.Files[name]
+		if !ok {
+			http.Error(w, "no such file", http.StatusNotFound)
+			return
+		}
+		if h.Corrupt {
+			b = append([]byte("x"), b[1:]...)
+		}
+		rng := r.Header.Get("Range")
+		h.Ranges = append(h.Ranges, rng)
+		start := 0
+		if rng != "" && !h.IgnoreRange {
+			_, _ = fmt.Sscanf(rng, "bytes=%d-", &start)
+			if start > len(b) {
+				http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(b)-1, len(b)))
+			w.WriteHeader(http.StatusPartialContent)
+		}
+		body := b[start:]
+		if h.TruncateAt > 0 && len(body) > h.TruncateAt {
+			body = body[:h.TruncateAt]
+		}
+		_, _ = w.Write(body)
+
+	default:
+		http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+	}
+}

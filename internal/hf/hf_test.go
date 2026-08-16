@@ -7,126 +7,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aimd54/palan/internal/hf/hftest"
 )
 
-// fakeHub serves the two API endpoints and file downloads that palan uses,
-// so the whole path is exercised without touching the network.
-type fakeHub struct {
-	files map[string][]byte // path in repo → contents
-	// inline names files paths-info reports with no LFS digest, matching how
-	// the real API serves small files stored inline rather than in LFS.
-	inline map[string]bool
-	// status, when non-zero, is returned for every request.
-	status int
-	// ignoreRange serves the whole body even when a Range is asked for,
-	// which some CDNs do.
-	ignoreRange bool
-	// truncateAt, when > 0, serves only that many bytes and drops.
-	truncateAt int
-	// corrupt serves bytes that do not match the advertised digest.
-	corrupt bool
-	srv     *httptest.Server
-	ranges  []string
-}
+func newFakeHub(t *testing.T, files map[string][]byte) *hftest.Hub { return hftest.New(t, files) }
 
-func newFakeHub(t *testing.T, files map[string][]byte) *fakeHub {
-	t.Helper()
-	h := &fakeHub{files: files}
-	h.srv = httptest.NewServer(h)
-	t.Cleanup(h.srv.Close)
-	return h
-}
-
-func (h *fakeHub) URL() string { return h.srv.URL }
-
-func (h *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.status != 0 {
-		w.WriteHeader(h.status)
-		return
-	}
-	switch {
-	case strings.HasSuffix(r.URL.Path, "/paths-info/main"):
-		var req struct {
-			Paths []string `json:"paths"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		type lfs struct {
-			OID string `json:"oid"`
-		}
-		var out []map[string]any
-		for _, p := range req.Paths {
-			b, ok := h.files[p]
-			if !ok {
-				continue
-			}
-			if h.inline[p] {
-				out = append(out, map[string]any{"path": p, "size": len(b)})
-				continue
-			}
-			sum := sha256.Sum256(b)
-			out = append(out, map[string]any{
-				"path": p, "size": len(b),
-				"lfs": lfs{OID: hex.EncodeToString(sum[:])},
-			})
-		}
-		_ = json.NewEncoder(w).Encode(out)
-
-	case strings.Contains(r.URL.Path, "/api/models/"):
-		type sib struct {
-			Filename string `json:"rfilename"`
-		}
-		var sibs []sib
-		for p := range h.files {
-			sibs = append(sibs, sib{Filename: p})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"siblings": sibs})
-
-	case strings.Contains(r.URL.Path, "/resolve/main/"):
-		i := strings.Index(r.URL.Path, "/resolve/main/")
-		name := r.URL.Path[i+len("/resolve/main/"):]
-		b, ok := h.files[name]
-		if !ok {
-			http.Error(w, "no such file", http.StatusNotFound)
-			return
-		}
-		if h.corrupt {
-			b = append([]byte("x"), b[1:]...)
-		}
-		rng := r.Header.Get("Range")
-		h.ranges = append(h.ranges, rng)
-		start := 0
-		if rng != "" && !h.ignoreRange {
-			_, _ = fmt.Sscanf(rng, "bytes=%d-", &start)
-			if start > len(b) {
-				http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
-				return
-			}
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(b)-1, len(b)))
-			w.WriteHeader(http.StatusPartialContent)
-		}
-		body := b[start:]
-		if h.truncateAt > 0 && len(body) > h.truncateAt {
-			body = body[:h.truncateAt]
-		}
-		_, _ = w.Write(body)
-
-	default:
-		http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
-	}
-}
-
-func testClient(h *fakeHub) *Client {
-	return &Client{HTTP: h.srv.Client(), Endpoint: h.URL()}
-}
+func testClient(h *hftest.Hub) *Client { return &Client{HTTP: h.Client(), Endpoint: h.URL()} }
 
 func TestParseRef(t *testing.T) {
 	ok := []struct {
@@ -258,7 +152,7 @@ func TestDownloadVerifiesAgainstUpstreamDigest(t *testing.T) {
 	}
 
 	// Now serve different bytes for the same advertised digest.
-	h.corrupt = true
+	h.Corrupt = true
 	dir2 := t.TempDir()
 	if _, err := c.Download(context.Background(), ref, files[0], dir2, Events{}); err == nil {
 		t.Error("bytes that do not match the published digest must be refused")
@@ -278,7 +172,7 @@ func TestDownloadVerifiesAgainstUpstreamDigest(t *testing.T) {
 func TestDownloadResumesAfterDroppedConnections(t *testing.T) {
 	body := []byte(strings.Repeat("weights", 500)) // 3500 bytes
 	h := newFakeHub(t, map[string][]byte{"model.gguf": body})
-	h.truncateAt = 1000 // each attempt delivers at most 1000 bytes
+	h.TruncateAt = 1000 // each attempt delivers at most 1000 bytes
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
 	files, err := c.Resolve(context.Background(), ref)
@@ -297,13 +191,13 @@ func TestDownloadResumesAfterDroppedConnections(t *testing.T) {
 	}
 	// Progress must have accumulated rather than restarted each time.
 	var resumed int
-	for _, r := range h.ranges {
+	for _, r := range h.Ranges {
 		if r != "" && !strings.HasPrefix(r, "bytes=0-") {
 			resumed++
 		}
 	}
 	if resumed == 0 {
-		t.Errorf("no attempt resumed from an offset; ranges seen: %v", h.ranges)
+		t.Errorf("no attempt resumed from an offset; ranges seen: %v", h.Ranges)
 	}
 	if _, err := os.Stat(path + ".partial"); !os.IsNotExist(err) {
 		t.Error("the partial file should be gone once the download completes")
@@ -336,13 +230,13 @@ func TestDownloadRangeResumeContinues(t *testing.T) {
 		t.Errorf("resumed file is %d bytes, want %d", len(got), len(body))
 	}
 	var ranged bool
-	for _, r := range h.ranges {
+	for _, r := range h.Ranges {
 		if strings.HasPrefix(r, "bytes=1000-") {
 			ranged = true
 		}
 	}
 	if !ranged {
-		t.Errorf("resume should have asked for the remainder, ranges seen: %v", h.ranges)
+		t.Errorf("resume should have asked for the remainder, ranges seen: %v", h.Ranges)
 	}
 }
 
@@ -351,7 +245,7 @@ func TestDownloadRangeResumeContinues(t *testing.T) {
 func TestDownloadRestartsWhenRangeIgnored(t *testing.T) {
 	body := []byte(strings.Repeat("weights", 500))
 	h := newFakeHub(t, map[string][]byte{"model.gguf": body})
-	h.ignoreRange = true
+	h.IgnoreRange = true
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
 	files, err := c.Resolve(context.Background(), ref)
@@ -374,7 +268,7 @@ func TestDownloadRestartsWhenRangeIgnored(t *testing.T) {
 
 func TestGatedRepositoryExplainsItself(t *testing.T) {
 	h := newFakeHub(t, nil)
-	h.status = http.StatusForbidden
+	h.Status = http.StatusForbidden
 	_, err := testClient(h).Resolve(context.Background(), Ref{Repo: "meta/gated", Path: "m.gguf"})
 	if err == nil {
 		t.Fatal("a gated repository must fail")
@@ -471,7 +365,7 @@ func TestResolveWholeRepositoryLeavesInlineFilesWithoutADigest(t *testing.T) {
 		"model.safetensors": []byte("weights"),
 		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
 	})
-	hub.inline = map[string]bool{"config.json": true}
+	hub.Inline = map[string]bool{"config.json": true}
 	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
