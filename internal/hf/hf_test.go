@@ -22,6 +22,9 @@ import (
 // so the whole path is exercised without touching the network.
 type fakeHub struct {
 	files map[string][]byte // path in repo → contents
+	// inline names files paths-info reports with no LFS digest, matching how
+	// the real API serves small files stored inline rather than in LFS.
+	inline map[string]bool
 	// status, when non-zero, is returned for every request.
 	status int
 	// ignoreRange serves the whole body even when a Range is asked for,
@@ -63,6 +66,10 @@ func (h *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, p := range req.Paths {
 			b, ok := h.files[p]
 			if !ok {
+				continue
+			}
+			if h.inline[p] {
+				out = append(out, map[string]any{"path": p, "size": len(b)})
 				continue
 			}
 			sum := sha256.Sum256(b)
@@ -376,6 +383,112 @@ func TestGatedRepositoryExplainsItself(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error should mention %q: %v", want, err)
 		}
+	}
+}
+
+func TestResolveWholeRepositoryTakesTheShardsTheIndexNames(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.safetensors.index.json":     []byte(`{"metadata":{"total_size":8},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}`),
+		"model-00001-of-00002.safetensors": []byte("shard-one"),
+		"model-00002-of-00002.safetensors": []byte("shard-two"),
+		"config.json":                      []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+		"tokenizer.json":                   []byte("{}"),
+		"LICENSE":                          []byte("Apache-2.0"),
+		// Published beside the model and not part of it: a second
+		// quantisation the index does not name.
+		"model-q4.safetensors": []byte("other-model"),
+	})
+	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Path] = true
+		if f.SHA256 == "" {
+			t.Errorf("%s resolved without the digest the repository publishes", f.Path)
+		}
+	}
+	for _, want := range []string{
+		"model.safetensors.index.json", "model-00001-of-00002.safetensors",
+		"model-00002-of-00002.safetensors", "config.json", "tokenizer.json", "LICENSE",
+	} {
+		if !got[want] {
+			t.Errorf("Resolve did not select %q", want)
+		}
+	}
+	if got["model-q4.safetensors"] {
+		t.Error("Resolve selected a weight file the index does not name")
+	}
+}
+
+func TestResolveWholeRepositoryTakesASingleShardModel(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.safetensors": []byte("weights"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	})
+	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("resolved %d files, want the weights and the config", len(files))
+	}
+}
+
+func TestResolveRefusesARepositoryMissingAShardItsIndexNames(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.safetensors.index.json":     []byte(`{"metadata":{"total_size":8},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}`),
+		"model-00001-of-00002.safetensors": []byte("shard-one"),
+		"config.json":                      []byte(`{}`),
+	})
+	_, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err == nil {
+		t.Fatal("resolved a model whose second shard the repository does not publish")
+	}
+	if !strings.Contains(err.Error(), "model-00002-of-00002.safetensors") {
+		t.Errorf("the refusal does not name the missing shard: %v", err)
+	}
+}
+
+func TestResolveStillAsksWhichFileForAGGUFRepository(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"qwen3-8b-q4_k_m.gguf": []byte("gguf-bytes"),
+	})
+	_, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if !errors.Is(err, ErrNoFile) {
+		t.Fatalf("err = %v, want ErrNoFile so the caller is asked which quantisation", err)
+	}
+}
+
+// TestResolveWholeRepositoryLeavesInlineFilesWithoutADigest: the API reports
+// an LFS digest only for files stored in LFS. A small file such as
+// config.json is served inline with none, and resolving the repository must
+// carry that file through with an empty SHA256 rather than inventing one or
+// refusing the file.
+func TestResolveWholeRepositoryLeavesInlineFilesWithoutADigest(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.safetensors": []byte("weights"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	})
+	hub.inline = map[string]bool{"config.json": true}
+	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	byPath := map[string]File{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	cfg, ok := byPath["config.json"]
+	if !ok {
+		t.Fatal("Resolve did not select config.json")
+	}
+	if cfg.SHA256 != "" {
+		t.Errorf("config.json SHA256 = %q, want empty: the repository serves it inline with no digest", cfg.SHA256)
+	}
+	if got := byPath["model.safetensors"].SHA256; got == "" {
+		t.Error("model.safetensors resolved without the digest the repository publishes")
 	}
 }
 
