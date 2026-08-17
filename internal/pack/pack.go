@@ -73,6 +73,10 @@ type Options struct {
 	// (io.palan.origin.sha256); defaults to the primary weight digest, which
 	// is identical for raw packing.
 	OriginSHA256 string
+	// Signer names the key that signed the source repository's own file
+	// digests (io.palan.origin.signer); empty when no such signature was
+	// checked.
+	Signer string
 }
 
 // Model packs files into st as a ModelPack artifact tagged ref and returns
@@ -314,6 +318,9 @@ func manifestAnnotations(info modelmeta.Info, layers []ocispec.Descriptor, opts 
 		}
 	}
 	a[modelspec.AnnotationOriginSHA256] = origin
+	if opts.Signer != "" {
+		a[modelspec.AnnotationOriginSigner] = opts.Signer
+	}
 	if info.ContextLength > 0 {
 		a[modelspec.AnnotationContextLength] = strconv.FormatUint(info.ContextLength, 10)
 	}

@@ -1,122 +1,29 @@
 // Copyright The palan Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package omsig
+package omsig_test
 
 import (
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/sigstore/sigstore/pkg/signature"
+
+	"github.com/aimd54/palan/internal/omsig"
+	"github.com/aimd54/palan/internal/omsig/omsigtest"
 )
-
-// testBundle builds a Sigstore bundle of the shape the model-signing tool
-// writes: a DSSE envelope carrying an in-toto statement, signed over the
-// pre-authentication encoding.
-func testBundle(t *testing.T, subjects map[string]string) ([]byte, signature.Verifier) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := signature.LoadSigner(key, crypto.SHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier, err := signature.LoadVerifier(key.Public(), crypto.SHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var subs []map[string]any
-	for name, dig := range subjects {
-		subs = append(subs, map[string]any{"name": name, "digest": map[string]string{"sha256": dig}})
-	}
-	stmt, err := json.Marshal(map[string]any{
-		"_type":         "https://in-toto.io/Statement/v1",
-		"subject":       subs,
-		"predicateType": PredicateType,
-		"predicate":     map[string]any{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pae := fmt.Sprintf("DSSEv1 %d %s %d %s", len(payloadType), payloadType, len(stmt), stmt)
-	sig, err := signer.SignMessage(strings.NewReader(pae))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := json.Marshal(map[string]any{
-		"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
-		"dsseEnvelope": map[string]any{
-			"payload":     base64.StdEncoding.EncodeToString(stmt),
-			"payloadType": payloadType,
-			"signatures":  []map[string]any{{"sig": base64.StdEncoding.EncodeToString(sig)}},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return bundle, verifier
-}
-
-// signStatement signs an arbitrary in-toto statement the same way testBundle
-// does, so a test can carry a malformed statement (a bad predicate type, a
-// subject with no digest, no subjects at all) inside a signature that still
-// verifies, and so exercise what happens after the signature checks out.
-func signStatement(t *testing.T, stmt map[string]any) ([]byte, signature.Verifier) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := signature.LoadSigner(key, crypto.SHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier, err := signature.LoadVerifier(key.Public(), crypto.SHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := json.Marshal(stmt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pae := fmt.Sprintf("DSSEv1 %d %s %d %s", len(payloadType), payloadType, len(raw), raw)
-	sig, err := signer.SignMessage(strings.NewReader(pae))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := json.Marshal(map[string]any{
-		"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
-		"dsseEnvelope": map[string]any{
-			"payload":     base64.StdEncoding.EncodeToString(raw),
-			"payloadType": payloadType,
-			"signatures":  []map[string]any{{"sig": base64.StdEncoding.EncodeToString(sig)}},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return bundle, verifier
-}
 
 func TestVerifyReturnsTheSubjectsTheSignatureCovers(t *testing.T) {
 	want := map[string]string{
 		"model.safetensors": "aa" + strings.Repeat("0", 62),
 		"config.json":       "bb" + strings.Repeat("0", 62),
 	}
-	bundle, v := testBundle(t, want)
+	bundle, v, _ := omsigtest.Bundle(t, want)
 
-	st, err := Verify(bundle, v)
+	st, err := omsig.Verify(bundle, v)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -134,7 +41,7 @@ func TestVerifyReturnsTheSubjectsTheSignatureCovers(t *testing.T) {
 }
 
 func TestVerifyRefusesASignatureOverDifferentBytes(t *testing.T) {
-	bundle, v := testBundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
+	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
 	// Re-sign nothing: tamper with the payload the signature was made over.
 	var b map[string]any
 	if err := json.Unmarshal(bundle, &b); err != nil {
@@ -144,19 +51,19 @@ func TestVerifyRefusesASignatureOverDifferentBytes(t *testing.T) {
 	tampered, _ := json.Marshal(map[string]any{
 		"_type":         "https://in-toto.io/Statement/v1",
 		"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha256": "cc" + strings.Repeat("0", 62)}}},
-		"predicateType": PredicateType,
+		"predicateType": omsig.PredicateType,
 	})
 	env["payload"] = base64.StdEncoding.EncodeToString(tampered)
 	edited, _ := json.Marshal(b)
 
-	if _, err := Verify(edited, v); err == nil {
+	if _, err := omsig.Verify(edited, v); err == nil {
 		t.Fatal("verified a statement the key never signed")
 	}
 }
 
 func TestCoversRefusesAFileTheStatementDoesNotList(t *testing.T) {
-	bundle, v := testBundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
-	st, err := Verify(bundle, v)
+	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
+	st, err := omsig.Verify(bundle, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +71,7 @@ func TestCoversRefusesAFileTheStatementDoesNotList(t *testing.T) {
 	if err == nil {
 		t.Fatal("accepted a file the signature says nothing about")
 	}
-	if !errors.Is(err, ErrNotCovered) {
+	if !errors.Is(err, omsig.ErrNotCovered) {
 		t.Errorf("Covers error = %v, want it to wrap ErrNotCovered so callers can match it with errors.Is", err)
 	}
 	if err := st.Covers("model.safetensors", "ee"+strings.Repeat("0", 62)); err == nil {
@@ -175,8 +82,8 @@ func TestCoversRefusesAFileTheStatementDoesNotList(t *testing.T) {
 func TestCoversIsCaseInsensitiveOnHexDigest(t *testing.T) {
 	// Published in the statement with uppercase hex letters.
 	dig := "AA" + strings.Repeat("0", 62)
-	bundle, v := testBundle(t, map[string]string{"model.safetensors": dig})
-	st, err := Verify(bundle, v)
+	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": dig})
+	st, err := omsig.Verify(bundle, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,8 +96,8 @@ func TestCoversIsCaseInsensitiveOnHexDigest(t *testing.T) {
 }
 
 func TestCoversRefusesAnEmptyDigest(t *testing.T) {
-	bundle, v := testBundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
-	st, err := Verify(bundle, v)
+	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
+	st, err := omsig.Verify(bundle, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +122,7 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 		{
 			name: "wrong payload type",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				bundle, v := testBundle(t, map[string]string{"model.safetensors": validDigest})
+				bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": validDigest})
 				var b map[string]any
 				if err := json.Unmarshal(bundle, &b); err != nil {
 					t.Fatal(err)
@@ -233,7 +140,7 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 		{
 			name: "zero signatures",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				bundle, v := testBundle(t, map[string]string{"model.safetensors": validDigest})
+				bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": validDigest})
 				var b map[string]any
 				if err := json.Unmarshal(bundle, &b); err != nil {
 					t.Fatal(err)
@@ -251,48 +158,52 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 		{
 			name: "wrong predicate type",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				return signStatement(t, map[string]any{
+				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
 					"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha256": validDigest}}},
 					"predicateType": "https://example.com/some/other/predicate/v1",
 					"predicate":     map[string]any{},
 				})
+				return bundle, v
 			},
 			wantErr: "predicate",
 		},
 		{
 			name: "subject with no sha256 digest",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				return signStatement(t, map[string]any{
+				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
 					"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha1": "deadbeef"}}},
-					"predicateType": PredicateType,
+					"predicateType": omsig.PredicateType,
 					"predicate":     map[string]any{},
 				})
+				return bundle, v
 			},
 			wantErr: "model.safetensors",
 		},
 		{
 			name: "subject with a malformed sha256 digest",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				return signStatement(t, map[string]any{
+				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
 					"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha256": "not-a-hex-digest"}}},
-					"predicateType": PredicateType,
+					"predicateType": omsig.PredicateType,
 					"predicate":     map[string]any{},
 				})
+				return bundle, v
 			},
 			wantErr: "model.safetensors",
 		},
 		{
 			name: "statement covers zero subjects",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
-				return signStatement(t, map[string]any{
+				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
 					"subject":       []map[string]any{},
-					"predicateType": PredicateType,
+					"predicateType": omsig.PredicateType,
 					"predicate":     map[string]any{},
 				})
+				return bundle, v
 			},
 			wantErr: "no files",
 		},
@@ -301,7 +212,7 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			bundle, v := c.build(t)
-			st, err := Verify(bundle, v)
+			st, err := omsig.Verify(bundle, v)
 			if err == nil {
 				t.Fatalf("Verify accepted a statement that vouches for nothing: got %+v", st)
 			}

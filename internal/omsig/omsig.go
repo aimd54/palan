@@ -35,8 +35,8 @@ const FileName = "model.sig"
 // PredicateType marks an in-toto statement written by the model-signing tool.
 const PredicateType = "https://model_signing/signature/v1.0"
 
-// payloadType is the DSSE payload type for an in-toto statement.
-const payloadType = "application/vnd.in-toto+json"
+// PayloadType is the DSSE payload type for an in-toto statement.
+const PayloadType = "application/vnd.in-toto+json"
 
 // ErrNotCovered marks a file the signature says nothing about.
 var ErrNotCovered = errors.New("not covered by the signature")
@@ -75,8 +75,8 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, fmt.Errorf("decoding the signature bundle: %w", err)
 	}
-	if b.DSSE.PayloadType != payloadType {
-		return nil, fmt.Errorf("signature carries payload type %q, want %q", b.DSSE.PayloadType, payloadType)
+	if b.DSSE.PayloadType != PayloadType {
+		return nil, fmt.Errorf("signature carries payload type %q, want %q", b.DSSE.PayloadType, PayloadType)
 	}
 	if len(b.DSSE.Signatures) == 0 {
 		return nil, errors.New("the signature bundle carries no signature")
@@ -88,7 +88,7 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 
 	// DSSE signs the pre-authentication encoding, not the payload, so that
 	// a payload cannot be reinterpreted under another type.
-	pae := []byte(fmt.Sprintf("DSSEv1 %d %s %d %s", len(payloadType), payloadType, len(payload), payload))
+	pae := []byte(fmt.Sprintf("DSSEv1 %d %s %d %s", len(PayloadType), PayloadType, len(payload), payload))
 
 	var lastErr error
 	verified := false
