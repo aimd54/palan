@@ -61,6 +61,18 @@ func TestVerifyRefusesASignatureOverDifferentBytes(t *testing.T) {
 	}
 }
 
+// TestVerifyRefusesASignatureMadeByADifferentKey covers a failure distinct
+// from a tampered payload: the bundle is exactly what its signer produced,
+// untouched, and it is checked against a key that never made it.
+func TestVerifyRefusesASignatureMadeByADifferentKey(t *testing.T) {
+	bundle, _, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
+	unrelated, _ := omsigtest.Key(t)
+
+	if _, err := omsig.Verify(bundle, unrelated); err == nil {
+		t.Fatal("verified a signature against a key that never made it")
+	}
+}
+
 func TestCoversRefusesAFileTheStatementDoesNotList(t *testing.T) {
 	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
 	st, err := omsig.Verify(bundle, v)

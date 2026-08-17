@@ -280,6 +280,41 @@ func TestGatedRepositoryExplainsItself(t *testing.T) {
 	}
 }
 
+// TestFetchSmallDistinguishesAnUnpublishedFileFromOtherFailures proves the
+// one status FetchSmall may read as "the repository does not publish this
+// file" is a 404, so a caller can tell that apart from a fetch failure that
+// says nothing about whether the file exists.
+func TestFetchSmallDistinguishesAnUnpublishedFileFromOtherFailures(t *testing.T) {
+	h := newFakeHub(t, map[string][]byte{"config.json": []byte("{}")})
+	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "org/repo"}, "model.sig")
+	if err == nil {
+		t.Fatal("fetched a file the repository does not publish")
+	}
+	if !errors.Is(err, ErrFileNotFound) {
+		t.Errorf("error = %v, want it to wrap ErrFileNotFound so a caller can tell an absent file from any other fetch failure", err)
+	}
+}
+
+// TestFetchSmallDoesNotClaimAGatedFileIsUnpublished proves a gated
+// repository is reported as gated, with the HF_TOKEN guidance intact, rather
+// than folded into the same "file not found" case a 404 gets.
+func TestFetchSmallDoesNotClaimAGatedFileIsUnpublished(t *testing.T) {
+	h := newFakeHub(t, nil)
+	h.Status = http.StatusForbidden
+	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "meta/gated"}, "model.sig")
+	if err == nil {
+		t.Fatal("a gated repository must fail")
+	}
+	if errors.Is(err, ErrFileNotFound) {
+		t.Error("a gated repository was reported the same way as one that never published the file")
+	}
+	for _, want := range []string{"gated", "HF_TOKEN"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should mention %q: %v", want, err)
+		}
+	}
+}
+
 func TestResolveWholeRepositoryTakesTheShardsTheIndexNames(t *testing.T) {
 	hub := newFakeHub(t, map[string][]byte{
 		"model.safetensors.index.json":     []byte(`{"metadata":{"total_size":8},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}`),

@@ -45,6 +45,12 @@ const defaultEndpoint = "https://huggingface.co"
 // ErrNoFile marks a reference that names a repository but not a file.
 var ErrNoFile = errors.New("no file named in the reference")
 
+// ErrFileNotFound marks a file the repository does not publish, as distinct
+// from ErrNoFile (no file was named at all) and from any other fetch
+// failure: a timeout, a 5xx, or a gated repository all refuse too, but for a
+// reason a caller should surface, not fold into "this file does not exist".
+var ErrFileNotFound = errors.New("file not found in the repository")
+
 // splitPart matches llama.cpp's multi-part naming, model-00001-of-00003.gguf.
 // Packing only the part that was named would produce an artifact that looks
 // complete and cannot load, so every sibling is fetched.
@@ -355,6 +361,8 @@ func (c *Client) FetchSmall(ctx context.Context, ref Ref, name string) ([]byte, 
 	case http.StatusOK:
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, c.gatedError(ref, resp.StatusCode)
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("%w: %s in %s", ErrFileNotFound, name, ref.Repo)
 	default:
 		return nil, fmt.Errorf("fetching %s: unexpected status %q", name, resp.Status)
 	}
