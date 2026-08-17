@@ -293,7 +293,7 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
 	var want []string
 	switch {
 	case present[safetensors.IndexName]:
-		data, err := c.fetchSmall(ctx, ref, safetensors.IndexName)
+		data, err := c.FetchSmall(ctx, ref, safetensors.IndexName)
 		if err != nil {
 			return nil, err
 		}
@@ -337,10 +337,10 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
 	return files, nil
 }
 
-// fetchSmall reads a small file whole. It is for the index and the signature,
+// FetchSmall reads a small file whole. It is for the index and the signature,
 // never for weights, which stream through Download so an interrupted transfer
 // resumes.
-func (c *Client) fetchSmall(ctx context.Context, ref Ref, name string) ([]byte, error) {
+func (c *Client) FetchSmall(ctx context.Context, ref Ref, name string) ([]byte, error) {
 	url := c.endpoint() + "/" + ref.Repo + "/resolve/main/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
