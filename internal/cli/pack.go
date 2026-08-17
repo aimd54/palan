@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -245,10 +246,13 @@ type fetchedSources struct {
 // hf:// references first. Local paths pass through untouched, so a command can
 // mix a fetched model with a licence or template already on disk.
 //
-// Each fetched file carries the digest the repository published for it, and
-// the named weight file's digest and the repository URL are also carried back
-// in fetchedSources, because a model fetched from a known source should say
-// so rather than annotating itself with its own digest.
+// Each fetched file carries the digest the repository published for it,
+// where the repository publishes one: an LFS-stored file carries a
+// SHA-256, but a file served inline, such as config.json, carries none,
+// and none is invented for it. The named weight file's digest and the
+// repository URL are also carried back in fetchedSources, because a model
+// fetched from a known source should say so rather than annotating itself
+// with its own digest.
 //
 // A supplied verification key can only be honoured for files a repository
 // published a signature over: a local path carries no such signature, and
@@ -284,7 +288,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 	client := hf.NewClient()
 	out := make([]pack.File, 0, len(args))
 
-	for _, arg := range args {
+	for i, arg := range args {
 		if !hf.IsRef(arg) {
 			out = append(out, pack.File{Path: arg})
 			continue
@@ -295,6 +299,16 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 		}
 		files, err := client.Resolve(ctx, ref)
 		if err != nil {
+			return nil, info, err
+		}
+		// Each reference downloads into a subdirectory of its own, indexed
+		// rather than named after the repository, so two references can
+		// never share a destination path: a file that lands under the wrong
+		// directory would still carry its own repository's published
+		// digest, annotating the artifact with bytes its publisher never
+		// released.
+		srcDir := filepath.Join(tmp, strconv.Itoa(i))
+		if err := os.MkdirAll(srcDir, 0o750); err != nil {
 			return nil, info, err
 		}
 		if info.sourceURL == "" {
@@ -340,7 +354,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 
 		for _, f := range files {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Fetching %s (%s)\n", f.Path, humanBytes(f.Size))
-			path, err := client.Download(ctx, ref, f, tmp, hf.Events{})
+			path, err := client.Download(ctx, ref, f, srcDir, hf.Events{})
 			if err != nil {
 				return nil, info, err
 			}

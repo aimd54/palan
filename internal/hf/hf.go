@@ -9,9 +9,12 @@
 // tag (ADR-0009), because it costs one HTTP client and an air-gapped operator
 // simply never names an hf:// source.
 //
-// The API reports each file's upstream SHA-256, which is checked as the
-// download streams and recorded as io.palan.origin.sha256. A file that does
-// not match what the repository published is refused rather than packed.
+// The API reports each file's upstream SHA-256 when the file is stored in
+// LFS; a file served inline, such as a small config or license file, carries
+// none. Where a digest is published it is checked as the download streams
+// and recorded as io.palan.origin.sha256, and a file that does not match it
+// is refused rather than packed; where none is published, none is checked
+// and none is invented.
 package hf
 
 import (
@@ -442,8 +445,10 @@ const downloadAttempts = 4
 // An interrupted transfer keeps its partial file and resumes on the next
 // attempt, so a dropped connection costs the remainder rather than the whole
 // download. Completed bytes are checked against the digest the repository
-// published: a file that does not match is removed rather than handed on to be
-// packed and signed as genuine.
+// published, when it published one for f: f.SHA256 is empty for a file
+// served inline rather than stored in LFS, and then nothing is checked here.
+// Where a digest was published, a file that does not match it is removed
+// rather than handed on to be packed and signed as genuine.
 func (c *Client) Download(ctx context.Context, ref Ref, f File, destDir string, ev Events) (string, error) {
 	dest := filepath.Join(destDir, filepath.Base(f.Path)) // #nosec G304 -- caller owns destDir
 	partial := dest + ".partial"
