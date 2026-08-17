@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -93,7 +94,10 @@ file digests is fetched and checked against it, and every downloaded file is
 held against what that signature covers: a file it omits, or one whose bytes
 hash to something else, refuses the import before anything is packed. A key
 supplied against a repository that publishes no such signature is refused
-rather than imported unverified.
+rather than imported unverified. Since only a Hugging Face source can carry
+that signature, --oms-key also refuses a PATH list holding a local file,
+whether alone or mixed with a repository, rather than pack part of the
+artifact with nothing behind it.
 
 Profiles: "artifact" (raw weight layers; the default), "car" (an OCI image
 with one tar layer under models/, for Kubernetes image volumes and KServe
@@ -113,11 +117,14 @@ modelcars; tagged REF-car), or "both".`,
 			}
 
 			files, fetched, err := resolveSources(ctx, cmd, args)
-			if err != nil {
-				return err
-			}
+			// Registered ahead of the error check: a refused import can
+			// still have created the temp directory and downloaded bytes
+			// into it, and those must not outlive the failed command.
 			if fetched.tempDir != "" {
 				defer func() { _ = os.RemoveAll(fetched.tempDir) }()
+			}
+			if err != nil {
+				return err
 			}
 
 			// What the source published beats what palan can infer: the
@@ -233,8 +240,25 @@ type fetchedSources struct {
 // the named weight file's digest and the repository URL are also carried back
 // in fetchedSources, because a model fetched from a known source should say
 // so rather than annotating itself with its own digest.
+//
+// A supplied verification key can only be honoured for files a repository
+// published a signature over: a local path carries no such signature, and
+// packing one anyway, whether alone or mixed with a repository, would either
+// silently skip verification or annotate the whole artifact as vouched-for
+// when part of it never was. Both are worse than refusing, so this checks
+// every argument against the key before resolving or downloading any of
+// them.
 func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]pack.File, fetchedSources, error) {
 	var info fetchedSources
+	if omsKey != "" {
+		for _, a := range args {
+			if !hf.IsRef(a) {
+				return nil, info, fmt.Errorf(
+					"--oms-key was given and %q is not a Hugging Face source: a supplied key can only be honoured for files a repository published a signature over, and a local file is not one of those",
+					a)
+			}
+		}
+	}
 	if !slices.ContainsFunc(args, hf.IsRef) {
 		out := make([]pack.File, 0, len(args))
 		for _, a := range args {
@@ -284,10 +308,19 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 				return nil, info, err
 			}
 			sig, err := client.FetchSmall(ctx, ref, omsig.FileName)
-			if err != nil {
+			switch {
+			case errors.Is(err, hf.ErrFileNotFound):
+				// The only failure that actually means "unsigned": the
+				// repository was reachable and simply has no model.sig.
 				return nil, info, fmt.Errorf(
-					"a verification key was given and %s publishes no %s to check against it: %w",
-					ref.Repo, omsig.FileName, err)
+					"a verification key was given and %s publishes no %s to check against it",
+					ref.Repo, omsig.FileName)
+			case err != nil:
+				// Anything else, gated, rate limited, offline, is a fetch
+				// failure, not evidence the repository is unsigned; let it
+				// speak for itself rather than push an operator toward
+				// dropping the key over a transient problem.
+				return nil, info, fmt.Errorf("fetching %s to check against the supplied key: %w", omsig.FileName, err)
 			}
 			stmt, err = omsig.Verify(sig, v)
 			if err != nil {
