@@ -45,22 +45,35 @@ func Key(t testing.TB) (verifier signature.Verifier, publicKeyPEM []byte) {
 }
 
 // Bundle builds a Sigstore bundle of the shape the model-signing tool
-// writes: a DSSE envelope carrying an in-toto statement over subjects (a
-// repository path mapped to its hex SHA-256), signed with a freshly
-// generated key. It returns the encoded bundle, a verifier for checking it
-// in-process, and the PEM encoding of the same public key for a test that
-// goes through a key file the way an operator would.
+// writes: a DSSE envelope carrying an in-toto statement, signed with a
+// freshly generated key. subjects maps a repository path to its hex
+// SHA-256; each entry becomes one of the predicate's "resources" listing,
+// which is where the real tool records a per-file digest. The statement's
+// own top-level "subject" array is populated the way the tool populates
+// it, with a single entry naming the model as a whole, so a test bundle has
+// the same shape a verifier will ever actually see; the value of that
+// entry's digest is not meaningful here because nothing in this package
+// checks it.
 func Bundle(t testing.TB, subjects map[string]string) (bundle []byte, verifier signature.Verifier, publicKeyPEM []byte) {
 	t.Helper()
-	var subs []map[string]any
+	var resources []map[string]any
 	for name, dig := range subjects {
-		subs = append(subs, map[string]any{"name": name, "digest": map[string]string{"sha256": dig}})
+		resources = append(resources, map[string]any{"name": name, "algorithm": "sha256", "digest": dig})
 	}
 	stmt := map[string]any{
-		"_type":         "https://in-toto.io/Statement/v1",
-		"subject":       subs,
+		"_type": "https://in-toto.io/Statement/v1",
+		"subject": []map[string]any{
+			{"name": "model", "digest": map[string]string{"sha256": strings.Repeat("0", 64)}},
+		},
 		"predicateType": omsig.PredicateType,
-		"predicate":     map[string]any{},
+		"predicate": map[string]any{
+			"resources": resources,
+			"serialization": map[string]any{
+				"method":         "files",
+				"hash_type":      "sha256",
+				"allow_symlinks": false,
+			},
+		},
 	}
 	return SignStatement(t, stmt)
 }
