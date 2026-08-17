@@ -25,6 +25,11 @@ const (
 	// tokens, as a decimal string (read from the GGUF header at pack time).
 	// The upstream ModelConfig has no such field.
 	AnnotationContextLength = "io.palan.model.context_length"
+
+	// AnnotationOriginSigner names the key whose signature over the
+	// publisher's own file digests was checked at import, as sha256:<hex>
+	// of the public key. Absent when no such signature was verified.
+	AnnotationOriginSigner = "io.palan.origin.signer"
 )
 
 // ServeDefaults are default llama-server parameters embedded at pack time
