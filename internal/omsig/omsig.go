@@ -33,7 +33,12 @@ import (
 	"github.com/sigstore/sigstore/pkg/signature"
 )
 
-// FileName is where the signing tool writes its signature by default.
+// FileName is where the signing tool writes its signature by default. When
+// the signature is written under the directory it signs, it excludes itself
+// from the resources it lists rather than covering its own bytes; a
+// statement never names FileName among the files it covers, so a caller
+// checking a download against the signature has to skip that one path by
+// name instead of expecting Covers to answer for it.
 const FileName = "model.sig"
 
 // PredicateType marks an in-toto statement written by the model-signing tool.

@@ -98,6 +98,19 @@ func TestVerifiesASignatureTheSigningToolWrote(t *testing.T) {
 	if err := os.WriteFile(weights, []byte("weights-for-interop"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// internal/cli/pack.go holds a resource's name against a repository path
+	// with an exact string compare, so a shard nested under a subdirectory
+	// has to come out spelled the way that compare expects: forward-slash
+	// joined, relative to the signed directory. A flat fixture cannot catch
+	// a change in that spelling; this file is what pins it.
+	shardDir := filepath.Join(model, "sub")
+	if err := os.MkdirAll(shardDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	shard := filepath.Join(shardDir, "weights.bin")
+	if err := os.WriteFile(shard, []byte("shard-for-interop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	priv := filepath.Join(dir, "signing.key")
 	pub := filepath.Join(dir, "signing.pub")
@@ -126,6 +139,13 @@ func TestVerifiesASignatureTheSigningToolWrote(t *testing.T) {
 	sum := sha256OfFile(t, weights)
 	if err := stmt.Covers("model.safetensors", sum); err != nil {
 		t.Errorf("the statement does not cover the file that was signed: %v", err)
+	}
+	// Pins the exact spelling internal/cli/pack.go's exact-string compare
+	// relies on: forward-slash joined, relative to the signed directory,
+	// not "./sub/weights.bin" and not backslash-joined.
+	shardSum := sha256OfFile(t, shard)
+	if err := stmt.Covers("sub/weights.bin", shardSum); err != nil {
+		t.Errorf("the statement does not cover the nested file under its relative path: %v", err)
 	}
 
 	// The other direction: the tool must accept what it wrote, so a failure
