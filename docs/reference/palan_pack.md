@@ -35,8 +35,23 @@ hf://<org>/<repo>/<file>, which is downloaded first:
 The bytes are checked against the SHA-256 the repository publishes and
 refused if they differ, that digest becomes io.palan.origin.sha256, and the
 repository page becomes the source annotation. Split parts and a licence
-file in the repository travel with the weights. Naming a repository without
-a file lists what it publishes. Gated repositories read HF_TOKEN.
+file in the repository travel with the weights. Naming a safetensors
+repository without a file resolves the whole model through its shard
+index: the shards it names, config.json, the tokenizer files, and any
+documentation files beside them, each held against the digest the
+repository publishes for it. A GGUF repository named without a file lists
+what it publishes instead, since more than one quantisation usually lives
+there. Gated repositories read HF_TOKEN.
+
+When --oms-key names a public key, the repository's own signature over its
+file digests is fetched and checked against it, and every downloaded file is
+held against what that signature covers: a file it omits, or one whose bytes
+hash to something else, refuses the import before anything is packed. A key
+supplied against a repository that publishes no such signature is refused
+rather than imported unverified. Since only a Hugging Face source can carry
+that signature, --oms-key also refuses a PATH list holding a local file,
+whether alone or mixed with a repository, rather than pack part of the
+artifact with nothing behind it.
 
 Profiles: "artifact" (raw weight layers; the default), "car" (an OCI image
 with one tar layer under models/, for Kubernetes image volumes and KServe
@@ -66,6 +81,7 @@ palan pack PATH... -t REF [flags]
   -h, --help                   help for pack
       --license string         SPDX license expression (default: the GGUF header's general.license; safetensors publishes none)
       --ngl int                default GPU layer count for serving; unset means serve passes no --n-gpu-layers (io.palan.serve.defaults)
+      --oms-key string         public key (PEM) that must have signed the source repository's own file digests
       --origin-sha256 string   SHA-256 of the original upstream file (default: the weight digest)
       --profile string         output profile: artifact|car|both (default "artifact")
       --push                   push to the registry after packing

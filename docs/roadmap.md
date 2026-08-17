@@ -19,7 +19,7 @@ and refuses anything else, for the reasons in
 | M5 | Air gap + K8s (`cp`, `save/load`, car profile, manifests) | ☑ shipped; image volumes exercised on containerd 2.3.1 and 2.3.2 |
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
-| M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☐ planned |
+| M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☐ planned |
 | M10 | Trust policy (identities per reference; keyless verification offline) | ☐ planned |
 | M11 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
@@ -29,9 +29,10 @@ and refuses anything else, for the reasons in
 M8 through M13 build out one property end to end: that the bytes a host
 loads are the bytes a publisher released and an identity approved, checkable
 on any host, connected or not. Signing and verification exist today (M6);
-what these milestones add is the stretch before signing, a policy above one
-key, and the surfaces that show and enforce the result. Each is described
-under [Planned milestones](#planned-milestones).
+M8 adds the stretch before signing, checking a publisher's own digests and,
+where one is published, their signature. What remains is a policy above one
+key and the surfaces that show and enforce the result, described under
+[Planned milestones](#planned-milestones).
 
 ## Validated outside CI
 
@@ -98,20 +99,6 @@ a Kubernetes cluster, and a GPU host:
 In dependency order. Each lands the way the shipped ones did: with tests
 that were seen to fail before the change, and validations recorded above
 once they run against real infrastructure.
-
-### M8: import checks what the publisher states
-
-`pack hf://` handles a single file today, and a safetensors model is
-published as a directory. M8 resolves a whole repository through the same
-path: the shard index, `config.json` and the tokenizer files, every file
-checked against the digest its repository publishes and its origin recorded
-per file, which extends ADR-0009 to the shape models are actually released
-in. Where a repository publishes a signature in the OpenSSF model-signing
-format, the import verifies it and records the identity it verified, and
-interop with that format's reference implementation joins the cosign
-round-trip in CI. Accepted when a deliberately corrupted shard refuses the
-whole pack and leaves the store without a partial artifact, and a published
-signature over different bytes refuses.
 
 ### M9: an attestation binds the upstream files to the layers
 

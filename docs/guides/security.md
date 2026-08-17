@@ -17,6 +17,30 @@ model](../architecture.md#security-model) overview.
   bring-up and warns loudly; `--ca-file` trusts an internal CA without
   weakening verification.
 
+## Checking a Hugging Face import
+
+`pack hf://org/repo` already checks every file it downloads against the
+digest the repository publishes, refusing a truncated or substituted file
+before it can be packed and signed as genuine. `--oms-key` adds a check on
+the repository's own signature over those digests:
+
+```sh
+palan pack hf://org/repo -t llm/model:tag --oms-key model-signing.pub
+```
+
+The key is a PEM public key. Given one, palan fetches the `model.sig` the
+repository publishes, verifies it, and holds every downloaded file against
+what that signature covers: a file the statement omits, or one whose bytes
+hash differently, refuses the whole import before anything is packed. A
+repository that publishes no such signature is refused rather than imported
+unverified. The signature format is the OpenSSF model-signing format, a
+Sigstore bundle carrying a DSSE envelope, and the verifying key is recorded
+on the artifact as `io.palan.origin.signer`.
+
+Because the signature covers files a repository hosts, `--oms-key` only
+applies to `hf://` sources: a PATH list holding a local file is refused
+rather than packed with part of the artifact unverified.
+
 ## Signing models
 
 Signatures are cosign-compatible and **work fully offline**, with no
