@@ -80,8 +80,9 @@ func Bundle(t testing.TB, subjects map[string]string) (bundle []byte, verifier s
 
 // SignStatement signs an arbitrary in-toto statement the same way Bundle
 // does, so a test can carry a malformed statement (a bad predicate type, a
-// subject with no digest, no subjects at all) inside a signature that still
-// verifies, and so exercise what happens after the signature checks out.
+// resource with no digest, no resources at all) inside a signature that
+// still verifies, and so exercise what happens after the signature checks
+// out.
 func SignStatement(t testing.TB, stmt map[string]any) (bundle []byte, verifier signature.Verifier, publicKeyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

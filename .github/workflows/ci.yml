@@ -164,6 +164,14 @@ jobs:
         run: |
           echo "$HOME/.cache/palan-interop-tools" >> "$GITHUB_PATH"
           echo "$HOME/.cache/palan-model-signing/bin" >> "$GITHUB_PATH"
+      # Runs unconditionally, on both a cache hit and a cache miss: a
+      # SKIPPED interop test prints the same "ok" a passing one does, so a
+      # cache that restored files without leaving model_signing callable
+      # would otherwise go green and freeze that outcome for every later
+      # run. Failing here, before the suite starts, turns that into a loud
+      # CI failure instead of a silently skipped proof.
+      - name: Confirm the model-signing tool is callable
+        run: model_signing --version
       - name: Run e2e suite
         env:
           E2E_REGISTRY: localhost:5000
