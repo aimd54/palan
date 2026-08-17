@@ -185,6 +185,17 @@ states architecture and context length in `config.json`, publishes a dtype
 that lands in the config's `precision` field, and leaves `--license` as the
 only source of a license.
 
+A repository can also be named directly, `hf://<org>/<repo>` with no file,
+which packs from Hugging Face rather than disk. The same shard index decides
+which weights belong to the model: a repository publishing a second
+quantization or an adapter beside the indexed shards keeps it out of the
+artifact, and an index naming a shard the repository does not publish is
+refused rather than packed short. Each layer built from a fetched file
+records the digest its repository published for that file as
+`io.palan.origin.sha256` at the layer's own scope, distinct from the
+manifest-level annotation of the same name, which keeps naming the primary
+weight file's upstream digest.
+
 ### "Car" profile for image volumes
 
 Kubernetes image volumes mount OCI *objects* directly via the container
@@ -277,6 +288,14 @@ Three consumption patterns, from least- to most-coupled. The
 
 - Every blob transfer is digest-verified end to end; a corrupted or
   tampered blob is discarded, never installed.
+- Importing from a Hugging Face repository checks the same way at the
+  boundary before anything is packed: every downloaded file is held against
+  the digest its repository publishes. Given `pack --oms-key`, the
+  repository's own signature over those digests, in the OpenSSF
+  model-signing format, is verified as well, and every downloaded file is
+  checked against what it covers; a file the signature omits, or one whose
+  bytes hash differently, refuses the import. The verifying key is recorded
+  as `io.palan.origin.signer`.
 - Cosign signatures are stored under cosign's tag convention,
   `sha256-<manifest digest>.sig`, in the model's own repository, and travel
   with the model through `pull`, `save`, and `cp`. Verification reads either a

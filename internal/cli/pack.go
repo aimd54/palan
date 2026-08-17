@@ -86,8 +86,13 @@ hf://<org>/<repo>/<file>, which is downloaded first:
 The bytes are checked against the SHA-256 the repository publishes and
 refused if they differ, that digest becomes io.palan.origin.sha256, and the
 repository page becomes the source annotation. Split parts and a licence
-file in the repository travel with the weights. Naming a repository without
-a file lists what it publishes. Gated repositories read HF_TOKEN.
+file in the repository travel with the weights. Naming a safetensors
+repository without a file resolves the whole model through its shard
+index: the shards it names, config.json, the tokenizer files, and any
+documentation files beside them, each held against the digest the
+repository publishes for it. A GGUF repository named without a file lists
+what it publishes instead, since more than one quantisation usually lives
+there. Gated repositories read HF_TOKEN.
 
 When --oms-key names a public key, the repository's own signature over its
 file digests is fetched and checked against it, and every downloaded file is
