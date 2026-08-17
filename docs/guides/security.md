@@ -19,10 +19,16 @@ model](../architecture.md#security-model) overview.
 
 ## Checking a Hugging Face import
 
-`pack hf://org/repo` already checks every file it downloads against the
-digest the repository publishes, refusing a truncated or substituted file
-before it can be packed and signed as genuine. `--oms-key` adds a check on
-the repository's own signature over those digests:
+`pack hf://org/repo` checks a file against the digest its repository
+publishes, refusing a truncated or substituted file before it can be
+packed and signed as genuine. A repository publishes that digest for the
+files it stores as LFS, which is where the weights and shards live; a
+small file served inline, such as `config.json`, publishes none and is
+packed with its origin unrecorded rather than invented.
+
+`--oms-key` closes that gap: it checks the repository's own signature over
+the files it publishes, so a small file with no digest of its own is still
+held against something.
 
 ```sh
 palan pack hf://org/repo -t llm/model:tag --oms-key model-signing.pub
@@ -30,12 +36,14 @@ palan pack hf://org/repo -t llm/model:tag --oms-key model-signing.pub
 
 The key is a PEM public key. Given one, palan fetches the `model.sig` the
 repository publishes, verifies it, and holds every downloaded file against
-what that signature covers: a file the statement omits, or one whose bytes
-hash differently, refuses the whole import before anything is packed. A
-repository that publishes no such signature is refused rather than imported
-unverified. The signature format is the OpenSSF model-signing format, a
-Sigstore bundle carrying a DSSE envelope, and the verifying key is recorded
-on the artifact as `io.palan.origin.signer`.
+what that signature covers, including a file with no published digest of
+its own: a file the statement omits, or one whose bytes hash differently,
+refuses the whole import before anything is packed. A repository that
+publishes no such signature is refused rather than imported unverified.
+The signature format is the OpenSSF model-signing format, a Sigstore
+bundle carrying a DSSE envelope, and the verifying key is recorded on the
+artifact as `io.palan.origin.signer`. Verification is key based; a
+keyless signature is not checked.
 
 Because the signature covers files a repository hosts, `--oms-key` only
 applies to `hf://` sources: a PATH list holding a local file is refused

@@ -158,17 +158,20 @@ since packing only the part you named produces an artifact that looks
 complete and cannot load. And a `LICENSE` file in the repository travels with
 the weights as a documentation layer.
 
-Naming a repository without a file lists what it publishes rather than
-guessing a quantisation:
+Naming a safetensors repository without a file packs the whole model
+through its shard index. A GGUF repository named without a file lists what
+it publishes instead, since more than one quantisation usually lives
+there:
 
 ```sh
 palan pack hf://Qwen/Qwen3-8B-GGUF -t llm/qwen3:8b-q4
 # available: Qwen3-8B-Q4_K_M.gguf, Qwen3-8B-Q5_0.gguf, ...
 ```
 
-Gated repositories read `HF_TOKEN`; accept the model's terms first.
-Repositories that publish only safetensors need llama.cpp's
-`convert_hf_to_gguf.py` before anything can be packed.
+Gated repositories read `HF_TOKEN`; accept the model's terms first. A
+repository that publishes only safetensors packs directly; producing
+something `palan serve` can load still needs llama.cpp's
+`convert_hf_to_gguf.py` first, since serving reads GGUF only.
 
 Fetching from Hugging Face is a connected-side convenience, for seeding a
 registry that offline sites then mirror from. Nothing about it is needed to

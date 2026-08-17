@@ -190,11 +190,18 @@ which packs from Hugging Face rather than disk. The same shard index decides
 which weights belong to the model: a repository publishing a second
 quantization or an adapter beside the indexed shards keeps it out of the
 artifact, and an index naming a shard the repository does not publish is
-refused rather than packed short. Each layer built from a fetched file
-records the digest its repository published for that file as
-`io.palan.origin.sha256` at the layer's own scope, distinct from the
-manifest-level annotation of the same name, which keeps naming the primary
-weight file's upstream digest.
+refused rather than packed short.
+
+A repository publishes a digest for its LFS-stored files; a small file
+served inline, such as `config.json`, publishes none. Each layer built
+from a fetched file that carried a published digest records it, in bare
+hex, as `io.palan.origin.sha256` at the layer's own scope; a file with no
+published digest is packed with that annotation absent rather than
+invented. The manifest-scope annotation of the same name keeps its
+existing meaning when a single file was named: the `sha256:`-prefixed
+upstream digest of that file. Naming a bare repository leaves nothing to
+prefer there, so it falls back instead to the packed weight layer's own
+digest, in bare hex.
 
 ### "Car" profile for image volumes
 
@@ -289,13 +296,16 @@ Three consumption patterns, from least- to most-coupled. The
 - Every blob transfer is digest-verified end to end; a corrupted or
   tampered blob is discarded, never installed.
 - Importing from a Hugging Face repository checks the same way at the
-  boundary before anything is packed: every downloaded file is held against
-  the digest its repository publishes. Given `pack --oms-key`, the
-  repository's own signature over those digests, in the OpenSSF
-  model-signing format, is verified as well, and every downloaded file is
-  checked against what it covers; a file the signature omits, or one whose
-  bytes hash differently, refuses the import. The verifying key is recorded
-  as `io.palan.origin.signer`.
+  boundary before anything is packed: a file the repository publishes a
+  digest for, which is every file it stores as LFS, is held against that
+  digest and refused on mismatch; a small file served inline carries none
+  to check and is packed with its origin unrecorded. Given
+  `pack --oms-key`, the repository's own signature over the files it
+  publishes, in the OpenSSF model-signing format, is verified as well, and
+  every downloaded file is checked against what it covers, including a
+  file with no published digest of its own; a file the signature omits, or
+  one whose bytes hash differently, refuses the import. The verifying key
+  is recorded as `io.palan.origin.signer`.
 - Cosign signatures are stored under cosign's tag convention,
   `sha256-<manifest digest>.sig`, in the model's own repository, and travel
   with the model through `pull`, `save`, and `cp`. Verification reads either a

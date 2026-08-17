@@ -30,9 +30,9 @@ M8 through M13 build out one property end to end: that the bytes a host
 loads are the bytes a publisher released and an identity approved, checkable
 on any host, connected or not. Signing and verification exist today (M6);
 M8 adds the stretch before signing, checking a publisher's own digests and,
-where one is published, their signature. What remains is a policy above one
-key and the surfaces that show and enforce the result, described under
-[Planned milestones](#planned-milestones).
+when a key is supplied, their signature as well. What remains is a policy
+above one key and the surfaces that show and enforce the result, described
+under [Planned milestones](#planned-milestones).
 
 ## Validated outside CI
 

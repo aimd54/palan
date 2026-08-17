@@ -84,25 +84,29 @@ hf://<org>/<repo>/<file>, which is downloaded first:
   palan pack hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf -t llm/qwen3:8b-q4
 
 The bytes are checked against the SHA-256 the repository publishes and
-refused if they differ, that digest becomes io.palan.origin.sha256, and the
+refused if they differ; a repository publishes that digest for its
+LFS-stored files, so a file served inline, such as config.json, carries
+none to check and is packed with its origin unrecorded rather than
+invented. Where a digest exists it becomes io.palan.origin.sha256, and the
 repository page becomes the source annotation. Split parts and a licence
 file in the repository travel with the weights. Naming a safetensors
 repository without a file resolves the whole model through its shard
 index: the shards it names, config.json, the tokenizer files, and any
-documentation files beside them, each held against the digest the
-repository publishes for it. A GGUF repository named without a file lists
-what it publishes instead, since more than one quantisation usually lives
-there. Gated repositories read HF_TOKEN.
+documentation files beside them, each held against its own published
+digest where the repository publishes one. A GGUF repository named
+without a file lists what it publishes instead, since more than one
+quantisation usually lives there. Gated repositories read HF_TOKEN.
 
-When --oms-key names a public key, the repository's own signature over its
-file digests is fetched and checked against it, and every downloaded file is
-held against what that signature covers: a file it omits, or one whose bytes
-hash to something else, refuses the import before anything is packed. A key
-supplied against a repository that publishes no such signature is refused
-rather than imported unverified. Since only a Hugging Face source can carry
-that signature, --oms-key also refuses a PATH list holding a local file,
-whether alone or mixed with a repository, rather than pack part of the
-artifact with nothing behind it.
+When --oms-key names a public key, the repository's own signature over the
+files it publishes is fetched and checked against it, and every downloaded
+file is held against what that signature covers, including a file with no
+published digest of its own: a file the signature omits, or one whose
+bytes hash to something else, refuses the import before anything is
+packed. A key supplied against a repository that publishes no such
+signature is refused rather than imported unverified. Since only a Hugging
+Face source can carry that signature, --oms-key also refuses a PATH list
+holding a local file, whether alone or mixed with a repository, rather
+than pack part of the artifact with nothing behind it.
 
 Profiles: "artifact" (raw weight layers; the default), "car" (an OCI image
 with one tar layer under models/, for Kubernetes image volumes and KServe
