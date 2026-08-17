@@ -16,7 +16,7 @@ import (
 	"github.com/aimd54/palan/internal/omsig/omsigtest"
 )
 
-func TestVerifyReturnsTheSubjectsTheSignatureCovers(t *testing.T) {
+func TestVerifyReturnsTheDigestsTheSignatureCovers(t *testing.T) {
 	want := map[string]string{
 		"model.safetensors": "aa" + strings.Repeat("0", 62),
 		"config.json":       "bb" + strings.Repeat("0", 62),
@@ -28,8 +28,8 @@ func TestVerifyReturnsTheSubjectsTheSignatureCovers(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	for name, dig := range want {
-		if st.Subjects[name] != dig {
-			t.Errorf("subject %s = %q, want %q", name, st.Subjects[name], dig)
+		if st.Digests[name] != dig {
+			t.Errorf("digest for %s = %q, want %q", name, st.Digests[name], dig)
 		}
 	}
 	if st.KeyID == "" {
@@ -97,11 +97,11 @@ func TestVerifyReadsPerFileDigestsFromThePredicateNotTheSubject(t *testing.T) {
 	if err := st.Covers("model.safetensors", want); err != nil {
 		t.Errorf("Covers rejected the resource the predicate lists: %v", err)
 	}
-	if _, ok := st.Subjects["model"]; ok {
-		t.Error("Subjects treated the statement's own model name as a covered file path")
+	if _, ok := st.Digests["model"]; ok {
+		t.Error("Digests treated the statement's own model name as a covered file path")
 	}
-	if len(st.Subjects) != 1 {
-		t.Errorf("Subjects has %d entries, want exactly the one resource: %+v", len(st.Subjects), st.Subjects)
+	if len(st.Digests) != 1 {
+		t.Errorf("Digests has %d entries, want exactly the one resource: %+v", len(st.Digests), st.Digests)
 	}
 }
 
@@ -246,6 +246,12 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 			wantErr: "predicate",
 		},
 		{
+			// The digest is valid 64-hex on purpose: the malformed-digest
+			// check below this one would also refuse a short digest like
+			// "deadbeef", so a short digest here would pass this case
+			// whether or not the algorithm guard exists at all. A valid
+			// digest makes the algorithm guard the only thing that can
+			// refuse this statement.
 			name: "resource under an algorithm other than sha256",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
 				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
@@ -253,12 +259,12 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 					"subject":       []map[string]any{{"name": "model", "digest": map[string]string{"sha256": strings.Repeat("0", 64)}}},
 					"predicateType": omsig.PredicateType,
 					"predicate": map[string]any{
-						"resources": []map[string]any{{"name": "model.safetensors", "algorithm": "sha1", "digest": "deadbeef"}},
+						"resources": []map[string]any{{"name": "model.safetensors", "algorithm": "sha1", "digest": validDigest}},
 					},
 				})
 				return bundle, v
 			},
-			wantErr: "model.safetensors",
+			wantErr: "algorithm",
 		},
 		{
 			name: "resource with a malformed sha256 digest",

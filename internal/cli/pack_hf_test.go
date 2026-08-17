@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/aimd54/palan/internal/gguf/gguftest"
 	"github.com/aimd54/palan/internal/hf/hftest"
@@ -77,6 +79,79 @@ func TestPackFromARepositoryCarriesEveryFilesPublishedDigest(t *testing.T) {
 	}
 	if info.sourceURL == "" {
 		t.Error("the artifact would not record which repository it came from")
+	}
+}
+
+// TestPackFromTwoRepositoriesKeepsEachFilesOwnBytes proves that naming two
+// repositories in one invocation cannot make one repository's file overwrite
+// the other's on disk. Both repositories here publish a config.json, each
+// under different content and a different published digest; if the two
+// downloads ever landed in the same directory under the same basename, the
+// second write would clobber the first while the resolved file list still
+// carried an entry claiming the first repository's digest for whatever bytes
+// happen to be on disk at that shared path, an artifact asserting a
+// publisher released bytes they did not.
+func TestPackFromTwoRepositoriesKeepsEachFilesOwnBytes(t *testing.T) {
+	hub := hftest.New(t, nil)
+	hub.Repos = map[string]map[string][]byte{
+		"org/a": {
+			"model.safetensors": []byte("a-weights"),
+			"config.json":       []byte(`{"repo":"a"}`),
+		},
+		"org/b": {
+			"model.safetensors": []byte("b-weights"),
+			"config.json":       []byte(`{"repo":"b"}`),
+		},
+	}
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, info, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/a", "hf://org/b"})
+	if info.tempDir != "" {
+		t.Cleanup(func() { _ = os.RemoveAll(info.tempDir) })
+	}
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(files) != 4 {
+		t.Fatalf("resolved %d files, want two each from two repositories: %+v", len(files), files)
+	}
+
+	type want struct{ content, digest string }
+	byRepo := make(map[string]want, len(hub.Repos))
+	for repo, rf := range hub.Repos {
+		sum := sha256.Sum256(rf["config.json"])
+		byRepo[repo] = want{content: string(rf["config.json"]), digest: hex.EncodeToString(sum[:])}
+	}
+
+	var sawA, sawB bool
+	for _, f := range files {
+		if f.Name != "config.json" {
+			continue
+		}
+		if f.Name != filepath.Base(f.Name) {
+			t.Errorf("layer name %q carries a directory component", f.Name)
+		}
+		got, err := os.ReadFile(f.Path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Path, err)
+		}
+		switch {
+		case string(got) == byRepo["org/a"].content:
+			sawA = true
+			if f.OriginSHA256 != byRepo["org/a"].digest {
+				t.Errorf("org/a config.json OriginSHA256 = %q, want %q (org/a's own published digest)", f.OriginSHA256, byRepo["org/a"].digest)
+			}
+		case string(got) == byRepo["org/b"].content:
+			sawB = true
+			if f.OriginSHA256 != byRepo["org/b"].digest {
+				t.Errorf("org/b config.json OriginSHA256 = %q, want %q (org/b's own published digest)", f.OriginSHA256, byRepo["org/b"].digest)
+			}
+		default:
+			t.Errorf("a config.json on disk holds %q, matching neither repository's published content", got)
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("did not find both repositories' own config.json intact (org/a seen=%v, org/b seen=%v): %+v", sawA, sawB, files)
 	}
 }
 
@@ -307,6 +382,56 @@ func TestPackRefusesARepositoryWhoseSignatureOmitsAFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "config.json") {
 		t.Errorf("the refusal does not name the uncovered file: %v", err)
+	}
+}
+
+// TestPackCommandRefusesAnUncoveredFileWhenOMSKeyIsSetThroughTheFlag runs the
+// pack command through cobra's own flag parsing instead of assigning the
+// omsKey package variable directly, which is how every other --oms-key test
+// in this file drives verification. If newPackCmd's "--oms-key" flag
+// registration ever stopped binding to the command line, omsKey would stay
+// empty, resolveSources would skip verification entirely, and pack would
+// exit 0 against an unsigned or partly-covered repository: the silent
+// success this whole feature exists to prevent. The refusal asserted below,
+// an uncovered file wrapped in omsig.ErrNotCovered, is only reachable once a
+// signature has actually been fetched and verified against the supplied
+// key, so seeing it proves the flag reached resolveSources and that RunE
+// went on to read the verified result back out of fetchedSources.
+func TestPackCommandRefusesAnUncoveredFileWhenOMSKeyIsSetThroughTheFlag(t *testing.T) {
+	files := map[string][]byte{
+		"model.safetensors": []byte("weights-bytes"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	}
+	keyPEM, bundle := signRepo(t, files, []string{"model.safetensors"})
+	files[omsig.FileName] = bundle
+	hub := hftest.New(t, files)
+	t.Setenv("HF_ENDPOINT", hub.URL())
+	t.Setenv(store.EnvHome, t.TempDir())
+
+	keyPath := filepath.Join(t.TempDir(), "key.pub")
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { omsKey = "" })
+
+	cmd := newPackCmd(viper.New())
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"hf://org/repo",
+		"-t", "registry.example/llm/tiny:v1",
+		"--oms-key", keyPath,
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("pack exited 0 for a repository whose signature does not cover every file")
+	}
+	if !strings.Contains(err.Error(), "config.json") {
+		t.Errorf("the refusal does not name the uncovered file: %v", err)
+	}
+	if !errors.Is(err, omsig.ErrNotCovered) {
+		t.Errorf("error = %v, want it to wrap omsig.ErrNotCovered, the refusal only a verified path produces", err)
 	}
 }
 

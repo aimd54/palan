@@ -19,7 +19,14 @@ import (
 // Hub is a fake Hugging Face API.
 type Hub struct {
 	// Files is the repository content, keyed by path within the repository.
+	// Every repository the client asks about resolves to this same set,
+	// which is enough for a test that only ever names one repository.
 	Files map[string][]byte
+	// Repos holds distinct content per repository ("org/name"), for a test
+	// that packs more than one repository in the same run and needs their
+	// files to actually differ. A repository named here is served from its
+	// own entry instead of Files.
+	Repos map[string]map[string][]byte
 	// Inline names files paths-info reports with no LFS digest, matching how
 	// the real API serves small files stored inline rather than in LFS.
 	Inline map[string]bool
@@ -53,6 +60,15 @@ func (h *Hub) URL() string { return h.srv.URL }
 // Client returns an HTTP client that reaches this hub.
 func (h *Hub) Client() *http.Client { return h.srv.Client() }
 
+// filesFor returns the file set to serve for repo: its own entry in Repos
+// when it has one, otherwise the single flat Files every repository shares.
+func (h *Hub) filesFor(repo string) map[string][]byte {
+	if f, ok := h.Repos[repo]; ok {
+		return f
+	}
+	return h.Files
+}
+
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Status != 0 {
 		w.WriteHeader(h.Status)
@@ -60,6 +76,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/paths-info/main"):
+		repo := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/models/"), "/paths-info/main")
+		files := h.filesFor(repo)
 		var req struct {
 			Paths []string `json:"paths"`
 		}
@@ -69,7 +87,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var out []map[string]any
 		for _, p := range req.Paths {
-			b, ok := h.Files[p]
+			b, ok := files[p]
 			if !ok {
 				continue
 			}
@@ -86,19 +104,23 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(out)
 
 	case strings.Contains(r.URL.Path, "/api/models/"):
+		repo := strings.TrimPrefix(r.URL.Path, "/api/models/")
+		files := h.filesFor(repo)
 		type sib struct {
 			Filename string `json:"rfilename"`
 		}
 		var sibs []sib
-		for p := range h.Files {
+		for p := range files {
 			sibs = append(sibs, sib{Filename: p})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"siblings": sibs})
 
 	case strings.Contains(r.URL.Path, "/resolve/main/"):
 		i := strings.Index(r.URL.Path, "/resolve/main/")
+		repo := strings.TrimPrefix(r.URL.Path[:i], "/")
 		name := r.URL.Path[i+len("/resolve/main/"):]
-		b, ok := h.Files[name]
+		files := h.filesFor(repo)
+		b, ok := files[name]
 		if !ok {
 			http.Error(w, "no such file", http.StatusNotFound)
 			return

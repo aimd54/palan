@@ -52,8 +52,11 @@ var ErrNotCovered = errors.New("not covered by the signature")
 
 // Statement is a verified signature's contents.
 type Statement struct {
-	// Subjects maps a path within the repository to a hex SHA-256.
-	Subjects map[string]string
+	// Digests maps a path within the repository, as predicate.resources
+	// names it, to a hex SHA-256. It is not the in-toto statement's own
+	// top-level "subject" array, which names the model as a whole rather
+	// than any file a caller could check a download against.
+	Digests map[string]string
 	// KeyID identifies the key that signed, as the SHA-256 of its public
 	// key, so an artifact can record who vouched for it.
 	KeyID string
@@ -133,7 +136,7 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 	if st.PredicateType != PredicateType {
 		return nil, fmt.Errorf("statement predicate is %q, want %q", st.PredicateType, PredicateType)
 	}
-	out := &Statement{Subjects: make(map[string]string, len(st.Predicate.Resources))}
+	out := &Statement{Digests: make(map[string]string, len(st.Predicate.Resources))}
 	for _, r := range st.Predicate.Resources {
 		if r.Algorithm != "sha256" {
 			return nil, fmt.Errorf("the statement lists %s under algorithm %q, want sha256", r.Name, r.Algorithm)
@@ -141,9 +144,9 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 		if raw, err := hex.DecodeString(r.Digest); err != nil || len(raw) != sha256.Size {
 			return nil, fmt.Errorf("the statement lists %s with a malformed sha256 digest %q, want 64 hexadecimal characters", r.Name, r.Digest)
 		}
-		out.Subjects[r.Name] = strings.ToLower(r.Digest)
+		out.Digests[r.Name] = strings.ToLower(r.Digest)
 	}
-	if len(out.Subjects) == 0 {
+	if len(out.Digests) == 0 {
 		return nil, errors.New("the statement covers no files")
 	}
 	id, err := keyID(v)
@@ -155,14 +158,14 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 }
 
 // Covers reports whether the statement lists path with the given digest.
-// sha256hex is compared case-insensitively: Subjects already stores a
+// sha256hex is compared case-insensitively: Digests already stores a
 // lowercase hex digest, so the comparison lowercases only sha256hex, once,
 // and compares with ==, rather than folding Unicode case on every call.
 func (s *Statement) Covers(path, sha256hex string) error {
 	if sha256hex == "" {
 		return fmt.Errorf("%s: no sha256 given to compare against the signature", path)
 	}
-	want, ok := s.Subjects[path]
+	want, ok := s.Digests[path]
 	if !ok {
 		return fmt.Errorf("%s is %w", path, ErrNotCovered)
 	}
