@@ -122,6 +122,9 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 		if !ok {
 			return nil, fmt.Errorf("the statement lists %s without a sha256 digest", s.Name)
 		}
+		if raw, err := hex.DecodeString(d); err != nil || len(raw) != sha256.Size {
+			return nil, fmt.Errorf("the statement lists %s with a malformed sha256 digest %q, want 64 hexadecimal characters", s.Name, d)
+		}
 		out.Subjects[s.Name] = strings.ToLower(d)
 	}
 	if len(out.Subjects) == 0 {
@@ -136,12 +139,18 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 }
 
 // Covers reports whether the statement lists path with the given digest.
+// sha256hex is compared case-insensitively: Subjects already stores a
+// lowercase hex digest, so the comparison lowercases only sha256hex, once,
+// and compares with ==, rather than folding Unicode case on every call.
 func (s *Statement) Covers(path, sha256hex string) error {
+	if sha256hex == "" {
+		return fmt.Errorf("%s: no sha256 given to compare against the signature", path)
+	}
 	want, ok := s.Subjects[path]
 	if !ok {
 		return fmt.Errorf("%s is %w", path, ErrNotCovered)
 	}
-	if !strings.EqualFold(want, sha256hex) {
+	if got := strings.ToLower(sha256hex); got != want {
 		return fmt.Errorf("%s hashes to %s and the signature covers %s", path, sha256hex, want)
 	}
 	return nil
