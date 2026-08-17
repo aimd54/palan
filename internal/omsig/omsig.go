@@ -5,10 +5,14 @@
 // files it releases.
 //
 // The signature is a Sigstore bundle holding a DSSE envelope, whose payload is
-// an in-toto statement listing each file and the SHA-256 it hashes to. This
-// package checks the signature over that statement and reports what it
-// covers; deciding whether a download matches is the caller's, so a file the
-// statement omits can be refused by name.
+// an in-toto statement. The statement's own top-level subject names the model
+// as a whole (its directory name, and a digest computed over every file's
+// digest), which this package does not use; the per-file listing this package
+// reads instead lives one level down, under the predicate, as a "resources"
+// array of name/algorithm/digest triples. This package checks the signature
+// over the statement and reports what those resources cover; deciding
+// whether a download matches is the caller's, so a file the statement omits
+// can be refused by name.
 //
 // Verification is key based. A keyless signature carries its trust material
 // in the same bundle and needs a trusted root to check it against, which is a
@@ -63,10 +67,18 @@ type bundle struct {
 type statement struct {
 	Type          string `json:"_type"`
 	PredicateType string `json:"predicateType"`
-	Subject       []struct {
-		Name   string            `json:"name"`
-		Digest map[string]string `json:"digest"`
-	} `json:"subject"`
+	Predicate     struct {
+		// Resources is the tool's per-file listing: one entry per signed
+		// file, named relative to the model directory it was signed from.
+		// The statement's own "subject" array holds one entry instead, for
+		// the model as a whole, which is not what a caller checking a
+		// single downloaded file needs.
+		Resources []struct {
+			Name      string `json:"name"`
+			Algorithm string `json:"algorithm"`
+			Digest    string `json:"digest"`
+		} `json:"resources"`
+	} `json:"predicate"`
 }
 
 // Verify checks the bundle's signature with v and returns what it covers.
@@ -116,16 +128,15 @@ func Verify(data []byte, v signature.Verifier) (*Statement, error) {
 	if st.PredicateType != PredicateType {
 		return nil, fmt.Errorf("statement predicate is %q, want %q", st.PredicateType, PredicateType)
 	}
-	out := &Statement{Subjects: make(map[string]string, len(st.Subject))}
-	for _, s := range st.Subject {
-		d, ok := s.Digest["sha256"]
-		if !ok {
-			return nil, fmt.Errorf("the statement lists %s without a sha256 digest", s.Name)
+	out := &Statement{Subjects: make(map[string]string, len(st.Predicate.Resources))}
+	for _, r := range st.Predicate.Resources {
+		if r.Algorithm != "sha256" {
+			return nil, fmt.Errorf("the statement lists %s under algorithm %q, want sha256", r.Name, r.Algorithm)
 		}
-		if raw, err := hex.DecodeString(d); err != nil || len(raw) != sha256.Size {
-			return nil, fmt.Errorf("the statement lists %s with a malformed sha256 digest %q, want 64 hexadecimal characters", s.Name, d)
+		if raw, err := hex.DecodeString(r.Digest); err != nil || len(raw) != sha256.Size {
+			return nil, fmt.Errorf("the statement lists %s with a malformed sha256 digest %q, want 64 hexadecimal characters", r.Name, r.Digest)
 		}
-		out.Subjects[s.Name] = strings.ToLower(d)
+		out.Subjects[r.Name] = strings.ToLower(r.Digest)
 	}
 	if len(out.Subjects) == 0 {
 		return nil, errors.New("the statement covers no files")

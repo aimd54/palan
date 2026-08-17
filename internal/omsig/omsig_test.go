@@ -40,6 +40,71 @@ func TestVerifyReturnsTheSubjectsTheSignatureCovers(t *testing.T) {
 	}
 }
 
+// TestVerifyReadsPerFileDigestsFromThePredicateNotTheSubject pins a shape
+// that surprised the earlier implementation of this package: signing a
+// model with the real `model_signing` tool (package model-signing, PyPI)
+// does not produce a top-level in-toto "subject" entry per file. It
+// produces exactly one subject, naming the model directory as a whole with
+// a digest computed over every file's digest, for example:
+//
+//	"subject": [{"name": "model", "digest": {"sha256": "7a0f68bf..."}}]
+//
+// The per-file listing this package actually needs lives one level down,
+// under "predicate.resources", as a name/algorithm/digest triple per file,
+// named relative to the signed directory:
+//
+//	"predicate": {"resources": [
+//	  {"name": "model.safetensors", "algorithm": "sha256", "digest": "cee61e5a..."}
+//	]}
+//
+// This statement literal is that real shape (a directory holding one file
+// named model.safetensors, signed by `model_signing sign key`), not a
+// simplified stand-in for it. Verify must read the per-file digest from the
+// resource entry, and must not confuse the subject's own name ("model",
+// which is not a file in the repository at all) for a covered path.
+func TestVerifyReadsPerFileDigestsFromThePredicateNotTheSubject(t *testing.T) {
+	stmt := map[string]any{
+		"_type": "https://in-toto.io/Statement/v1",
+		"subject": []map[string]any{
+			{"name": "model", "digest": map[string]string{
+				"sha256": "7a0f68bf43c3fd75d89685b931c31beab3258bdf07eeff82e65a379418cecc12",
+			}},
+		},
+		"predicateType": omsig.PredicateType,
+		"predicate": map[string]any{
+			"resources": []map[string]any{
+				{
+					"name":      "model.safetensors",
+					"algorithm": "sha256",
+					"digest":    "cee61e5ac691f65df62a1a013b96ad59bae8741fbd111397b34f3414d27080ad",
+				},
+			},
+			"serialization": map[string]any{
+				"method":         "files",
+				"hash_type":      "sha256",
+				"allow_symlinks": false,
+				"ignore_paths":   []string{"model.sig", ".git", ".gitattributes", ".github", ".gitignore"},
+			},
+		},
+	}
+	bundle, v, _ := omsigtest.SignStatement(t, stmt)
+
+	st, err := omsig.Verify(bundle, v)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := "cee61e5ac691f65df62a1a013b96ad59bae8741fbd111397b34f3414d27080ad"
+	if err := st.Covers("model.safetensors", want); err != nil {
+		t.Errorf("Covers rejected the resource the predicate lists: %v", err)
+	}
+	if _, ok := st.Subjects["model"]; ok {
+		t.Error("Subjects treated the statement's own model name as a covered file path")
+	}
+	if len(st.Subjects) != 1 {
+		t.Errorf("Subjects has %d entries, want exactly the one resource: %+v", len(st.Subjects), st.Subjects)
+	}
+}
+
 func TestVerifyRefusesASignatureOverDifferentBytes(t *testing.T) {
 	bundle, v, _ := omsigtest.Bundle(t, map[string]string{"model.safetensors": "aa" + strings.Repeat("0", 62)})
 	// Re-sign nothing: tamper with the payload the signature was made over.
@@ -181,39 +246,43 @@ func TestVerifyRefusesAStatementThatVouchesForNothing(t *testing.T) {
 			wantErr: "predicate",
 		},
 		{
-			name: "subject with no sha256 digest",
+			name: "resource under an algorithm other than sha256",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
 				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
-					"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha1": "deadbeef"}}},
+					"subject":       []map[string]any{{"name": "model", "digest": map[string]string{"sha256": strings.Repeat("0", 64)}}},
 					"predicateType": omsig.PredicateType,
-					"predicate":     map[string]any{},
+					"predicate": map[string]any{
+						"resources": []map[string]any{{"name": "model.safetensors", "algorithm": "sha1", "digest": "deadbeef"}},
+					},
 				})
 				return bundle, v
 			},
 			wantErr: "model.safetensors",
 		},
 		{
-			name: "subject with a malformed sha256 digest",
+			name: "resource with a malformed sha256 digest",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
 				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
-					"subject":       []map[string]any{{"name": "model.safetensors", "digest": map[string]string{"sha256": "not-a-hex-digest"}}},
+					"subject":       []map[string]any{{"name": "model", "digest": map[string]string{"sha256": strings.Repeat("0", 64)}}},
 					"predicateType": omsig.PredicateType,
-					"predicate":     map[string]any{},
+					"predicate": map[string]any{
+						"resources": []map[string]any{{"name": "model.safetensors", "algorithm": "sha256", "digest": "not-a-hex-digest"}},
+					},
 				})
 				return bundle, v
 			},
 			wantErr: "model.safetensors",
 		},
 		{
-			name: "statement covers zero subjects",
+			name: "statement covers zero resources",
 			build: func(t *testing.T) ([]byte, signature.Verifier) {
 				bundle, v, _ := omsigtest.SignStatement(t, map[string]any{
 					"_type":         "https://in-toto.io/Statement/v1",
-					"subject":       []map[string]any{},
+					"subject":       []map[string]any{{"name": "model", "digest": map[string]string{"sha256": strings.Repeat("0", 64)}}},
 					"predicateType": omsig.PredicateType,
-					"predicate":     map[string]any{},
+					"predicate":     map[string]any{"resources": []map[string]any{}},
 				})
 				return bundle, v
 			},
