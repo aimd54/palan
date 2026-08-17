@@ -114,6 +114,7 @@ jobs:
       ORAS_VERSION: v1.3.3
       MODCTL_VERSION: v0.2.2
       COSIGN_VERSION: v2.6.3
+      MODEL_SIGNING_VERSION: 1.1.1
     services:
       zot:
         # zot-minimal: the suite only uses the core Distribution API, so the
@@ -139,8 +140,10 @@ jobs:
         id: interop-tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/palan-interop-tools
-          key: interop-tools-${{ runner.os }}-${{ runner.arch }}-oras${{ env.ORAS_VERSION }}-modctl${{ env.MODCTL_VERSION }}-cosign${{ env.COSIGN_VERSION }}
+          path: |
+            ~/.cache/palan-interop-tools
+            ~/.cache/palan-model-signing
+          key: interop-tools-${{ runner.os }}-${{ runner.arch }}-oras${{ env.ORAS_VERSION }}-modctl${{ env.MODCTL_VERSION }}-cosign${{ env.COSIGN_VERSION }}-ms${{ env.MODEL_SIGNING_VERSION }}
       - name: Install interop tools (oras, modctl, cosign)
         if: steps.interop-tools.outputs.cache-hit != 'true'
         env:
@@ -152,8 +155,15 @@ jobs:
           go install "oras.land/oras/cmd/oras@$ORAS_VERSION"
           go install "github.com/modelpack/modctl@$MODCTL_VERSION"
           go install "github.com/sigstore/cosign/v2/cmd/cosign@$COSIGN_VERSION"
+      - name: Install the model-signing tool
+        if: steps.interop-tools.outputs.cache-hit != 'true'
+        run: |
+          python3 -m venv "$HOME/.cache/palan-model-signing"
+          "$HOME/.cache/palan-model-signing/bin/pip" install --quiet "model-signing==$MODEL_SIGNING_VERSION"
       - name: Put interop tools on PATH
-        run: echo "$HOME/.cache/palan-interop-tools" >> "$GITHUB_PATH"
+        run: |
+          echo "$HOME/.cache/palan-interop-tools" >> "$GITHUB_PATH"
+          echo "$HOME/.cache/palan-model-signing/bin" >> "$GITHUB_PATH"
       - name: Run e2e suite
         env:
           E2E_REGISTRY: localhost:5000
