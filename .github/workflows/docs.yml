@@ -36,3 +36,31 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: "**/*.md"
+
+  diagrams:
+    name: Diagrams match their sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # A rendered diagram is committed so that it displays without a
+      # toolchain. The version is pinned because the renderer decides the
+      # bytes, so an unpinned one would report drift that is not there.
+      - name: Install the diagram renderer
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          version=$(make -s print-d2-version)
+          GOBIN="$HOME/.local/bin" go install "github.com/d2lang/d2@$version"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Confirm the renderer is callable
+        run: d2 --version
+      - name: Check the rendered diagrams
+        run: make diagrams-check
