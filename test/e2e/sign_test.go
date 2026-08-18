@@ -107,10 +107,7 @@ func TestSignVerifyAndPullGate(t *testing.T) {
 // TestCosignInterop: the real cosign binary must verify palan's signatures
 // and palan must verify cosign's (skipped when cosign is not installed).
 func TestCosignInterop(t *testing.T) {
-	cosign, err := exec.LookPath("cosign")
-	if err != nil {
-		t.Skip("cosign not in PATH")
-	}
+	cosign := requireTool(t, "cosign")
 	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
 	host := registryHost(t)
 	fx := writeFixtures(t, 128<<10)
@@ -208,10 +205,7 @@ func TestSignatureIsIndexedByTheRegistry(t *testing.T) {
 // The absence of the tag is asserted before verifying, so the test cannot pass
 // through the tag path and quietly prove nothing.
 func TestVerifyCosignOCI11Signature(t *testing.T) {
-	cosign, err := exec.LookPath("cosign")
-	if err != nil {
-		t.Skip("cosign not in PATH")
-	}
+	cosign := requireTool(t, "cosign")
 	t.Setenv("COSIGN_PASSWORD", testKeyPassword)
 	host := registryHost(t)
 	fx := writeFixtures(t, 132<<10)
