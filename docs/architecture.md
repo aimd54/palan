@@ -159,6 +159,17 @@ storage.
 }
 ```
 
+What that shape looks like as a whole, and which fact is recorded where,
+is drawn in [artifact-shape.svg](assets/artifact-shape.svg) (source:
+[artifact-shape.d2](diagrams/artifact-shape.d2)). Note that
+`io.palan.origin.sha256` appears at two scopes: on the manifest for the
+model's weights, and on each layer for the file that layer was built from.
+
+![A manifest carrying annotations about the model as a whole, pointing at a
+config blob, the raw weight layers, and the companion and documentation
+layers. A cosign signature over the manifest digest is both tagged and
+indexed as a referrer.](assets/artifact-shape.svg)
+
 The config blob (`vnd.cncf.model.config.v1+json`) carries structured
 metadata per the spec: family, parameter count, quantization, context
 length, format, and architecture. Clients fetch this small JSON document to
@@ -311,6 +322,15 @@ the request's `model` field:
 - Streaming responses are a transparent reverse proxy to the child process;
   the router adds only routing, optional bearer auth, and Prometheus
   metrics (`/metrics`: loads, evictions, time-to-first-token, tokens/s).
+
+The states a model passes through, and the refusal a client sees at each
+point, are drawn in [router-lifecycle.svg](assets/router-lifecycle.svg)
+(source: [router-lifecycle.d2](diagrams/router-lifecycle.d2)).
+
+![A request is loaded one at a time per model, checked before loading,
+checked against the memory budget, then served. A loaded model is stopped by
+the idle sweep, by its child exiting, or by eviction when another model needs
+room.](assets/router-lifecycle.svg)
 
 ## Kubernetes integration
 
