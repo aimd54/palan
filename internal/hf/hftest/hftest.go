@@ -41,6 +41,14 @@ type Hub struct {
 	Corrupt bool
 	// Ranges records the Range header of every download request.
 	Ranges []string
+	// Revision is the commit the model API reports as `sha`. Empty serves a
+	// response with no sha at all, which is how a repository that states
+	// none behaves.
+	Revision string
+	// Fetched records the revision segment of every download request, so a
+	// test can prove the bytes came from the commit that was resolved
+	// rather than from a branch that may have moved since.
+	Fetched []string
 
 	srv *httptest.Server
 }
@@ -113,12 +121,22 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for p := range files {
 			sibs = append(sibs, sib{Filename: p})
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"siblings": sibs})
+		body := map[string]any{"siblings": sibs}
+		if h.Revision != "" {
+			body["sha"] = h.Revision
+		}
+		_ = json.NewEncoder(w).Encode(body)
 
-	case strings.Contains(r.URL.Path, "/resolve/main/"):
-		i := strings.Index(r.URL.Path, "/resolve/main/")
+	case strings.Contains(r.URL.Path, "/resolve/"):
+		i := strings.Index(r.URL.Path, "/resolve/")
 		repo := strings.TrimPrefix(r.URL.Path[:i], "/")
-		name := r.URL.Path[i+len("/resolve/main/"):]
+		rest := r.URL.Path[i+len("/resolve/"):]
+		rev, name, ok := strings.Cut(rest, "/")
+		if !ok {
+			http.Error(w, "no file in path", http.StatusNotFound)
+			return
+		}
+		h.Fetched = append(h.Fetched, rev)
 		files := h.filesFor(repo)
 		b, ok := files[name]
 		if !ok {
