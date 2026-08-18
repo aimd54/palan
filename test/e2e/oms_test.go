@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -84,10 +83,7 @@ func sha256OfFile(t *testing.T, path string) string {
 // documentation would produce; Click, which the tool is built on, refuses
 // the hyphenated spelling outright rather than normalizing it.
 func TestVerifiesASignatureTheSigningToolWrote(t *testing.T) {
-	tool, err := exec.LookPath("model_signing")
-	if err != nil {
-		t.Skip("model_signing not in PATH")
-	}
+	tool := requireTool(t, "model_signing")
 
 	dir := t.TempDir()
 	model := filepath.Join(dir, "model")

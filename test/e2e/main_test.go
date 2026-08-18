@@ -7,7 +7,16 @@
 // (docker), plus oras and modctl binaries for the interop contract (G2).
 //
 // Requirements: docker (unless E2E_REGISTRY points at a running registry);
-// oras and modctl in PATH for the interop tests (skipped otherwise).
+// oras, modctl, cosign and model_signing in PATH for the interop tests.
+//
+// A missing tool or an unreachable registry skips the tests that need it on a
+// developer machine and fails them in CI, which installs both deliberately.
+// Reach for requireTool rather than exec.LookPath so a new test inherits that,
+// because a skipped test prints the same "ok" a passing one prints and a suite
+// that skipped its interop proofs cannot be told from one that ran them.
+//
+// The only tests that skip in CI are the ones behind PALAN_E2E_HF, which reach
+// the live Hugging Face API and are gated on intent rather than installation.
 package e2e
 
 import (
@@ -115,6 +124,38 @@ func survivingChildren(dir string) []int {
 
 // registryHost returns a ready registry host:port, starting a zot container
 // on first use unless E2E_REGISTRY is set.
+// inCI reports whether the suite is running in the project's CI, where the
+// tools and the registry are installed deliberately.
+//
+// The distinction decides what a missing dependency means. On a contributor's
+// machine it means they have not installed an optional tool, and skipping the
+// tests that need it is the courteous answer. In CI it means an install step
+// did not do its job, and skipping is the worst possible answer: a skipped
+// test prints the same "ok" a passing one prints, so the suite goes green
+// having proven nothing, and the cache then freezes that outcome for every
+// later run.
+func inCI() bool { return os.Getenv("GITHUB_ACTIONS") == "true" }
+
+// requireTool returns the path to an external tool the suite needs, skipping
+// away from CI and failing in it.
+//
+// Tests that are deliberately opt-in, such as the ones that reach the live
+// Hugging Face API behind PALAN_E2E_HF, do not come through here: those skip
+// everywhere, including CI, because they are gated on an intent rather than
+// on an installation.
+func requireTool(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err == nil {
+		return path
+	}
+	if inCI() {
+		t.Fatalf("%s is not in PATH: CI installs it, so this is a broken install step rather than an absent tool", name)
+	}
+	t.Skipf("%s not in PATH", name)
+	return ""
+}
+
 func registryHost(t *testing.T) string {
 	t.Helper()
 	regOnce.Do(func() {
@@ -144,6 +185,9 @@ func registryHost(t *testing.T) string {
 		waitReady(&regSkipWhy, regHostVal)
 	})
 	if regSkipWhy != "" {
+		if inCI() {
+			t.Fatalf("e2e registry unavailable: %s; CI runs zot as a service, so this is a broken environment rather than an absent one", regSkipWhy)
+		}
 		t.Skip("e2e registry unavailable: " + regSkipWhy)
 	}
 	return regHostVal
