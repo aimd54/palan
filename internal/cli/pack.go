@@ -297,7 +297,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 		if err != nil {
 			return nil, info, err
 		}
-		files, err := client.Resolve(ctx, ref)
+		res, err := client.Resolve(ctx, ref)
 		if err != nil {
 			return nil, info, err
 		}
@@ -352,9 +352,9 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			info.signer = stmt.KeyID
 		}
 
-		for _, f := range files {
+		for _, f := range res.Files {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Fetching %s (%s)\n", f.Path, humanBytes(f.Size))
-			path, err := client.Download(ctx, ref, f, srcDir, hf.Events{})
+			path, err := client.Download(ctx, ref, res.Revision, f, srcDir, hf.Events{})
 			if err != nil {
 				return nil, info, err
 			}

@@ -84,12 +84,12 @@ func TestResolveCarriesUpstreamDigestAndLicense(t *testing.T) {
 		"LICENSE":    []byte("apache"),
 		"README.md":  []byte("hi"),
 	})
-	files, err := testClient(h).Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
+	res, err := testClient(h).Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	byPath := map[string]File{}
-	for _, f := range files {
+	for _, f := range res.Files {
 		byPath[f.Path] = f
 	}
 	if _, ok := byPath["LICENSE"]; !ok {
@@ -114,12 +114,12 @@ func TestResolveFetchesEverySplitPart(t *testing.T) {
 		"m-00003-of-00003.gguf":     []byte("c"),
 		"other-00001-of-00002.gguf": []byte("z"),
 	})
-	files, err := testClient(h).Resolve(context.Background(), Ref{Repo: "org/repo", Path: "m-00001-of-00003.gguf"})
+	res, err := testClient(h).Resolve(context.Background(), Ref{Repo: "org/repo", Path: "m-00001-of-00003.gguf"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
-	for _, f := range files {
+	for _, f := range res.Files {
 		got[f.Path] = true
 	}
 	for i := 1; i <= 3; i++ {
@@ -137,13 +137,13 @@ func TestDownloadVerifiesAgainstUpstreamDigest(t *testing.T) {
 	h := newFakeHub(t, map[string][]byte{"model.gguf": []byte("genuine weights")})
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
-	files, err := c.Resolve(context.Background(), ref)
+	res, err := c.Resolve(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
-	path, err := c.Download(context.Background(), ref, files[0], dir, Events{})
+	path, err := c.Download(context.Background(), ref, res.Revision, res.Files[0], dir, Events{})
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestDownloadVerifiesAgainstUpstreamDigest(t *testing.T) {
 	// Now serve different bytes for the same advertised digest.
 	h.Corrupt = true
 	dir2 := t.TempDir()
-	if _, err := c.Download(context.Background(), ref, files[0], dir2, Events{}); err == nil {
+	if _, err := c.Download(context.Background(), ref, res.Revision, res.Files[0], dir2, Events{}); err == nil {
 		t.Error("bytes that do not match the published digest must be refused")
 	} else if !strings.Contains(err.Error(), "refusing") {
 		t.Errorf("the refusal should say what happened: %v", err)
@@ -175,13 +175,13 @@ func TestDownloadResumesAfterDroppedConnections(t *testing.T) {
 	h.TruncateAt = 1000 // each attempt delivers at most 1000 bytes
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
-	files, err := c.Resolve(context.Background(), ref)
+	res, err := c.Resolve(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
-	path, err := c.Download(context.Background(), ref, files[0], dir, Events{})
+	path, err := c.Download(context.Background(), ref, res.Revision, res.Files[0], dir, Events{})
 	if err != nil {
 		t.Fatalf("repeated short reads should still complete: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestDownloadRangeResumeContinues(t *testing.T) {
 	h := newFakeHub(t, map[string][]byte{"model.gguf": body})
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
-	files, err := c.Resolve(context.Background(), ref)
+	res, err := c.Resolve(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestDownloadRangeResumeContinues(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "model.gguf.partial"), body[:1000], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path, err := c.Download(context.Background(), ref, files[0], dir, Events{})
+	path, err := c.Download(context.Background(), ref, res.Revision, res.Files[0], dir, Events{})
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestDownloadRestartsWhenRangeIgnored(t *testing.T) {
 	h.IgnoreRange = true
 	c := testClient(h)
 	ref := Ref{Repo: "org/repo", Path: "model.gguf"}
-	files, err := c.Resolve(context.Background(), ref)
+	res, err := c.Resolve(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestDownloadRestartsWhenRangeIgnored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "model.gguf.partial"), body[:1000], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path, err := c.Download(context.Background(), ref, files[0], dir, Events{})
+	path, err := c.Download(context.Background(), ref, res.Revision, res.Files[0], dir, Events{})
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
@@ -327,12 +327,12 @@ func TestResolveWholeRepositoryTakesTheShardsTheIndexNames(t *testing.T) {
 		// quantisation the index does not name.
 		"model-q4.safetensors": []byte("other-model"),
 	})
-	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	got := map[string]bool{}
-	for _, f := range files {
+	for _, f := range res.Files {
 		got[f.Path] = true
 		if f.SHA256 == "" {
 			t.Errorf("%s resolved without the digest the repository publishes", f.Path)
@@ -356,12 +356,12 @@ func TestResolveWholeRepositoryTakesASingleShardModel(t *testing.T) {
 		"model.safetensors": []byte("weights"),
 		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
 	})
-	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("resolved %d files, want the weights and the config", len(files))
+	if len(res.Files) != 2 {
+		t.Fatalf("resolved %d files, want the weights and the config", len(res.Files))
 	}
 }
 
@@ -401,12 +401,12 @@ func TestResolveWholeRepositoryLeavesInlineFilesWithoutADigest(t *testing.T) {
 		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
 	})
 	hub.Inline = map[string]bool{"config.json": true}
-	files, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	byPath := map[string]File{}
-	for _, f := range files {
+	for _, f := range res.Files {
 		byPath[f.Path] = f
 	}
 	cfg, ok := byPath["config.json"]
@@ -444,4 +444,61 @@ func FuzzParseRef(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestResolveReportsTheCommitTheListingCameFrom(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors": []byte("weights"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	})
+	hub.Revision = "e4f2c1d0000000000000000000000000000000aa"
+
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Revision != hub.Revision {
+		t.Errorf("Revision = %q, want the commit the API reported", res.Revision)
+	}
+	if len(res.Files) != 2 {
+		t.Fatalf("resolved %d files, want the weights and the config", len(res.Files))
+	}
+}
+
+func TestResolveLeavesTheRevisionEmptyWhenTheApiOmitsIt(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors": []byte("weights"),
+		"config.json":       []byte(`{}`),
+	})
+	hub.Revision = "" // the API reported no sha
+
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Revision != "" {
+		t.Errorf("Revision = %q, want empty: the repository stated none", res.Revision)
+	}
+}
+
+func TestDownloadFetchesFromTheResolvedCommit(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{"model.safetensors": []byte("weights")})
+	hub.Revision = "e4f2c1d0000000000000000000000000000000aa"
+
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := testClient(hub).Download(t.Context(), Ref{Repo: "org/repo"}, res.Revision, res.Files[0], t.TempDir(), Events{}); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	for _, got := range hub.Fetched {
+		if got != hub.Revision {
+			t.Errorf("downloaded from revision %q, want %q: a branch can move between listing and download",
+				got, hub.Revision)
+		}
+	}
+	if len(hub.Fetched) == 0 {
+		t.Fatal("no download reached the hub")
+	}
 }

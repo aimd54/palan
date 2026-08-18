@@ -164,41 +164,43 @@ func (c *Client) gatedError(ref Ref, status int) error {
 		ref.Repo, status, c.endpoint()+"/"+ref.Repo, hint)
 }
 
-// listFiles returns every file path in the repository.
-func (c *Client) listFiles(ctx context.Context, ref Ref) ([]string, error) {
+// listFiles returns every file path in the repository, and the commit the
+// repository reported for the listing, empty when it stated none.
+func (c *Client) listFiles(ctx context.Context, ref Ref) ([]string, string, error) {
 	url := c.endpoint() + "/api/models/" + ref.Repo
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, c.gatedError(ref, resp.StatusCode)
+		return nil, "", c.gatedError(ref, resp.StatusCode)
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("hugging face has no repository %s", ref.Repo)
+		return nil, "", fmt.Errorf("hugging face has no repository %s", ref.Repo)
 	default:
-		return nil, fmt.Errorf("listing %s: unexpected status %q", ref.Repo, resp.Status)
+		return nil, "", fmt.Errorf("listing %s: unexpected status %q", ref.Repo, resp.Status)
 	}
 	var body struct {
 		Siblings []struct {
 			Filename string `json:"rfilename"`
 		} `json:"siblings"`
+		SHA string `json:"sha"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decoding the file list for %s: %w", ref.Repo, err)
+		return nil, "", fmt.Errorf("decoding the file list for %s: %w", ref.Repo, err)
 	}
 	out := make([]string, 0, len(body.Siblings))
 	for _, s := range body.Siblings {
 		out = append(out, s.Filename)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, body.SHA, nil
 }
 
 // pathsInfo asks for size and upstream digest for specific paths.
@@ -246,23 +248,35 @@ func (c *Client) pathsInfo(ctx context.Context, ref Ref, paths []string) ([]File
 	return out, nil
 }
 
+// Resolution is the outcome of resolving a reference: the files to fetch, and
+// the commit the repository reported for the listing they came from.
+type Resolution struct {
+	Files []File
+	// Revision is the commit the listing resolved to, empty when the
+	// repository states none. A caller records it only when it is set: a
+	// revision that was never reported is not a fact about the model.
+	Revision string
+}
+
 // Resolve turns a reference into the set of files to fetch: the named file,
 // every sibling part when it is one of a split set, and the repository's
-// licence when it has one.
-func (c *Client) Resolve(ctx context.Context, ref Ref) ([]File, error) {
+// licence when it has one. The commit the listing was taken at travels with
+// the result, so Download can fetch from that same state rather than from a
+// branch that may have moved since.
+func (c *Client) Resolve(ctx context.Context, ref Ref) (Resolution, error) {
 	if ref.Path == "" {
 		return c.resolveRepo(ctx, ref)
 	}
-	listing, err := c.listFiles(ctx, ref)
+	listing, rev, err := c.listFiles(ctx, ref)
 	if err != nil {
-		return nil, err
+		return Resolution{}, err
 	}
 	known := make(map[string]bool, len(listing))
 	for _, p := range listing {
 		known[p] = true
 	}
 	if !known[ref.Path] {
-		return nil, fmt.Errorf("%s has no file %q", ref.Repo, ref.Path)
+		return Resolution{}, fmt.Errorf("%s has no file %q", ref.Repo, ref.Path)
 	}
 
 	want := []string{ref.Path}
@@ -273,12 +287,12 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) ([]File, error) {
 
 	files, err := c.pathsInfo(ctx, ref, want)
 	if err != nil {
-		return nil, err
+		return Resolution{}, err
 	}
 	if len(files) != len(want) {
-		return nil, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
+		return Resolution{}, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
 	}
-	return files, nil
+	return Resolution{Files: files, Revision: rev}, nil
 }
 
 // resolveRepo selects the files a whole published model consists of. A
@@ -289,10 +303,10 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) ([]File, error) {
 // it does not name are a different model published beside this one: an
 // adapter, or a second quantisation. Selecting those would put another
 // model's bytes in the artifact.
-func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
-	listing, err := c.listFiles(ctx, ref)
+func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
+	listing, rev, err := c.listFiles(ctx, ref)
 	if err != nil {
-		return nil, err
+		return Resolution{}, err
 	}
 	present := make(map[string]bool, len(listing))
 	for _, p := range listing {
@@ -304,16 +318,16 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
 	case present[safetensors.IndexName]:
 		data, err := c.FetchSmall(ctx, ref, safetensors.IndexName)
 		if err != nil {
-			return nil, err
+			return Resolution{}, err
 		}
 		ix, err := safetensors.ParseIndex(data)
 		if err != nil {
-			return nil, fmt.Errorf("%s of %s: %w", safetensors.IndexName, ref.Repo, err)
+			return Resolution{}, fmt.Errorf("%s of %s: %w", safetensors.IndexName, ref.Repo, err)
 		}
 		want = append(want, safetensors.IndexName)
 		for _, shard := range ix.Shards() {
 			if !present[shard] {
-				return nil, fmt.Errorf(
+				return Resolution{}, fmt.Errorf(
 					"%s names the shard %s and %s does not publish it; the model would pack incomplete",
 					safetensors.IndexName, shard, ref.Repo)
 			}
@@ -322,7 +336,7 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
 	case present["model.safetensors"]:
 		want = append(want, "model.safetensors")
 	default:
-		return nil, c.suggestFiles(ctx, ref)
+		return Resolution{}, c.suggestFiles(ctx, ref)
 	}
 
 	for _, name := range append([]string{safetensors.ConfigName}, safetensors.CompanionNames...) {
@@ -338,12 +352,12 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) ([]File, error) {
 
 	files, err := c.pathsInfo(ctx, ref, want)
 	if err != nil {
-		return nil, err
+		return Resolution{}, err
 	}
 	if len(files) != len(want) {
-		return nil, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
+		return Resolution{}, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
 	}
-	return files, nil
+	return Resolution{Files: files, Revision: rev}, nil
 }
 
 // FetchSmall reads a small file whole. It is for the index and the signature,
@@ -375,7 +389,7 @@ func (c *Client) FetchSmall(ctx context.Context, ref Ref, name string) ([]byte, 
 // suggestFiles turns "which quantisation did you mean" into an answer rather
 // than a guess.
 func (c *Client) suggestFiles(ctx context.Context, ref Ref) error {
-	listing, err := c.listFiles(ctx, ref)
+	listing, _, err := c.listFiles(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -442,6 +456,12 @@ const downloadAttempts = 4
 
 // Download fetches f into destDir and returns the local path.
 //
+// rev pins the commit to fetch from. A repository's branch can move between
+// the listing that produced f and this request, which would otherwise yield
+// an artifact whose files came from two states of the same repository with
+// nothing reporting it. An empty rev fetches from main, which is what a
+// caller with no resolution has.
+//
 // An interrupted transfer keeps its partial file and resumes on the next
 // attempt, so a dropped connection costs the remainder rather than the whole
 // download. Completed bytes are checked against the digest the repository
@@ -449,13 +469,13 @@ const downloadAttempts = 4
 // served inline rather than stored in LFS, and then nothing is checked here.
 // Where a digest was published, a file that does not match it is removed
 // rather than handed on to be packed and signed as genuine.
-func (c *Client) Download(ctx context.Context, ref Ref, f File, destDir string, ev Events) (string, error) {
+func (c *Client) Download(ctx context.Context, ref Ref, rev string, f File, destDir string, ev Events) (string, error) {
 	dest := filepath.Join(destDir, filepath.Base(f.Path)) // #nosec G304 -- caller owns destDir
 	partial := dest + ".partial"
 
 	var lastErr error
 	for attempt := range downloadAttempts {
-		hasher, complete, err := c.attempt(ctx, ref, f, partial, ev)
+		hasher, complete, err := c.attempt(ctx, ref, rev, f, partial, ev)
 		switch {
 		case err != nil:
 			lastErr = err
@@ -490,7 +510,7 @@ func (c *Client) Download(ctx context.Context, ref Ref, f File, destDir string, 
 }
 
 // attempt resumes the partial and reports whether the file is now complete.
-func (c *Client) attempt(ctx context.Context, ref Ref, f File, partial string, ev Events) (hash.Hash, bool, error) {
+func (c *Client) attempt(ctx context.Context, ref Ref, rev string, f File, partial string, ev Events) (hash.Hash, bool, error) {
 	offset, hasher, err := transfer.RehashPartial(partial, f.Size)
 	if err != nil {
 		return nil, false, err
@@ -498,15 +518,19 @@ func (c *Client) attempt(ctx context.Context, ref Ref, f File, partial string, e
 	if offset >= f.Size && f.Size > 0 {
 		return hasher, true, nil // a previous attempt finished the bytes
 	}
-	if err := c.stream(ctx, ref, f, partial, &offset, &hasher, ev); err != nil {
+	if err := c.stream(ctx, ref, rev, f, partial, &offset, &hasher, ev); err != nil {
 		return nil, false, err
 	}
 	return hasher, offset >= f.Size, nil
 }
 
 // stream performs the ranged GET, appending to the partial file.
-func (c *Client) stream(ctx context.Context, ref Ref, f File, partial string, offset *int64, hasher *hash.Hash, ev Events) (retErr error) {
-	url := c.endpoint() + "/" + ref.Repo + "/resolve/main/" + f.Path
+func (c *Client) stream(ctx context.Context, ref Ref, rev string, f File, partial string, offset *int64, hasher *hash.Hash, ev Events) (retErr error) {
+	at := rev
+	if at == "" {
+		at = "main"
+	}
+	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + at + "/" + f.Path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
