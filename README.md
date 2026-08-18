@@ -68,6 +68,13 @@ places where no container engine exists and no internet ever will.
 - **Supply chain**: cosign-compatible key-based signing that works fully
   offline; `palan pull --verify` refuses unsigned or foreign-signed models
   before a single weight byte moves.
+- **Import provenance**: `palan pack hf://org/repo` fetches a published model
+  whole, resolving its shard index, and checks each file against the digest
+  the repository publishes for it, which it publishes for the LFS-stored
+  files the weights and shards live in. `--oms-key` verifies the repository's
+  OpenSSF model-signing signature and refuses any downloaded file that
+  signature does not cover, including the small files served inline with no
+  digest of their own.
 - **Kubernetes**: init-container puller image and image volumes (K8s ≥ 1.36)
   via the car profile, both exercised on real clusters. A KServe modelcar
   manifest ships alongside them and has not been run yet. See
@@ -184,7 +191,9 @@ is verified the same way.
 working codename `moci`
 ([ADR-0006](docs/adr/0006-rename-to-palan.md)).
 CI enforces interoperability on every commit: artifacts round-trip against
-`modctl` and `oras`, and signatures against `cosign`.
+`modctl` and `oras`, palan's own signatures against `cosign`, and a
+publisher's signature is read from a bundle the OpenSSF `model_signing` tool
+wrote.
 
 ## Contributing
 
