@@ -83,8 +83,14 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case strings.HasSuffix(r.URL.Path, "/paths-info/main"):
-		repo := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/models/"), "/paths-info/main")
+	case strings.Contains(r.URL.Path, "/paths-info/"):
+		i := strings.Index(r.URL.Path, "/paths-info/")
+		repo := strings.TrimPrefix(r.URL.Path[:i], "/api/models/")
+		rev := r.URL.Path[i+len("/paths-info/"):]
+		if rev == "" {
+			http.Error(w, "no revision in path", http.StatusNotFound)
+			return
+		}
 		files := h.filesFor(repo)
 		var req struct {
 			Paths []string `json:"paths"`
@@ -131,15 +137,19 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		i := strings.Index(r.URL.Path, "/resolve/")
 		repo := strings.TrimPrefix(r.URL.Path[:i], "/")
 		rest := r.URL.Path[i+len("/resolve/"):]
-		rev, name, ok := strings.Cut(rest, "/")
-		if !ok {
-			http.Error(w, "no file in path", http.StatusNotFound)
+		rev, name, cut := strings.Cut(rest, "/")
+		if !cut || rev == "" {
+			// Real Hugging Face 404s a revision segment that is not there;
+			// an empty rev must never be silently treated as a match, since
+			// that would hide Download falling back to main when it should
+			// not have.
+			http.Error(w, "no revision in path", http.StatusNotFound)
 			return
 		}
 		h.Fetched = append(h.Fetched, rev)
 		files := h.filesFor(repo)
-		b, ok := files[name]
-		if !ok {
+		b, found := files[name]
+		if !found {
 			http.Error(w, "no such file", http.StatusNotFound)
 			return
 		}

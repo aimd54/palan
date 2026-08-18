@@ -331,7 +331,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			if err != nil {
 				return nil, info, err
 			}
-			sig, err := client.FetchSmall(ctx, ref, omsig.FileName)
+			sig, err := client.FetchSmall(ctx, ref, res.Revision, omsig.FileName)
 			switch {
 			case errors.Is(err, hf.ErrFileNotFound):
 				// The only failure that actually means "unsigned": the

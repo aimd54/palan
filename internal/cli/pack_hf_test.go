@@ -570,6 +570,36 @@ func TestPackCarriesTheSourceOfEveryFetchedFile(t *testing.T) {
 	}
 }
 
+// TestPackDownloadsFromTheResolvedRevision proves the download itself, not
+// just the SourceRevision annotation, reaches the commit Resolve reported.
+// SourceRevision could be threaded through to the manifest correctly while
+// Download quietly kept fetching from main regardless; only inspecting what
+// the hub actually received for the download request tells the two apart.
+func TestPackDownloadsFromTheResolvedRevision(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors": []byte("weights-bytes"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	})
+	hub.Revision = "e4f2c1d0000000000000000000000000000000aa"
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	_, info, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/repo"})
+	if info.tempDir != "" {
+		t.Cleanup(func() { _ = os.RemoveAll(info.tempDir) })
+	}
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(hub.Fetched) == 0 {
+		t.Fatal("no download reached the hub")
+	}
+	for _, got := range hub.Fetched {
+		if got != hub.Revision {
+			t.Errorf("downloaded from revision %q, want %q: a branch can move between listing and download", got, hub.Revision)
+		}
+	}
+}
+
 func TestPackFromDiskCarriesNoSource(t *testing.T) {
 	dir := t.TempDir()
 	local := filepath.Join(dir, "model.gguf")

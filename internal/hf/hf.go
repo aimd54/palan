@@ -59,6 +59,14 @@ var ErrFileNotFound = errors.New("file not found in the repository")
 // complete and cannot load, so every sibling is fetched.
 var splitPart = regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})(\.gguf)$`)
 
+// commitSHA matches the shape of a git SHA-1 object id, which is what
+// Hugging Face reports as a repository's `sha`. The value becomes a URL path
+// segment and is later written into a signed annotation, so it is validated
+// at the point it is decoded: anything present but not this exact shape is
+// the repository stating something palan cannot use as a revision, and is
+// treated the same as no revision at all rather than failing the resolve.
+var commitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
 // Ref is a parsed hf:// reference.
 type Ref struct {
 	Repo string // "org/name"
@@ -200,16 +208,33 @@ func (c *Client) listFiles(ctx context.Context, ref Ref) ([]string, string, erro
 		out = append(out, s.Filename)
 	}
 	sort.Strings(out)
-	return out, body.SHA, nil
+	rev := body.SHA
+	if rev != "" && !commitSHA.MatchString(rev) {
+		rev = ""
+	}
+	return out, rev, nil
 }
 
-// pathsInfo asks for size and upstream digest for specific paths.
-func (c *Client) pathsInfo(ctx context.Context, ref Ref, paths []string) ([]File, error) {
+// revOrMain is the URL segment naming which revision to request: rev when a
+// listing resolved one, main otherwise, which is what a caller with no
+// resolution has.
+func revOrMain(rev string) string {
+	if rev == "" {
+		return "main"
+	}
+	return rev
+}
+
+// pathsInfo asks for size and upstream digest for specific paths, pinned to
+// rev so the digests it returns describe the same commit Download fetches
+// from rather than whatever main happens to hold when the two calls land on
+// either side of a push.
+func (c *Client) pathsInfo(ctx context.Context, ref Ref, rev string, paths []string) ([]File, error) {
 	body, err := json.Marshal(map[string]any{"paths": paths})
 	if err != nil {
 		return nil, err
 	}
-	url := c.endpoint() + "/api/models/" + ref.Repo + "/paths-info/main"
+	url := c.endpoint() + "/api/models/" + ref.Repo + "/paths-info/" + revOrMain(rev)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
@@ -285,7 +310,7 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) (Resolution, error) {
 		want = append(want, lic)
 	}
 
-	files, err := c.pathsInfo(ctx, ref, want)
+	files, err := c.pathsInfo(ctx, ref, rev, want)
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -316,7 +341,7 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
 	var want []string
 	switch {
 	case present[safetensors.IndexName]:
-		data, err := c.FetchSmall(ctx, ref, safetensors.IndexName)
+		data, err := c.FetchSmall(ctx, ref, rev, safetensors.IndexName)
 		if err != nil {
 			return Resolution{}, err
 		}
@@ -350,7 +375,7 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
 		}
 	}
 
-	files, err := c.pathsInfo(ctx, ref, want)
+	files, err := c.pathsInfo(ctx, ref, rev, want)
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -363,8 +388,13 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
 // FetchSmall reads a small file whole. It is for the index and the signature,
 // never for weights, which stream through Download so an interrupted transfer
 // resumes.
-func (c *Client) FetchSmall(ctx context.Context, ref Ref, name string) ([]byte, error) {
-	url := c.endpoint() + "/" + ref.Repo + "/resolve/main/" + name
+//
+// rev pins the commit to read from, exactly as Download's rev does, so an
+// index or signature read this way describes the same commit the weights
+// come from rather than whatever main holds when the two calls land on
+// either side of a push. An empty rev reads from main.
+func (c *Client) FetchSmall(ctx context.Context, ref Ref, rev, name string) ([]byte, error) {
+	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + revOrMain(rev) + "/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -526,11 +556,7 @@ func (c *Client) attempt(ctx context.Context, ref Ref, rev string, f File, parti
 
 // stream performs the ranged GET, appending to the partial file.
 func (c *Client) stream(ctx context.Context, ref Ref, rev string, f File, partial string, offset *int64, hasher *hash.Hash, ev Events) (retErr error) {
-	at := rev
-	if at == "" {
-		at = "main"
-	}
-	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + at + "/" + f.Path
+	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + revOrMain(rev) + "/" + f.Path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
