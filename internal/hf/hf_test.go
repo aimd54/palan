@@ -18,7 +18,18 @@ import (
 	"github.com/aimd54/palan/internal/hf/hftest"
 )
 
-func newFakeHub(t *testing.T, files map[string][]byte) *hftest.Hub { return hftest.New(t, files) }
+// testRevision is a well-formed commit sha, set as the default on every hub
+// newFakeHub builds, so that every test exercising Resolve or Download
+// through it runs against the pinned-revision path rather than the main
+// fallback: a test that needs the fallback itself sets Revision to "" on the
+// hub it builds directly with hftest.New.
+const testRevision = "0123456789abcdef0123456789abcdef01234567"
+
+func newFakeHub(t *testing.T, files map[string][]byte) *hftest.Hub {
+	h := hftest.New(t, files)
+	h.Revision = testRevision
+	return h
+}
 
 func testClient(h *hftest.Hub) *Client { return &Client{HTTP: h.Client(), Endpoint: h.URL()} }
 
@@ -286,7 +297,7 @@ func TestGatedRepositoryExplainsItself(t *testing.T) {
 // says nothing about whether the file exists.
 func TestFetchSmallDistinguishesAnUnpublishedFileFromOtherFailures(t *testing.T) {
 	h := newFakeHub(t, map[string][]byte{"config.json": []byte("{}")})
-	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "org/repo"}, "model.sig")
+	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "org/repo"}, "", "model.sig")
 	if err == nil {
 		t.Fatal("fetched a file the repository does not publish")
 	}
@@ -301,7 +312,7 @@ func TestFetchSmallDistinguishesAnUnpublishedFileFromOtherFailures(t *testing.T)
 func TestFetchSmallDoesNotClaimAGatedFileIsUnpublished(t *testing.T) {
 	h := newFakeHub(t, nil)
 	h.Status = http.StatusForbidden
-	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "meta/gated"}, "model.sig")
+	_, err := testClient(h).FetchSmall(context.Background(), Ref{Repo: "meta/gated"}, "", "model.sig")
 	if err == nil {
 		t.Fatal("a gated repository must fail")
 	}
@@ -500,5 +511,69 @@ func TestDownloadFetchesFromTheResolvedCommit(t *testing.T) {
 	}
 	if len(hub.Fetched) == 0 {
 		t.Fatal("no download reached the hub")
+	}
+}
+
+// TestResolveTreatsATraversalShapedRevisionAsNoRevision proves a sha the
+// repository reports never reaches the download URL unless it is the exact
+// shape of a git SHA-1 object id. A repository is untrusted text: this one
+// reports a value shaped to walk the request into a different repository's
+// path, and the only safe outcome is the same one a repository that reports
+// no sha at all gets, the main fallback, never the malformed text itself.
+func TestResolveTreatsATraversalShapedRevisionAsNoRevision(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{"model.safetensors": []byte("weights")})
+	hub.Revision = "../../other-org/other-repo/resolve/main"
+
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Revision != "" {
+		t.Errorf("Revision = %q, want empty: a value that is not a commit sha must not be used as one", res.Revision)
+	}
+
+	if _, err := testClient(hub).Download(t.Context(), Ref{Repo: "org/repo"}, res.Revision, res.Files[0], t.TempDir(), Events{}); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if len(hub.Fetched) == 0 {
+		t.Fatal("no download reached the hub")
+	}
+	for _, got := range hub.Fetched {
+		if strings.Contains(got, "..") {
+			t.Fatalf("the traversal-shaped revision reached the download URL: %q", got)
+		}
+		if got != "main" {
+			t.Errorf("downloaded from %q, want the main fallback since the reported revision was unusable", got)
+		}
+	}
+}
+
+// TestDownloadFallsBackToMainWhenNoRevisionWasResolved proves the main
+// fallback in Download's rev handling is load bearing: a resolution that
+// carries no revision, exactly what a repository reporting no sha produces,
+// must still be able to download. Deleting the fallback keeps every other
+// test in this package green, since they all resolve a revision; this is
+// the one test that a repository with no sha at all needs.
+func TestDownloadFallsBackToMainWhenNoRevisionWasResolved(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{"model.safetensors": []byte("weights")})
+
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Revision != "" {
+		t.Fatalf("Revision = %q, want empty for this test to exercise the fallback", res.Revision)
+	}
+
+	if _, err := testClient(hub).Download(t.Context(), Ref{Repo: "org/repo"}, res.Revision, res.Files[0], t.TempDir(), Events{}); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if len(hub.Fetched) == 0 {
+		t.Fatal("no download reached the hub")
+	}
+	for _, got := range hub.Fetched {
+		if got != "main" {
+			t.Errorf("downloaded from revision %q, want main: an empty revision must fall back to it", got)
+		}
 	}
 }
