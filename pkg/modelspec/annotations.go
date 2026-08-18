@@ -30,6 +30,20 @@ const (
 	// publisher's own file digests was checked at import, as sha256:<hex>
 	// of the public key. Absent when no such signature was verified.
 	AnnotationOriginSigner = "io.palan.origin.signer"
+
+	// AnnotationSourceRepo names the repository a layer's file was fetched
+	// from, host included, for example huggingface.co/Qwen/Qwen3-8B.
+	// Absent on a file packed from local disk.
+	AnnotationSourceRepo = "io.palan.source.repo"
+
+	// AnnotationSourcePath is the file's path within that repository.
+	AnnotationSourcePath = "io.palan.source.path"
+
+	// AnnotationSourceRevision is the commit the repository reported for the
+	// listing the file was fetched from. Absent when the repository stated
+	// none, since a revision that was never reported is not a fact about the
+	// model.
+	AnnotationSourceRevision = "io.palan.source.revision"
 )
 
 // ServeDefaults are default llama-server parameters embedded at pack time
