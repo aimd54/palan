@@ -25,10 +25,7 @@ import (
 // artifact must be a plain, spec-compliant OCI artifact for generic tools,
 // and a ModelPack artifact produced by oras must be pullable by palan.
 func TestOrasInterop(t *testing.T) {
-	oras, err := exec.LookPath("oras")
-	if err != nil {
-		t.Skip("oras not in PATH")
-	}
+	oras := requireTool(t, "oras")
 	host := registryHost(t)
 	fx := writeFixtures(t, 256<<10)
 	ref := host + "/llm/interop-oras:q4"
@@ -139,10 +136,7 @@ func safetensorsShardName(i int) string {
 // what tells a consumer which runtime loads these weights, and every shard is
 // present as a raw weight layer carrying the bytes from disk.
 func TestSafetensorsOrasInterop(t *testing.T) {
-	oras, err := exec.LookPath("oras")
-	if err != nil {
-		t.Skip("oras not in PATH")
-	}
+	oras := requireTool(t, "oras")
 	host := registryHost(t)
 	modelDir := writeSafetensorsModel(t)
 	ref := host + "/llm/interop-safetensors:bf16"
@@ -225,10 +219,7 @@ func TestSafetensorsOrasInterop(t *testing.T) {
 // pull and extract a palan-packed artifact intact (M2 acceptance, ADR-0005's
 // compliance oracle).
 func TestModctlInterop(t *testing.T) {
-	modctl, err := exec.LookPath("modctl")
-	if err != nil {
-		t.Skip("modctl not in PATH")
-	}
+	modctl := requireTool(t, "modctl")
 	host := registryHost(t)
 	fx := writeFixtures(t, 256<<10)
 	ref := host + "/llm/interop-modctl:q4"
