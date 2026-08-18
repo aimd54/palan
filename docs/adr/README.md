@@ -23,5 +23,6 @@ decisions and the reasoning behind them.
 | [ADR-0010](0010-referrers-alongside-the-signature-tag.md) | Signatures are indexed as referrers as well as tagged (extends ADR-0007) | accepted |
 | [ADR-0011](0011-terminal-output-is-decoration.md) | Terminal output is decoration; the machine-readable form is the contract | accepted |
 | [ADR-0012](0012-distribution-is-format-neutral.md) | Distribution is format-neutral; serving is GGUF | accepted |
+| [ADR-0013](0013-publisher-signatures-at-import.md) | Verify a publisher's own signature when a model is imported | accepted |
 
 Use [`template.md`](template.md) for new ADRs.
