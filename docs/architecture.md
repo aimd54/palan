@@ -37,6 +37,17 @@ to the rest of that ecosystem.
 └────────────────────┘  └────────────────────┘  └────────────────────┘
 ```
 
+The chain of custody across those pieces, and the points at which palan
+refuses, is drawn in
+[custody-chain.svg](assets/custody-chain.svg) (source:
+[custody-chain.d2](diagrams/custody-chain.d2)).
+
+![Files and the digests a repository publishes are checked at import; the
+artifact is signed and pushed; it travels to a consuming host through a
+registry, a mirror or an air-gap bundle; a pull is refused before bytes move
+unless the signature verifies, and the check runs again each time a model is
+loaded to be served.](assets/custody-chain.svg)
+
 Three planes make up the system:
 
 1. **Registry plane**: any OCI 1.1 registry; zot is the reference
