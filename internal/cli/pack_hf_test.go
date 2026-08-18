@@ -544,3 +544,45 @@ func TestPackRefusesAFileWhoseDownloadedBytesDontMatchTheSignature(t *testing.T)
 		t.Errorf("refusal = %q, want a digest mismatch naming the hash of the downloaded bytes, not a fallback to the API's absent digest", err)
 	}
 }
+
+func TestPackCarriesTheSourceOfEveryFetchedFile(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors": []byte("weights-bytes"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"]}`),
+	})
+	hub.Revision = "e4f2c1d0000000000000000000000000000000aa"
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, _, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/repo"})
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	for _, f := range files {
+		if f.SourceRepo == "" || f.SourcePath == "" {
+			t.Errorf("%s reached the packer without a source", f.Name)
+		}
+		if f.SourceRevision != hub.Revision {
+			t.Errorf("%s revision = %q, want %q", f.Name, f.SourceRevision, hub.Revision)
+		}
+		if strings.HasPrefix(f.SourceRepo, "hf://") {
+			t.Errorf("%s repo = %q, want a host-qualified name rather than the scheme", f.Name, f.SourceRepo)
+		}
+	}
+}
+
+func TestPackFromDiskCarriesNoSource(t *testing.T) {
+	dir := t.TempDir()
+	local := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(local, []byte("not really a gguf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := resolveSources(t.Context(), newTestCommand(t), []string{local})
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	for _, f := range files {
+		if f.SourceRepo != "" || f.SourcePath != "" || f.SourceRevision != "" {
+			t.Errorf("%s claims a source for a local file", f.Path)
+		}
+	}
+}

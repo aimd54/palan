@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -382,10 +383,28 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			if f.Path == ref.Path && f.SHA256 != "" {
 				info.originSHA256 = "sha256:" + f.SHA256
 			}
-			out = append(out, pack.File{Path: path, Name: filepath.Base(f.Path), OriginSHA256: f.SHA256})
+			out = append(out, pack.File{
+				Path:           path,
+				Name:           filepath.Base(f.Path),
+				OriginSHA256:   f.SHA256,
+				SourceRepo:     sourceRepo(client, ref),
+				SourcePath:     f.Path,
+				SourceRevision: res.Revision,
+			})
 		}
 	}
 	return out, info, nil
+}
+
+// sourceRepo names a repository the way a reader outside palan would: the
+// host that served it and the path on it, rather than the hf:// scheme that
+// only means something here.
+func sourceRepo(c *hf.Client, ref hf.Ref) string {
+	host := strings.TrimPrefix(strings.TrimPrefix(c.Endpoint, "https://"), "http://")
+	if host == "" {
+		host = "huggingface.co"
+	}
+	return host + "/" + ref.Repo
 }
 
 // fileSHA256 hashes a downloaded file so it can be checked against what the
