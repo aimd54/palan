@@ -59,6 +59,12 @@ type File struct {
 	// hex, no algorithm prefix. Empty for a file packed from disk, where
 	// palan knows the bytes it read and nothing about where they came from.
 	OriginSHA256 string
+	// SourceRepo, SourcePath and SourceRevision say where a fetched file
+	// came from. All three are empty for a file packed from local disk,
+	// where palan knows the bytes it read and nothing about their origin.
+	SourceRepo     string
+	SourcePath     string
+	SourceRevision string
 }
 
 // Options carries pack-time metadata.
@@ -390,6 +396,15 @@ func fileDescriptor(f File) (ocispec.Descriptor, error) {
 	ann := map[string]string{modelspec.AnnotationFilepath: f.Name}
 	if f.OriginSHA256 != "" {
 		ann[modelspec.AnnotationOriginSHA256] = f.OriginSHA256
+	}
+	for key, val := range map[string]string{
+		modelspec.AnnotationSourceRepo:     f.SourceRepo,
+		modelspec.AnnotationSourcePath:     f.SourcePath,
+		modelspec.AnnotationSourceRevision: f.SourceRevision,
+	} {
+		if val != "" {
+			ann[key] = val
+		}
 	}
 	return ocispec.Descriptor{
 		MediaType:   rawMediaType(f.Kind),

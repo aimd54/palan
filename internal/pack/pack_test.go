@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,6 +306,84 @@ func TestLayerWithoutAPublishedDigestCarriesNoOriginAnnotation(t *testing.T) {
 		if _, ok := l.Annotations[modelspec.AnnotationOriginSHA256]; ok {
 			t.Errorf("layer %s claims an upstream digest for a file packed from disk",
 				l.Annotations[modelspec.AnnotationFilepath])
+		}
+	}
+}
+
+func TestLayerRecordsWhereItsFileCameFrom(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	dir := t.TempDir()
+	weights := filepath.Join(dir, "model.gguf")
+	data := gguftest.TinyModel("llama", "tiny", "15M", 2048, 15, []byte("deterministic-fake-weights"))
+	if err := os.WriteFile(weights, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := Model(ctx, st, []File{{
+		Path:           weights,
+		OriginSHA256:   "aa" + strings.Repeat("0", 62),
+		SourceRepo:     "huggingface.co/org/repo",
+		SourcePath:     "model.gguf",
+		SourceRevision: "e4f2c1d0000000000000000000000000000000aa",
+	}}, "registry.example/llm/test:v1", Options{})
+	if err != nil {
+		t.Fatalf("Model: %v", err)
+	}
+
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetch manifest: %v", err)
+	}
+	var found bool
+	for _, l := range manifest.Layers {
+		if l.Annotations[modelspec.AnnotationFilepath] != "model.gguf" {
+			continue
+		}
+		found = true
+		for key, want := range map[string]string{
+			modelspec.AnnotationSourceRepo:     "huggingface.co/org/repo",
+			modelspec.AnnotationSourcePath:     "model.gguf",
+			modelspec.AnnotationSourceRevision: "e4f2c1d0000000000000000000000000000000aa",
+		} {
+			if got := l.Annotations[key]; got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no layer carried the weight file")
+	}
+}
+
+func TestLayerPackedFromDiskClaimsNoSource(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	dir := t.TempDir()
+	weights := filepath.Join(dir, "model.gguf")
+	data := gguftest.TinyModel("llama", "tiny", "15M", 2048, 15, []byte("deterministic-fake-weights"))
+	if err := os.WriteFile(weights, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := Model(ctx, st, []File{{Path: weights}}, "registry.example/llm/test:v2", Options{})
+	if err != nil {
+		t.Fatalf("Model: %v", err)
+	}
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetch manifest: %v", err)
+	}
+	for _, l := range manifest.Layers {
+		for _, key := range []string{
+			modelspec.AnnotationSourceRepo,
+			modelspec.AnnotationSourcePath,
+			modelspec.AnnotationSourceRevision,
+		} {
+			if _, ok := l.Annotations[key]; ok {
+				t.Errorf("layer %s claims %s for a file packed from disk",
+					l.Annotations[modelspec.AnnotationFilepath], key)
+			}
 		}
 	}
 }
