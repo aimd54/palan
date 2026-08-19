@@ -7,11 +7,39 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
+
+	digest "github.com/opencontainers/go-digest"
 
 	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/internal/registrytest"
 )
+
+// TestIsAttTag checks both reference forms IsSigTag already handles: a bare
+// tag, and a fully-qualified store reference (registry/repo:tag), which is
+// the form store.List returns and what ls, the picker, and airgap pass in.
+// The two functions must not diverge on which forms they recognise.
+func TestIsAttTag(t *testing.T) {
+	d := digest.Digest("sha256:" + strings.Repeat("ab", 32))
+	bare := AttTag(d)
+	full := "reg.example/llm/tiny:" + bare
+	for _, tag := range []string{bare, full} {
+		if !IsAttTag(tag) {
+			t.Errorf("IsAttTag(%q) = false, want true", tag)
+		}
+	}
+	for _, notAtt := range []string{
+		"reg.example/llm/tiny:q4",
+		"reg.example/llm/tiny:sha256-deadbeef",                             // no .att suffix
+		"reg.example/llm/tiny:sha256-" + strings.Repeat("ab", 32) + ".sig", // a signature, not an attestation
+		"reg.example/att:latest",
+	} {
+		if IsAttTag(notAtt) {
+			t.Errorf("IsAttTag(%q) = true, want false", notAtt)
+		}
+	}
+}
 
 // TestFetchAttestationTreatsAHiddenMissingTagAsAbsent mirrors
 // TestPullSurvivesRegistryThatHidesMissingTags in internal/transfer: some
