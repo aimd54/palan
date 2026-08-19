@@ -5,18 +5,22 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 
+	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
@@ -76,6 +80,28 @@ the password comes from COSIGN_PASSWORD or an interactive prompt.`,
 			if _, err := signing.Sign(ctx, repo, ref.Registry+"/"+ref.Repository, desc, signer); err != nil {
 				return err
 			}
+
+			// Where the layers record where their files came from, sign
+			// also attests to it. An artifact packed purely from local
+			// disk has nothing to state, so nothing is written for it.
+			raw, err := content.FetchAll(ctx, repo, desc)
+			if err != nil {
+				return fmt.Errorf("fetching %s to read its layers: %w", ref, err)
+			}
+			var man ocispec.Manifest
+			if err := json.Unmarshal(raw, &man); err != nil {
+				return fmt.Errorf("decoding %s manifest: %w", ref, err)
+			}
+			if layers := signing.LayersFromManifest(man); len(layers) > 0 {
+				envelope, err := attest.Build(desc, layers, signer)
+				if err != nil {
+					return err
+				}
+				if _, err := signing.PushAttestation(ctx, repo, desc, envelope); err != nil {
+					return err
+				}
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "Signed %s@%s\n", ref, desc.Digest)
 			return nil
 		},
@@ -101,7 +127,13 @@ result describes the copy you hold rather than what the registry serves now.
 
 The signature is looked for under its tag first, then among the referrers of
 the model, so a signature written by an OCI 1.1 signing tool is checked even
-though it carries no tag.`,
+though it carries no tag.
+
+Where sign also wrote a statement of the model's sources, verify checks it
+against the same key and against the model's own layers, and names what the
+layers came from. A model with no such statement verifies exactly as it did
+before: requiring one is a policy for something else to enforce, not a fact
+this command asserts.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -126,7 +158,14 @@ though it carries no tag.`,
 			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
+			provenance, err := checkAttestation(ctx, v, keyPath, src, ref)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.subject.Digest, src.name)
+			for _, p := range provenance {
+				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
+			}
 			return nil
 		},
 	}
@@ -255,17 +294,7 @@ func verifyGate(v *viper.Viper, st *store.Store, doVerify bool, keyPath string) 
 // choose the source, so a pre-download gate can insist on the registry while
 // an offline check reads the store.
 func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) error {
-	if keyPath == "" {
-		keyPath = v.GetString(keyVerifyKey)
-	}
-	if keyPath == "" {
-		return fmt.Errorf("no verification key configured: pass --key or set verify.key in the config")
-	}
-	pemBytes, err := os.ReadFile(keyPath) // #nosec G304 -- user-chosen key file
-	if err != nil {
-		return fmt.Errorf("reading verification key: %w", err)
-	}
-	verifier, err := signing.LoadVerifier(pemBytes)
+	verifier, err := resolveVerifyKey(v, keyPath)
 	if err != nil {
 		return err
 	}
@@ -274,6 +303,128 @@ func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, src verif
 		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
 	}
 	return nil
+}
+
+// resolveVerifyKey loads the verifier for keyPath, or for verify.key from
+// the config when keyPath is empty. Both the signature check and the
+// attestation check apply the same key to the same artifact.
+func resolveVerifyKey(v *viper.Viper, keyPath string) (signature.Verifier, error) {
+	if keyPath == "" {
+		keyPath = v.GetString(keyVerifyKey)
+	}
+	if keyPath == "" {
+		return nil, fmt.Errorf("no verification key configured: pass --key or set verify.key in the config")
+	}
+	pemBytes, err := os.ReadFile(keyPath) // #nosec G304 -- user-chosen key file
+	if err != nil {
+		return nil, fmt.Errorf("reading verification key: %w", err)
+	}
+	return signing.LoadVerifier(pemBytes)
+}
+
+// checkAttestation looks for a statement of src's sources and, when one
+// exists, verifies it against the same key verifyDigest already checked the
+// signature with, then holds every layer it records against the artifact's
+// own manifest. It returns one line per distinct source the layers came
+// from, for the caller to report.
+//
+// An absent attestation is not a failure: requiring one is a policy for
+// something else to enforce, and reporting the same output as an artifact
+// with no such statement at all is the correct answer here, not a missing
+// feature.
+func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) ([]string, error) {
+	envelope, err := signing.FetchAttestation(ctx, src.target, src.subject)
+	switch {
+	case errors.Is(err, attest.ErrNoAttestation):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("fetching the attestation for %s@%s: %w", ref, src.subject.Digest, err)
+	}
+
+	verifier, err := resolveVerifyKey(v, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	layers, err := attest.Verify(envelope, src.subject, verifier)
+	if err != nil {
+		return nil, fmt.Errorf("attestation verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
+	}
+
+	raw, err := content.FetchAll(ctx, src.target, src.subject)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s to check its layers: %w", ref, err)
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return nil, fmt.Errorf("decoding %s manifest: %w", ref, err)
+	}
+	if err := attestationMatchesManifest(layers, man); err != nil {
+		return nil, fmt.Errorf("attestation for %s@%s does not match its artifact: %w", ref, src.subject.Digest, err)
+	}
+	return provenanceLines(layers), nil
+}
+
+// attestationMatchesManifest holds an attestation's layer records against
+// man's actual layers. A record naming a layer the manifest lacks, a layer
+// carrying a source annotation with no record, and a record whose fields
+// disagree with what the manifest itself records, each refuse, and each
+// refusal names what is wrong.
+func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) error {
+	want := signing.LayersFromManifest(man)
+	byDigest := make(map[string]attest.Layer, len(want))
+	for _, l := range want {
+		byDigest[l.Digest] = l
+	}
+	haveDigest := make(map[string]bool, len(man.Layers))
+	for _, l := range man.Layers {
+		haveDigest[l.Digest.String()] = true
+	}
+
+	seen := make(map[string]bool, len(attested))
+	for _, a := range attested {
+		w, ok := byDigest[a.Digest]
+		if !ok {
+			if !haveDigest[a.Digest] {
+				return fmt.Errorf("names layer %s, which this artifact does not have", a.Digest)
+			}
+			return fmt.Errorf("names layer %s, but the artifact's manifest records no source for it", a.Digest)
+		}
+		seen[a.Digest] = true
+		if a.Repo != w.Repo || a.Path != w.Path || a.Revision != w.Revision {
+			return fmt.Errorf("layer %s: attestation records %s %s@%s, the artifact's manifest records %s %s@%s",
+				a.Digest, a.Repo, a.Path, a.Revision, w.Repo, w.Path, w.Revision)
+		}
+		if a.Published != w.Published {
+			return fmt.Errorf("layer %s: attestation records published digest %q, the artifact's manifest records %q",
+				a.Digest, a.Published, w.Published)
+		}
+	}
+	for _, w := range want {
+		if !seen[w.Digest] {
+			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
+		}
+	}
+	return nil
+}
+
+// provenanceLines formats one line per distinct repository and revision an
+// attestation's layers record, in the order they first appear.
+func provenanceLines(layers []attest.Layer) []string {
+	var lines []string
+	seen := make(map[string]bool, len(layers))
+	for _, l := range layers {
+		key := l.Repo + "@" + l.Revision
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if l.Revision == "" {
+			lines = append(lines, l.Repo)
+			continue
+		}
+		lines = append(lines, l.Repo+"@"+l.Revision)
+	}
+	return lines
 }
 
 // passwordFunc sources the key password: COSIGN_PASSWORD, else a prompt on

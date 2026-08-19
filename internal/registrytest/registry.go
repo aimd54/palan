@@ -267,6 +267,21 @@ func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request, repo
 			_, _ = w.Write(e.data)
 		}
 
+	case http.MethodDelete:
+		d, err := digest.Parse(ref)
+		if err != nil {
+			http.Error(w, "delete by digest only", http.StatusBadRequest)
+			return
+		}
+		r.mu.Lock()
+		for key, e := range r.manifests[repo] {
+			if digest.FromBytes(e.data) == d {
+				delete(r.manifests[repo], key)
+			}
+		}
+		r.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
