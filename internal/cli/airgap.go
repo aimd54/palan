@@ -9,9 +9,11 @@ import (
 	"io"
 	"os"
 
+	"github.com/opencontainers/go-digest"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/registry"
 
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
@@ -156,7 +158,7 @@ deciding. Verification reads the bundle itself and needs no registry.`,
 				return err
 			}
 			for _, ref := range refs {
-				if signing.IsSigTag(ref) {
+				if signing.IsSigTag(ref) || signing.IsAttTag(ref) {
 					continue // travelled with its model; not a model itself
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Loaded %s\n", ref)
@@ -177,15 +179,17 @@ deciding. Verification reads the bundle itself and needs no registry.`,
 // content reaches the store: a bundle that fails leaves nothing behind.
 //
 // A bundle is attacker-controlled, so nothing may be excused from the check on
-// the strength of its name alone. Signature-shaped references are skipped in
-// the first pass and then required, in the second, to be the signature of a
-// model that just verified. Without that, tagging a model
-// `...:sha256-<64 hex>.sig` would carry it past verification untouched.
+// the strength of its name alone. Signature- and attestation-shaped
+// references are skipped in the first pass and then required, in the second,
+// to belong to a model that just verified. Without that, tagging a model
+// `...:sha256-<64 hex>.sig` (or `.att`) would carry it past verification
+// untouched.
 func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.Context, oras.ReadOnlyTarget, []string) error {
 	return func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error {
 		expectedSignatures := make(map[string]struct{}, len(refs))
+		expectedAttestations := make(map[string]struct{}, len(refs))
 		for _, raw := range refs {
-			if signing.IsSigTag(raw) {
+			if signing.IsSigTag(raw) || signing.IsAttTag(raw) {
 				continue
 			}
 			ref, err := refname.Parse(raw, "")
@@ -206,18 +210,33 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				return err
 			}
 			expectedSignatures[src.sigRef] = struct{}{}
+			expectedAttestations[attestationRef(ref, desc.Digest)] = struct{}{}
 			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
 		}
 
 		for _, raw := range refs {
-			if !signing.IsSigTag(raw) {
-				continue
-			}
-			if _, ok := expectedSignatures[raw]; !ok {
-				return fmt.Errorf(
-					"bundle contains %q, which is not the signature of any verified model; refusing to import", raw)
+			switch {
+			case signing.IsSigTag(raw):
+				if _, ok := expectedSignatures[raw]; !ok {
+					return fmt.Errorf(
+						"bundle contains %q, which is not the signature of any verified model; refusing to import", raw)
+				}
+			case signing.IsAttTag(raw):
+				if _, ok := expectedAttestations[raw]; !ok {
+					return fmt.Errorf(
+						"bundle contains %q, which is not the attestation of any verified model; refusing to import", raw)
+				}
 			}
 		}
 		return nil
 	}
+}
+
+// attestationRef returns the fully-qualified reference an attestation on d
+// is addressed under, the way signing.SigRef does for a signature. The
+// signing package exposes no equivalent for attestations, so this mirrors
+// it locally.
+func attestationRef(ref registry.Reference, d digest.Digest) string {
+	ref.Reference = signing.AttTag(d)
+	return ref.String()
 }

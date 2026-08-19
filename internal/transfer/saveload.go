@@ -56,19 +56,27 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 	// that is absent or invisible, so a lookup failure is reported rather than
 	// undoing a transfer that succeeded.
 	sigTag := signing.SigTag(desc.Digest)
-	if _, err := srcRepo.Resolve(ctx, sigTag); err != nil {
-		if errors.Is(err, errdef.ErrNotFound) {
-			ev.signature(false, nil) // unsigned, nothing more to carry
+	switch _, err := srcRepo.Resolve(ctx, sigTag); {
+	case err == nil:
+		if _, err := oras.Copy(ctx, srcRepo, sigTag, dstRepo, sigTag, opts); err != nil {
+			ev.signature(false, fmt.Errorf("copying the signature for %s: %w", src, err))
 		} else {
-			ev.signature(false, fmt.Errorf("looking for a signature on %s: %w", src, err))
+			ev.signature(true, nil)
 		}
-		return desc, nil
+	case errors.Is(err, errdef.ErrNotFound):
+		ev.signature(false, nil) // unsigned, nothing more to carry
+	default:
+		ev.signature(false, fmt.Errorf("looking for a signature on %s: %w", src, err))
 	}
-	if _, err := oras.Copy(ctx, srcRepo, sigTag, dstRepo, sigTag, opts); err != nil {
-		ev.signature(false, fmt.Errorf("copying the signature for %s: %w", src, err))
-		return desc, nil
+
+	// An attestation travels the same way, independently of whether a
+	// signature exists: most artifacts carry neither, and carrying one must
+	// not depend on the other being present.
+	attTag := signing.AttTag(desc.Digest)
+	if _, err := srcRepo.Resolve(ctx, attTag); err == nil {
+		_, _ = oras.Copy(ctx, srcRepo, attTag, dstRepo, attTag, opts)
 	}
-	ev.signature(true, nil)
+
 	return desc, nil
 }
 
@@ -104,6 +112,9 @@ func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (int
 		if included {
 			signatures++
 		}
+		if _, err := saveAttestation(ctx, st, dst, ref, desc.Digest); err != nil {
+			return 0, err
+		}
 	}
 	if err := tarDir(tmp, w); err != nil {
 		return 0, err
@@ -129,6 +140,29 @@ func saveSignature(ctx context.Context, st *store.Store, dst *oci.Store, ref str
 	}
 	if _, err := oras.Copy(ctx, st.OCI(), sigRef, dst, sigRef, oras.DefaultCopyOptions); err != nil {
 		return false, fmt.Errorf("exporting the signature for %s: %w", ref, err)
+	}
+	return true, nil
+}
+
+// saveAttestation copies a reference's source attestation into the bundle
+// when the store has one, the same way saveSignature copies its signature.
+// Most artifacts carry no attestation, so a missing one is reported rather
+// than treated as a failure.
+func saveAttestation(ctx context.Context, st *store.Store, dst *oci.Store, ref string, d digest.Digest) (bool, error) {
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		// Not a registry-shaped reference, so no attestation can be addressed.
+		return false, nil //nolint:nilerr // exporting the artifact alone is correct here
+	}
+	attRef := attestationRef(parsed, d)
+	if _, err := st.Resolve(ctx, attRef); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking for an attestation on %s: %w", ref, err)
+	}
+	if _, err := oras.Copy(ctx, st.OCI(), attRef, dst, attRef, oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("exporting the attestation for %s: %w", ref, err)
 	}
 	return true, nil
 }
