@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/opencontainers/go-digest"
@@ -18,6 +19,7 @@ import (
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/errcode"
 
 	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/pkg/modelspec"
@@ -36,10 +38,18 @@ func AttTag(d digest.Digest) string {
 	return strings.Replace(d.String(), ":", "-", 1) + ".att"
 }
 
-// IsAttTag reports whether a reference is an attestation rather than a model,
-// so listings and imports can tell them apart.
+// IsAttTag reports whether a reference is an attestation rather than a
+// model, so listings and imports can tell them apart. It recognises the
+// same reference forms IsSigTag does: a bare tag such as "sha256-<hex>.att"
+// and a fully-qualified store reference such as
+// "registry.example/repo:sha256-<hex>.att", since the local store tags
+// everything by full reference.
 func IsAttTag(ref string) bool {
-	return strings.HasSuffix(ref, ".att") && strings.HasPrefix(ref, "sha256-")
+	tag := ref
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		tag = ref[i+1:]
+	}
+	return strings.HasPrefix(tag, "sha256-") && strings.HasSuffix(tag, ".att")
 }
 
 // LayersFromManifest reads the source annotations off man's layers and
@@ -47,10 +57,12 @@ func IsAttTag(ref string) bool {
 // source annotations, such as a file packed from local disk, contributes
 // nothing: it is not a claim this package can make on that layer's behalf.
 //
-// io.palan.origin.sha256 holds bare hex, the form the manifest and layer
-// annotations use throughout, while attest.Layer.Published needs the
-// "sha256:"-prefixed form an OCI descriptor's digest holds. This is where
-// that conversion happens.
+// io.palan.origin.sha256 holds bare hex on a layer, which is the value this
+// function reads, while attest.Layer.Published needs the "sha256:"-prefixed
+// form an OCI descriptor's digest holds. This is where that conversion
+// happens. The same annotation key on the manifest as a whole is written
+// "sha256:"-prefixed instead; that is a different annotation on a different
+// object, and this function never reads it.
 func LayersFromManifest(man ocispec.Manifest) []attest.Layer {
 	var layers []attest.Layer
 	for _, l := range man.Layers {
@@ -121,7 +133,7 @@ func FetchAttestation(ctx context.Context, src oras.ReadOnlyTarget, target ocisp
 	switch {
 	case err == nil:
 		return fetchEnvelope(ctx, src, desc)
-	case !errors.Is(err, errdef.ErrNotFound):
+	case !hiddenAsAbsent(err):
 		return nil, fmt.Errorf("resolving attestation tag: %w", err)
 	}
 
@@ -135,10 +147,35 @@ func FetchAttestation(ctx context.Context, src oras.ReadOnlyTarget, target ocisp
 	return fetchEnvelope(ctx, src, atts[0])
 }
 
+// hiddenAsAbsent reports whether err is the class of failure a registry
+// that hides missing tags produces: it answered 401 or 403 for a tag or
+// referrers index that does not exist, rather than 404. internal/transfer's
+// pull path already treats an equally hidden signature tag as no reason to
+// fail an otherwise-successful pull (see fetchSignature in
+// internal/transfer/pull.go); FetchAttestation applies the same reading, so
+// such a registry cannot turn an artifact whose signature verifies
+// perfectly into a failed verification merely because it will not confirm
+// the attestation tag is absent.
+//
+// Anything else, a genuine network failure, a server error, or an
+// unexpected status, is left as a real error: an outage must not read as
+// "no attestation" and pass silently.
+func hiddenAsAbsent(err error) bool {
+	if errors.Is(err, errdef.ErrNotFound) {
+		return true
+	}
+	var resp *errcode.ErrorResponse
+	if errors.As(err, &resp) {
+		return resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+	}
+	return false
+}
+
 // attestationReferrers lists the attestation manifests attached to target. A
 // source that cannot answer for predecessors is not an error: it means the
 // tag was the only place an attestation could have been, and it was not
-// there.
+// there. A registry that hides that absence behind 401 or 403, the same way
+// it may hide a missing tag, is held to the same reading.
 func attestationReferrers(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 	graph, ok := src.(content.ReadOnlyGraphStorage)
 	if !ok {
@@ -146,7 +183,7 @@ func attestationReferrers(ctx context.Context, src oras.ReadOnlyTarget, target o
 	}
 	atts, err := registry.Referrers(ctx, graph, target, ArtifactTypeAttestation)
 	if err != nil {
-		if errors.Is(err, errdef.ErrNotFound) || errors.Is(err, errdef.ErrUnsupported) {
+		if hiddenAsAbsent(err) || errors.Is(err, errdef.ErrUnsupported) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("listing referrers of %s: %w", target.Digest, err)

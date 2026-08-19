@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -12,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,14 +162,25 @@ func runSign(t *testing.T, ref, keyFile string) error {
 // isolated to a fresh temporary directory so it never touches a real one.
 func runVerify(t *testing.T, ref, keyFile string) error {
 	t.Helper()
+	_, err := runVerifyCapture(t, ref, keyFile)
+	return err
+}
+
+// runVerifyCapture is runVerify plus the command's stdout, for tests that
+// need to check what verify actually reported rather than only whether it
+// refused.
+func runVerifyCapture(t *testing.T, ref, keyFile string) (string, error) {
+	t.Helper()
 	t.Setenv("PALAN_HOME", t.TempDir())
 	v := viper.New()
 	v.Set(keyRegistryPlainHTTP, true)
 	cmd := newVerifyCmd(v)
-	cmd.SetOut(io.Discard)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{ref, "--key", keyFile})
-	return cmd.Execute()
+	err := cmd.Execute()
+	return out.String(), err
 }
 
 // readAttestation fetches and verifies the attestation sign wrote for ref,
@@ -289,5 +302,60 @@ func TestVerifyRefusesAnAttestationNamingALayerTheArtifactLacks(t *testing.T) {
 	err = runVerify(t, ref, pubKey)
 	if err == nil {
 		t.Fatal("verified an attestation about layers this artifact does not have")
+	}
+}
+
+// TestVerifySucceedsAndNamesTheSourceItAttestedTo is the passing path none
+// of the refusal tests exercise: a model signed with a source-carrying
+// attestation must verify cleanly, and the report must name the actual
+// repository and revision the layers record, not merely say something
+// passed.
+func TestVerifySucceedsAndNamesTheSourceItAttestedTo(t *testing.T) {
+	reg := registrytest.New(t)
+	layer := sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", strings.Repeat("11", 32))
+	seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{layer})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	out, err := runVerifyCapture(t, ref, pubKey)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	want := "  provenance: huggingface.co/org/repo@abc123\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("verify output = %q, want it to contain %q", out, want)
+	}
+}
+
+// TestVerifySurvivesARegistryThatHidesMissingAttestationTags: some
+// registries answer 401 or 403 for a tag that does not exist rather than
+// 404. The model's own signature verifies cleanly here; the registry only
+// hides whether the attestation tag exists. That must not turn a perfectly
+// signed artifact into a failed verification.
+func TestVerifySurvivesARegistryThatHidesMissingAttestationTags(t *testing.T) {
+	reg := registrytest.New(t)
+	layer := localLayer([]byte("weights"), "model.gguf")
+	seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{layer})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	reg.SetMissingManifestStatus(http.StatusUnauthorized)
+
+	out, err := runVerifyCapture(t, ref, pubKey)
+	if err != nil {
+		t.Fatalf("verify must succeed against a registry that hides a missing attestation tag: %v", err)
+	}
+	want := "Verified " + ref
+	if !strings.Contains(out, want) {
+		t.Errorf("verify output = %q, want it to contain %q", out, want)
 	}
 }
