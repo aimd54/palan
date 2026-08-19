@@ -557,16 +557,108 @@ func TestPackCarriesTheSourceOfEveryFetchedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveSources: %v", err)
 	}
+	// Asserted against the hub's own endpoint and each file's actual path,
+	// rather than merely checking the fields are non-empty and do not carry
+	// the hf:// scheme: a source built from the wrong reference, a
+	// hardcoded placeholder, or the literal argument string rather than
+	// what was actually fetched would all satisfy a shape check and still
+	// be wrong.
+	wantRepo := strings.TrimPrefix(hub.URL(), "http://") + "/org/repo"
+	wantPath := map[string]string{
+		"model.safetensors": "model.safetensors",
+		"config.json":       "config.json",
+	}
+	if len(files) != len(wantPath) {
+		t.Fatalf("resolved %d files, want %d", len(files), len(wantPath))
+	}
 	for _, f := range files {
-		if f.SourceRepo == "" || f.SourcePath == "" {
-			t.Errorf("%s reached the packer without a source", f.Name)
+		if f.SourceRepo != wantRepo {
+			t.Errorf("%s SourceRepo = %q, want %q", f.Name, f.SourceRepo, wantRepo)
+		}
+		want, ok := wantPath[f.Name]
+		if !ok {
+			t.Fatalf("resolveSources returned unexpected file %s", f.Name)
+		}
+		if f.SourcePath != want {
+			t.Errorf("%s SourcePath = %q, want %q", f.Name, f.SourcePath, want)
 		}
 		if f.SourceRevision != hub.Revision {
-			t.Errorf("%s revision = %q, want %q", f.Name, f.SourceRevision, hub.Revision)
+			t.Errorf("%s SourceRevision = %q, want %q", f.Name, f.SourceRevision, hub.Revision)
 		}
-		if strings.HasPrefix(f.SourceRepo, "hf://") {
-			t.Errorf("%s repo = %q, want a host-qualified name rather than the scheme", f.Name, f.SourceRepo)
+	}
+}
+
+// TestPackNamingTwoRepositoriesKeepsEachFilesOwnSource proves that naming two
+// hf:// references in one command cannot let one reference's repository or
+// revision reach the other reference's files. Both repositories publish a
+// model.safetensors and a config.json under different content and, crucially,
+// under different revisions: a file that carried the wrong reference's
+// SourceRepo or SourceRevision would still pass a check that only looked at
+// non-emptiness, so this identifies each file by its actual bytes and checks
+// the source recorded against the repository that bytes actually came from.
+func TestPackNamingTwoRepositoriesKeepsEachFilesOwnSource(t *testing.T) {
+	hub := hftest.New(t, nil)
+	hub.Repos = map[string]map[string][]byte{
+		"org/a": {
+			"model.safetensors": []byte("a-weights"),
+			"config.json":       []byte(`{"repo":"a"}`),
+		},
+		"org/b": {
+			"model.safetensors": []byte("b-weights"),
+			"config.json":       []byte(`{"repo":"b"}`),
+		},
+	}
+	hub.Revisions = map[string]string{
+		"org/a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"org/b": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, info, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/a", "hf://org/b"})
+	if info.tempDir != "" {
+		t.Cleanup(func() { _ = os.RemoveAll(info.tempDir) })
+	}
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(files) != 4 {
+		t.Fatalf("resolved %d files, want two each from two repositories: %+v", len(files), files)
+	}
+
+	wantHost := strings.TrimPrefix(hub.URL(), "http://")
+	type want struct{ repo, revision string }
+	byContent := make(map[string]want, 4)
+	for repo, rf := range hub.Repos {
+		for _, b := range rf {
+			byContent[string(b)] = want{repo: repo, revision: hub.Revisions[repo]}
 		}
+	}
+
+	var sawA, sawB int
+	for _, f := range files {
+		got, err := os.ReadFile(f.Path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Path, err)
+		}
+		w, ok := byContent[string(got)]
+		if !ok {
+			t.Fatalf("a file on disk holds %q, matching neither repository's published content", got)
+		}
+		wantRepo := wantHost + "/" + w.repo
+		if f.SourceRepo != wantRepo {
+			t.Errorf("%s SourceRepo = %q, want %q (the repository this file's bytes actually came from)", f.Name, f.SourceRepo, wantRepo)
+		}
+		if f.SourceRevision != w.revision {
+			t.Errorf("%s SourceRevision = %q, want %q (%s's own commit)", f.Name, f.SourceRevision, w.revision, w.repo)
+		}
+		if w.repo == "org/a" {
+			sawA++
+		} else {
+			sawB++
+		}
+	}
+	if sawA != 2 || sawB != 2 {
+		t.Fatalf("did not find both repositories' own two files (org/a=%d, org/b=%d): %+v", sawA, sawB, files)
 	}
 }
 
