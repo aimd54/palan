@@ -7,6 +7,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +22,13 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/sigstore/sigstore/pkg/signature"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 
+	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/internal/registrytest"
 	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
@@ -174,6 +180,71 @@ func seedStoreSignature(t *testing.T, st *store.Store, ref registry.Reference, s
 		t.Fatalf("seed signature tag: %v", err)
 	}
 	return sigRef
+}
+
+// attestTestSigner generates an ephemeral ECDSA P-256 signer. These tests
+// cover how an attestation travels, not what internal/attest and
+// internal/signing do to verify one, so any consistent keypair will do.
+func attestTestSigner(t *testing.T) signature.Signer {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := signature.LoadSigner(priv, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+// storeHas reports whether the store resolves ref, for tests that care only
+// about a tag's presence rather than the descriptor it names.
+func storeHas(t *testing.T, st *store.Store, ref string) bool {
+	t.Helper()
+	_, err := st.Resolve(context.Background(), ref)
+	return err == nil
+}
+
+// TestPullCarriesTheAttestationBesideTheSignature: a model can carry both a
+// signature and a source attestation. A pull that brought back only one of
+// them would leave provenance silently stopping at the registry that first
+// held it.
+func TestPullCarriesTheAttestationBesideTheSignature(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	weights := randomBytes(t, 1024)
+	mDesc, wDesc := seedRegistryModel(t, reg, "llm/tiny", "q4", weights)
+
+	c := newTestClient(t)
+	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
+	repo, err := c.Repository(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := attestTestSigner(t)
+	if _, err := signing.Sign(ctx, repo, ref.Registry+"/"+ref.Repository, mDesc, signer); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	layers := []attest.Layer{{Digest: wDesc.Digest.String(), Repo: "huggingface.co/org/repo", Path: "tiny.gguf"}}
+	envelope, err := attest.Build(mDesc, layers, signer)
+	if err != nil {
+		t.Fatalf("build attestation: %v", err)
+	}
+	if _, err := signing.PushAttestation(ctx, repo, mDesc, envelope); err != nil {
+		t.Fatalf("push attestation: %v", err)
+	}
+
+	st := openTestStore(t)
+	if _, err := c.Pull(ctx, st, ref, Events{}); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if !storeHas(t, st, signing.SigRef(ref, mDesc.Digest)) {
+		t.Error("the signature did not travel")
+	}
+	if !storeHas(t, st, attestationRef(ref, mDesc.Digest)) {
+		t.Error("the attestation did not travel, so provenance stops at the registry")
+	}
 }
 
 func TestSaveCarriesTheSignature(t *testing.T) {

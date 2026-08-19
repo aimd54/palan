@@ -138,8 +138,8 @@ func refOrPick(ctx context.Context, cmd *cobra.Command, args []string, title str
 }
 
 // storeItems lists the local store as picker entries, leaving out signatures
-// for the same reason `ls` does: they are attached to a model rather than
-// being one.
+// and attestations for the same reason `ls` does: they are attached to a
+// model rather than being one.
 func storeItems(ctx context.Context) ([]list.Item, error) {
 	st, err := openStore(ctx)
 	if err != nil {
@@ -157,7 +157,7 @@ func storeItems(ctx context.Context) ([]list.Item, error) {
 	}
 	items := make([]list.Item, 0, len(entries))
 	for _, e := range entries {
-		if signing.IsSigTag(e.Ref) {
+		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) {
 			continue
 		}
 		items = append(items, modelItem{ref: e.Ref, desc: pickerDescription(ctx, st, e)})

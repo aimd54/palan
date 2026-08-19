@@ -116,6 +116,11 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 	// models against those registries.
 	stored, problem := fetchSignature(ctx, repo, st, ref, desc.Digest)
 	ev.signature(stored, problem)
+
+	// An attestation is supplementary the same way: most artifacts carry
+	// none, and a lookup failure here must not undo a pull that already
+	// succeeded.
+	_, _ = fetchAttestation(ctx, repo, st, ref, desc.Digest)
 	return desc, nil
 }
 
@@ -138,6 +143,36 @@ func fetchSignature(ctx context.Context, repo *remote.Repository, st *store.Stor
 		return false, fmt.Errorf("copying the signature for %s: %w", ref, err)
 	}
 	return true, nil
+}
+
+// fetchAttestation brings a model's source attestation into the store
+// alongside it, the same way fetchSignature brings its signature: a plain
+// copy of a manifest and a small payload, not the resumable path built for
+// weights.
+//
+// An artifact with no attestation is the normal case, not a failure: a
+// missing attestation tag reports false and leaves the pull successful.
+func fetchAttestation(ctx context.Context, repo *remote.Repository, st *store.Store, ref registry.Reference, d digest.Digest) (bool, error) {
+	attTag := signing.AttTag(d)
+	if _, err := repo.Resolve(ctx, attTag); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking for an attestation on %s: %w", ref, err)
+	}
+	if _, err := oras.Copy(ctx, repo, attTag, st.OCI(), attestationRef(ref, d), oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("copying the attestation for %s: %w", ref, err)
+	}
+	return true, nil
+}
+
+// attestationRef returns the fully-qualified reference an attestation on d
+// is addressed under in a store that holds more than one repository, the
+// way signing.SigRef does for a signature. The signing package exposes no
+// equivalent for attestations, so this mirrors it locally.
+func attestationRef(ref registry.Reference, d digest.Digest) string {
+	ref.Reference = signing.AttTag(d)
+	return ref.String()
 }
 
 // manifestMediaTypes are the media types treated as graph-interior nodes.
