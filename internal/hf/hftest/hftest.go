@@ -43,8 +43,15 @@ type Hub struct {
 	Ranges []string
 	// Revision is the commit the model API reports as `sha`. Empty serves a
 	// response with no sha at all, which is how a repository that states
-	// none behaves.
+	// none behaves. Applies to every repository this hub serves, unless
+	// overridden per repository in Revisions.
 	Revision string
+	// Revisions holds a distinct commit per repository ("org/name"), for a
+	// test that packs more than one repository in the same run and needs to
+	// tell which reference's files came back with which commit. A
+	// repository named here is reported from its own entry instead of
+	// Revision.
+	Revisions map[string]string
 	// Fetched records the revision segment of every download request, so a
 	// test can prove the bytes came from the commit that was resolved
 	// rather than from a branch that may have moved since.
@@ -127,9 +134,13 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for p := range files {
 			sibs = append(sibs, sib{Filename: p})
 		}
+		rev := h.Revision
+		if v, ok := h.Revisions[repo]; ok {
+			rev = v
+		}
 		body := map[string]any{"siblings": sibs}
-		if h.Revision != "" {
-			body["sha"] = h.Revision
+		if rev != "" {
+			body["sha"] = rev
 		}
 		_ = json.NewEncoder(w).Encode(body)
 

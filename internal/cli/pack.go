@@ -398,12 +398,10 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 
 // sourceRepo names a repository the way a reader outside palan would: the
 // host that served it and the path on it, rather than the hf:// scheme that
-// only means something here.
+// only means something here. c.Endpoint always names a host: NewClient
+// fills it with either the default or an HF_ENDPOINT override, never blank.
 func sourceRepo(c *hf.Client, ref hf.Ref) string {
 	host := strings.TrimPrefix(strings.TrimPrefix(c.Endpoint, "https://"), "http://")
-	if host == "" {
-		host = "huggingface.co"
-	}
 	return host + "/" + ref.Repo
 }
 
