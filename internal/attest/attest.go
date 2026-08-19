@@ -180,6 +180,11 @@ func Build(sub ocispec.Descriptor, layers []Layer, s signature.Signer) ([]byte, 
 // signature does not verify, whose subject is a different artifact, or that
 // covers nothing.
 func Verify(data []byte, sub ocispec.Descriptor, v signature.Verifier) ([]Layer, error) {
+	dg := sub.Digest.String()
+	if err := validDigest(dg); err != nil {
+		return nil, fmt.Errorf("subject: %w", err)
+	}
+
 	var env envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("decoding the attestation: %w", err)
@@ -225,10 +230,10 @@ func Verify(data []byte, sub ocispec.Descriptor, v signature.Verifier) ([]Layer,
 	if len(stmt.Subject) != 1 {
 		return nil, fmt.Errorf("statement names %d subjects, want exactly the artifact", len(stmt.Subject))
 	}
-	wantAlg, wantHex, ok := strings.Cut(sub.Digest.String(), ":")
-	if !ok {
-		return nil, fmt.Errorf("subject digest %q is not algorithm:hex", sub.Digest)
-	}
+	// dg already passed validDigest above, so it is guaranteed to contain a
+	// colon: the split below cannot silently produce an empty wantHex the
+	// way an unvalidated "sha256:" subject would.
+	wantAlg, wantHex, _ := strings.Cut(dg, ":")
 	if got, ok := stmt.Subject[0].Digest[wantAlg]; !ok || !strings.EqualFold(got, wantHex) {
 		return nil, fmt.Errorf("the attestation is about a different artifact than %s", sub.Digest)
 	}
