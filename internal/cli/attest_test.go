@@ -359,3 +359,122 @@ func TestVerifySurvivesARegistryThatHidesMissingAttestationTags(t *testing.T) {
 		t.Errorf("verify output = %q, want it to contain %q", out, want)
 	}
 }
+
+// TestSignAndVerifyTwoSourcesSharingOneFilesBytes: two repositories that
+// ship a byte-identical file, an Apache-2.0 LICENSE being the ordinary
+// case, produce two layers with one digest and two different sources.
+// Records keyed by digest alone collapse into one, and palan then refuses
+// its own freshly signed artifact.
+func TestSignAndVerifyTwoSourcesSharingOneFilesBytes(t *testing.T) {
+	reg := registrytest.New(t)
+	shared := []byte("Apache License, Version 2.0")
+	fromA := sourceLayer(shared, "huggingface.co/org/a", "LICENSE", "aaaa111", "")
+	fromB := sourceLayer(shared, "huggingface.co/org/b", "LICENSE", "bbbb222", "")
+	if fromA.Digest != fromB.Digest {
+		t.Fatalf("fixture is not exercising the case: %s != %s", fromA.Digest, fromB.Digest)
+	}
+	seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{fromA, fromB})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	out, err := runVerifyCapture(t, ref, pubKey)
+	if err != nil {
+		t.Fatalf("palan must verify an artifact it signed itself: %v", err)
+	}
+	// Both sources must be reported. One line would mean one record stood
+	// in for both, which is the collapse this test exists to catch.
+	for _, want := range []string{
+		"  provenance: huggingface.co/org/a@aaaa111\n",
+		"  provenance: huggingface.co/org/b@bbbb222\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("verify output = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+// TestVerifyRefusesAnAttestationCoveringOnlyOneOfTwoIdenticalLayers is the
+// converse: a statement that names one of two same-digest layers must not
+// be accepted as vouching for the other, whose source it never mentions.
+func TestVerifyRefusesAnAttestationCoveringOnlyOneOfTwoIdenticalLayers(t *testing.T) {
+	shared := []byte("Apache License, Version 2.0")
+	fromA := sourceLayer(shared, "huggingface.co/org/a", "LICENSE", "aaaa111", "")
+	fromB := sourceLayer(shared, "huggingface.co/org/b", "LICENSE", "bbbb222", "")
+	man := ocispec.Manifest{Layers: []ocispec.Descriptor{fromA, fromB}}
+
+	onlyB := []attest.Layer{{
+		Digest:   fromB.Digest.String(),
+		Repo:     "huggingface.co/org/b",
+		Path:     "LICENSE",
+		Revision: "bbbb222",
+	}}
+	if err := attestationMatchesManifest(onlyB, man); err == nil {
+		t.Error("a statement naming one of two same-digest layers must not be accepted as covering both")
+	}
+
+	// The honest statement, naming both, must still pass.
+	both := append(onlyB, attest.Layer{
+		Digest:   fromA.Digest.String(),
+		Repo:     "huggingface.co/org/a",
+		Path:     "LICENSE",
+		Revision: "aaaa111",
+	})
+	if err := attestationMatchesManifest(both, man); err != nil {
+		t.Errorf("a statement naming both layers must be accepted: %v", err)
+	}
+}
+
+// TestSignSaysWhetherItWroteAnAttestation: a model whose layers record no
+// source is signed without one, and a model whose layers do record one is
+// signed with it. Both exit 0 saying "Signed", and verify later reports no
+// provenance for either, so sign is the only place that can distinguish
+// them for a reader. Silence here is the shape this project treats as a
+// defect: a command exiting 0 having written nothing.
+func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		layer    ocispec.Descriptor
+		wantOut  string
+		wantMiss string
+	}{
+		{
+			name:    "a fetched layer is attested",
+			layer:   sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", ""),
+			wantOut: "Attested the source of 1 layer(s)",
+		},
+		{
+			name:     "a local layer is not, and sign says so",
+			layer:    localLayer([]byte("weights"), "model.gguf"),
+			wantMiss: "No source attestation written",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := registrytest.New(t)
+			seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{tc.layer})
+			_, privKey := attestKeypair(t)
+
+			t.Setenv("COSIGN_PASSWORD", "")
+			v := viper.New()
+			v.Set(keyRegistryPlainHTTP, true)
+			cmd := newSignCmd(v)
+			var out, errOut bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errOut)
+			cmd.SetArgs([]string{reg.Host() + "/llm/tiny:q4", "--key", privKey})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("sign: %v", err)
+			}
+			both := out.String() + errOut.String()
+			if tc.wantOut != "" && !strings.Contains(both, tc.wantOut) {
+				t.Errorf("sign reported %q, want it to contain %q", both, tc.wantOut)
+			}
+			if tc.wantMiss != "" && !strings.Contains(both, tc.wantMiss) {
+				t.Errorf("sign reported %q, want it to contain %q", both, tc.wantMiss)
+			}
+		})
+	}
+}
