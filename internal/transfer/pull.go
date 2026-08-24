@@ -36,6 +36,13 @@ type Events struct {
 	// is not an error; a non-nil problem means the lookup itself failed and
 	// the model was kept anyway.
 	OnSignature func(stored bool, problem error)
+	// OnAttestation reports whether a source attestation travelled with the
+	// artifact, read the same way as OnSignature: false with a nil problem
+	// means the registry held none, and a non-nil problem means the lookup
+	// or the copy failed while the model itself was kept. Without this the
+	// two outcomes are indistinguishable, and an artifact whose provenance
+	// was lost to an outage looks exactly like one that never had any.
+	OnAttestation func(stored bool, problem error)
 }
 
 func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int64) {
@@ -54,6 +61,12 @@ func (e Events) blobSkip(desc ocispec.Descriptor) {
 func (e Events) signature(stored bool, problem error) {
 	if e.OnSignature != nil {
 		e.OnSignature(stored, problem)
+	}
+}
+
+func (e Events) attestation(stored bool, problem error) {
+	if e.OnAttestation != nil {
+		e.OnAttestation(stored, problem)
 	}
 }
 
@@ -119,8 +132,11 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 
 	// An attestation is supplementary the same way: most artifacts carry
 	// none, and a lookup failure here must not undo a pull that already
-	// succeeded.
-	_, _ = fetchAttestation(ctx, repo, st, ref, desc.Digest)
+	// succeeded. It is still reported, because a failure that goes unsaid
+	// leaves a model whose provenance was lost looking like one that never
+	// carried any.
+	attested, attProblem := fetchAttestation(ctx, repo, st, ref, desc.Digest)
+	ev.attestation(attested, attProblem)
 	return desc, nil
 }
 
@@ -160,19 +176,10 @@ func fetchAttestation(ctx context.Context, repo *remote.Repository, st *store.St
 		}
 		return false, fmt.Errorf("looking for an attestation on %s: %w", ref, err)
 	}
-	if _, err := oras.Copy(ctx, repo, attTag, st.OCI(), attestationRef(ref, d), oras.DefaultCopyOptions); err != nil {
+	if _, err := oras.Copy(ctx, repo, attTag, st.OCI(), signing.AttRef(ref, d), oras.DefaultCopyOptions); err != nil {
 		return false, fmt.Errorf("copying the attestation for %s: %w", ref, err)
 	}
 	return true, nil
-}
-
-// attestationRef returns the fully-qualified reference an attestation on d
-// is addressed under in a store that holds more than one repository, the
-// way signing.SigRef does for a signature. The signing package exposes no
-// equivalent for attestations, so this mirrors it locally.
-func attestationRef(ref registry.Reference, d digest.Digest) string {
-	ref.Reference = signing.AttTag(d)
-	return ref.String()
 }
 
 // manifestMediaTypes are the media types treated as graph-interior nodes.

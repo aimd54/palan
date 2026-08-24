@@ -38,6 +38,15 @@ func AttTag(d digest.Digest) string {
 	return strings.Replace(d.String(), ":", "-", 1) + ".att"
 }
 
+// AttRef returns the fully-qualified reference for an attestation on d, for
+// targets that hold more than one repository, the way SigRef does for a
+// signature. The local store tags everything by full reference, so it needs
+// the registry and repository too.
+func AttRef(ref registry.Reference, d digest.Digest) string {
+	ref.Reference = AttTag(d)
+	return ref.String()
+}
+
 // IsAttTag reports whether a reference is an attestation rather than a
 // model, so listings and imports can tell them apart. It recognises the
 // same reference forms IsSigTag does: a bare tag such as "sha256-<hex>.att"

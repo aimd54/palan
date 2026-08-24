@@ -9,11 +9,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/opencontainers/go-digest"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	oras "oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/registry"
 
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
@@ -210,7 +208,7 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				return err
 			}
 			expectedSignatures[src.sigRef] = struct{}{}
-			expectedAttestations[attestationRef(ref, desc.Digest)] = struct{}{}
+			expectedAttestations[signing.AttRef(ref, desc.Digest)] = struct{}{}
 			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
 		}
 
@@ -230,13 +228,4 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 		}
 		return nil
 	}
-}
-
-// attestationRef returns the fully-qualified reference an attestation on d
-// is addressed under, the way signing.SigRef does for a signature. The
-// signing package exposes no equivalent for attestations, so this mirrors
-// it locally.
-func attestationRef(ref registry.Reference, d digest.Digest) string {
-	ref.Reference = signing.AttTag(d)
-	return ref.String()
 }
