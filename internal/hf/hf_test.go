@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -575,5 +577,67 @@ func TestDownloadFallsBackToMainWhenNoRevisionWasResolved(t *testing.T) {
 		if got != "main" {
 			t.Errorf("downloaded from revision %q, want main: an empty revision must fall back to it", got)
 		}
+	}
+}
+
+// TestResolveRefusesAPathTheCallerNeverRequested: the path in a paths-info
+// response names the file whose bytes are packed, becomes a URL segment on
+// the way to fetching them, and is written into a signed annotation. A
+// response substituting a different path would put another file's bytes,
+// under another file's name, into the artifact and into the statement that
+// vouches for it, so the response is held to the set that was asked for.
+func TestResolveRefusesAPathTheCallerNeverRequested(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{"model.gguf": []byte("weights")})
+	// A hostile or compromised endpoint: everything is served by the real
+	// hub except the paths-info answer, which names a file of its choosing.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/paths-info/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"path":"hidden/other-org-weights.gguf","size":7}]`)
+			return
+		}
+		hub.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient()
+	c.Endpoint = srv.URL
+	_, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
+	if err == nil {
+		t.Fatal("a substituted path was accepted, so the artifact would record a file that was never requested")
+	}
+	if !strings.Contains(err.Error(), "hidden/other-org-weights.gguf") {
+		t.Errorf("the refusal must name the path it rejected, got: %v", err)
+	}
+}
+
+// TestResolveRefusesADuplicatedPath: two files are requested and one of
+// them comes back twice. The count matches, so the existing "metadata for
+// N of M" check is satisfied, while the response covers only one of the two
+// files. Nothing else would notice, and the licence would be packed with
+// the weights' metadata under its own name.
+func TestResolveRefusesADuplicatedPath(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.gguf": []byte("weights"),
+		"LICENSE":    []byte("Apache License, Version 2.0"),
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/paths-info/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"path":"model.gguf","size":7},{"path":"model.gguf","size":7}]`)
+			return
+		}
+		hub.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient()
+	c.Endpoint = srv.URL
+	_, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
+	if err == nil {
+		t.Fatal("a duplicated path was accepted, so a count check was satisfied by fewer files than were requested")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("the refusal must say the response repeated a path, got: %v", err)
 	}
 }

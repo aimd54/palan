@@ -262,8 +262,27 @@ func (c *Client) pathsInfo(ctx context.Context, ref Ref, rev string, paths []str
 	if err := json.NewDecoder(resp.Body).Decode(&infos); err != nil {
 		return nil, fmt.Errorf("decoding file metadata for %s: %w", ref.Repo, err)
 	}
+	// A returned path is third-party text that names the file whose bytes
+	// are packed, reaches a URL path segment, and is written into a signed
+	// annotation, so it is held to the set that was asked for rather than
+	// trusted, the same way a reported commit is validated where it is
+	// decoded. A response naming a file the caller never requested would
+	// otherwise put another path's bytes, under another path's name, into
+	// the artifact and into the statement that vouches for it.
+	requested := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		requested[p] = true
+	}
 	out := make([]File, 0, len(infos))
+	seen := make(map[string]bool, len(infos))
 	for _, i := range infos {
+		if !requested[i.Path] {
+			return nil, fmt.Errorf("%s returned metadata for %q, which was not among the files requested", ref.Repo, i.Path)
+		}
+		if seen[i.Path] {
+			return nil, fmt.Errorf("%s returned metadata for %q more than once", ref.Repo, i.Path)
+		}
+		seen[i.Path] = true
 		f := File{Path: i.Path, Size: i.Size}
 		if i.LFS != nil {
 			f.SHA256 = i.LFS.OID
