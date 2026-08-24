@@ -588,6 +588,36 @@ func TestPackCarriesTheSourceOfEveryFetchedFile(t *testing.T) {
 	}
 }
 
+// TestPackRecordsARepositoryRelativePathNotTheDownloadedFilename: Download
+// writes each file to filepath.Join(destDir, filepath.Base(f.Path)), so on
+// disk a file published at onnx/model.safetensors is just
+// model.safetensors. SourcePath must stay the path within the repository,
+// because it goes into the signed statement and is what a reader would use
+// to fetch the file again. Every other fixture publishes flat, single
+// segment paths, where the repository-relative path and the basename are
+// byte identical and this confusion cannot be seen.
+func TestPackRecordsARepositoryRelativePathNotTheDownloadedFilename(t *testing.T) {
+	const nested = "onnx/model.safetensors"
+	hub := hftest.New(t, map[string][]byte{nested: []byte("weights-under-a-subdirectory")})
+	hub.Revision = "b7c3d9e1000000000000000000000000000000cc"
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, _, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/repo/" + nested})
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("resolved %d files, want 1", len(files))
+	}
+	f := files[0]
+	if f.SourcePath != nested {
+		t.Errorf("SourcePath = %q, want %q: the basename alone cannot address the file in its repository", f.SourcePath, nested)
+	}
+	if f.SourceRevision != hub.Revision {
+		t.Errorf("SourceRevision = %q, want %q", f.SourceRevision, hub.Revision)
+	}
+}
+
 // TestPackNamingTwoRepositoriesKeepsEachFilesOwnSource proves that naming two
 // hf:// references in one command cannot let one reference's repository or
 // revision reach the other reference's files. Both repositories publish a
