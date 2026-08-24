@@ -30,6 +30,12 @@ type progress struct {
 	// sigProblem records why a signature did not travel, when the reason was
 	// a failure rather than the registry simply holding none.
 	sigProblem error
+	// attested records whether a source attestation travelled with the
+	// artifact, so the report can say the provenance chain came along too.
+	attested atomic.Bool
+	// attProblem records why an attestation did not travel, when the reason
+	// was a failure rather than the registry simply holding none.
+	attProblem error
 }
 
 func newProgress(quiet bool) *progress {
@@ -78,6 +84,14 @@ func (pr *progress) events() transfer.Events {
 				pr.mu.Unlock()
 			}
 		},
+		OnAttestation: func(stored bool, problem error) {
+			pr.attested.Store(stored)
+			if problem != nil {
+				pr.mu.Lock()
+				pr.attProblem = problem
+				pr.mu.Unlock()
+			}
+		},
 	}
 }
 
@@ -107,11 +121,18 @@ func (pr *progress) report() {
 	if pr.signed.Load() {
 		fmt.Fprintln(os.Stderr, "Signature stored alongside the model")
 	}
+	if pr.attested.Load() {
+		fmt.Fprintln(os.Stderr, "Source attestation stored alongside the model")
+	}
 	pr.mu.Lock()
-	problem := pr.sigProblem
+	problem, attProblem := pr.sigProblem, pr.attProblem
 	pr.mu.Unlock()
 	if problem != nil {
 		// The transfer stands; only offline verification is affected.
 		fmt.Fprintf(os.Stderr, "Warning: no signature stored (%v)\n", problem)
+	}
+	if attProblem != nil {
+		// Likewise: the model is here, its provenance record is not.
+		fmt.Fprintf(os.Stderr, "Warning: no source attestation stored (%v)\n", attProblem)
 	}
 }

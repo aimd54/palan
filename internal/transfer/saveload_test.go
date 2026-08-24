@@ -242,7 +242,7 @@ func TestPullCarriesTheAttestationBesideTheSignature(t *testing.T) {
 	if !storeHas(t, st, signing.SigRef(ref, mDesc.Digest)) {
 		t.Error("the signature did not travel")
 	}
-	if !storeHas(t, st, attestationRef(ref, mDesc.Digest)) {
+	if !storeHas(t, st, signing.AttRef(ref, mDesc.Digest)) {
 		t.Error("the attestation did not travel, so provenance stops at the registry")
 	}
 }
@@ -465,5 +465,256 @@ func TestPullSurvivesRegistryThatHidesMissingTags(t *testing.T) {
 	// The model itself must be usable regardless.
 	if _, err := st.Resolve(ctx, ref.String()); err != nil {
 		t.Errorf("model missing from the store: %v", err)
+	}
+}
+
+// buildAttestationManifest returns the parts of a source attestation for
+// subject: the DSSE envelope, cosign's empty config, and the manifest naming
+// them. It mirrors what signing.PushAttestation writes, so a store or a
+// registry seeded with it holds the object the real path would have put
+// there.
+func buildAttestationManifest(t *testing.T, subject, layer ocispec.Descriptor) (manifest, envelope, cfg []byte, mDesc, envDesc, cfgDesc ocispec.Descriptor) {
+	t.Helper()
+	layers := []attest.Layer{{Digest: layer.Digest.String(), Repo: "huggingface.co/org/repo", Path: "tiny.gguf"}}
+	envelope, err := attest.Build(subject, layers, attestTestSigner(t))
+	if err != nil {
+		t.Fatalf("build attestation: %v", err)
+	}
+	envDesc = content.NewDescriptorFromBytes(signing.ArtifactTypeAttestation, envelope)
+	cfg = []byte("{}")
+	cfgDesc = content.NewDescriptorFromBytes(ocispec.MediaTypeImageConfig, cfg)
+
+	m := ocispec.Manifest{
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: signing.ArtifactTypeAttestation,
+		Config:       cfgDesc,
+		Layers:       []ocispec.Descriptor{envDesc},
+		Subject:      &subject,
+	}
+	m.SchemaVersion = 2
+	manifest, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mDesc = content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, manifest)
+	mDesc.ArtifactType = m.ArtifactType
+	return manifest, envelope, cfg, mDesc, envDesc, cfgDesc
+}
+
+// seedStoreAttestation plants an attestation for subject in the local store
+// under the reference the store addresses it by, and returns that reference.
+func seedStoreAttestation(t *testing.T, st *store.Store, ref registry.Reference, subject, layer ocispec.Descriptor) string {
+	t.Helper()
+	ctx := context.Background()
+	manifest, envelope, cfg, mDesc, envDesc, cfgDesc := buildAttestationManifest(t, subject, layer)
+	for _, part := range []struct {
+		desc ocispec.Descriptor
+		data []byte
+	}{{envDesc, envelope}, {cfgDesc, cfg}, {mDesc, manifest}} {
+		if err := st.OCI().Push(ctx, part.desc, bytes.NewReader(part.data)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+			t.Fatalf("seed attestation push: %v", err)
+		}
+	}
+	attRef := signing.AttRef(ref, subject.Digest)
+	if err := st.Tag(ctx, mDesc, attRef); err != nil {
+		t.Fatalf("seed attestation tag: %v", err)
+	}
+	return attRef
+}
+
+// seedRegistryAttestation plants an attestation for subject in a registry
+// under the cosign-compatible tag, and returns that tag.
+func seedRegistryAttestation(t *testing.T, reg *registrytest.Registry, repo string, subject, layer ocispec.Descriptor) string {
+	t.Helper()
+	manifest, envelope, cfg, _, _, _ := buildAttestationManifest(t, subject, layer)
+	reg.PutBlob(repo, envelope)
+	reg.PutBlob(repo, cfg)
+	attTag := signing.AttTag(subject.Digest)
+	reg.PutManifest(repo, attTag, ocispec.MediaTypeImageManifest, manifest)
+	return attTag
+}
+
+// TestCpCarriesTheAttestation: mirroring is one of the two ways a model
+// crosses a gap, so an attestation that stays behind leaves the far side
+// unable to say where the weights came from, with nothing reporting the
+// loss.
+func TestCpCarriesTheAttestation(t *testing.T) {
+	regA := registrytest.New(t)
+	regB := registrytest.New(t)
+	mDesc, wDesc := seedRegistryModel(t, regA, "llm/tiny", "q4", randomBytes(t, 512))
+	attTag := seedRegistryAttestation(t, regA, "llm/tiny", mDesc, wDesc)
+
+	src := mustParse(t, regA.Host()+"/llm/tiny:q4")
+	dst := mustParse(t, regB.Host()+"/llm/mirrored:q4")
+	var stored bool
+	var problem error
+	if _, err := newTestClient(t).Copy(context.Background(), src, dst, Events{
+		OnAttestation: func(s bool, p error) { stored, problem = s, p },
+	}); err != nil {
+		t.Fatalf("cp: %v", err)
+	}
+	if problem != nil {
+		t.Errorf("carrying an existing attestation must not report a problem: %v", problem)
+	}
+	if !stored {
+		t.Error("cp must report that the attestation travelled")
+	}
+	if !regB.HasManifest("llm/mirrored", attTag) {
+		t.Error("the attestation did not arrive at the destination registry")
+	}
+}
+
+// TestCpWithoutAttestationIsNotAnError guards the common case: most
+// artifacts carry no attestation, and mirroring them must not start
+// failing or start inventing one.
+func TestCpWithoutAttestationIsNotAnError(t *testing.T) {
+	regA := registrytest.New(t)
+	regB := registrytest.New(t)
+	mDesc, _ := seedRegistryModel(t, regA, "llm/tiny", "q4", randomBytes(t, 512))
+
+	src := mustParse(t, regA.Host()+"/llm/tiny:q4")
+	dst := mustParse(t, regB.Host()+"/llm/mirrored:q4")
+	stored := true
+	var problem error
+	if _, err := newTestClient(t).Copy(context.Background(), src, dst, Events{
+		OnAttestation: func(s bool, p error) { stored, problem = s, p },
+	}); err != nil {
+		t.Fatalf("mirroring a model with no attestation must succeed: %v", err)
+	}
+	if stored {
+		t.Error("no attestation existed, so none can have travelled")
+	}
+	if problem != nil {
+		t.Errorf("a clean absence is not a problem: %v", problem)
+	}
+	if regB.HasManifest("llm/mirrored", signing.AttTag(mDesc.Digest)) {
+		t.Error("no attestation existed, so none should have been created")
+	}
+	// The model itself must be mirrored regardless.
+	if !regB.HasManifest("llm/mirrored", "q4") {
+		t.Error("the model did not arrive at the destination registry")
+	}
+}
+
+// TestCpReportsARefusedAttestationLookup: a registry that answers 401 for a
+// tag it does not hold makes "no attestation" and "the lookup failed" the
+// same observation. Reported, they are distinguishable; discarded, a mirror
+// that lost provenance to an outage looks exactly like one whose source
+// never had any.
+func TestCpReportsARefusedAttestationLookup(t *testing.T) {
+	regA := registrytest.New(t)
+	regB := registrytest.New(t)
+	seedRegistryModel(t, regA, "llm/tiny", "q4", randomBytes(t, 512))
+	regA.SetMissingManifestStatus(http.StatusUnauthorized)
+
+	src := mustParse(t, regA.Host()+"/llm/tiny:q4")
+	dst := mustParse(t, regB.Host()+"/llm/mirrored:q4")
+	var stored bool
+	var problem error
+	if _, err := newTestClient(t).Copy(context.Background(), src, dst, Events{
+		OnAttestation: func(s bool, p error) { stored, problem = s, p },
+	}); err != nil {
+		t.Fatalf("cp must succeed even when the attestation lookup is refused: %v", err)
+	}
+	if stored {
+		t.Error("nothing was carried, so nothing may be reported as carried")
+	}
+	if problem == nil {
+		t.Error("a refused lookup must be reported rather than passed off as no attestation")
+	}
+	// The mirror itself stands.
+	if !regB.HasManifest("llm/mirrored", "q4") {
+		t.Error("the model did not arrive at the destination registry")
+	}
+}
+
+// TestPullReportsARefusedAttestationLookup is the pull-side half of the same
+// distinction: the model is kept, and the reason its attestation did not
+// come with it reaches the caller.
+func TestPullReportsARefusedAttestationLookup(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	mDesc, _ := seedRegistryModel(t, reg, "llm/tiny", "q4", randomBytes(t, 1024))
+	reg.SetMissingManifestStatus(http.StatusUnauthorized)
+
+	st := openTestStore(t)
+	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
+	var stored bool
+	var problem error
+	desc, err := newTestClient(t).Pull(ctx, st, ref, Events{
+		OnAttestation: func(s bool, p error) { stored, problem = s, p },
+	})
+	if err != nil {
+		t.Fatalf("pull must succeed even when the attestation lookup is refused: %v", err)
+	}
+	if desc.Digest != mDesc.Digest {
+		t.Errorf("pulled %s, want %s", desc.Digest, mDesc.Digest)
+	}
+	if stored {
+		t.Error("nothing was stored, so nothing may be reported as stored")
+	}
+	if problem == nil {
+		t.Error("a refused lookup must be reported rather than passed off as no attestation")
+	}
+	// The model itself must be usable regardless.
+	if _, err := st.Resolve(ctx, ref.String()); err != nil {
+		t.Errorf("model missing from the store: %v", err)
+	}
+}
+
+// TestPullReportsAStoredAttestation pins the other half of the report: an
+// attestation that did travel is announced, which is what tells an operator
+// the provenance chain is on this host and not only in the registry.
+func TestPullReportsAStoredAttestation(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	mDesc, wDesc := seedRegistryModel(t, reg, "llm/tiny", "q4", randomBytes(t, 1024))
+	seedRegistryAttestation(t, reg, "llm/tiny", mDesc, wDesc)
+
+	st := openTestStore(t)
+	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
+	var stored bool
+	var problem error
+	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
+		OnAttestation: func(s bool, p error) { stored, problem = s, p },
+	}); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if problem != nil {
+		t.Errorf("storing an existing attestation must not report a problem: %v", problem)
+	}
+	if !stored {
+		t.Error("pull must report that the attestation travelled")
+	}
+	if !storeHas(t, st, signing.AttRef(ref, mDesc.Digest)) {
+		t.Error("the attestation is not in the store under the reference it is addressed by")
+	}
+}
+
+// TestSaveCarriesTheAttestation: a bundle is how a model reaches a host with
+// no registry in reach, so the attestation has to be inside it. Asserting on
+// the imported store rather than on Save's return is what proves the far
+// side can address it.
+func TestSaveCarriesTheAttestation(t *testing.T) {
+	ctx := context.Background()
+	src := openTestStore(t)
+	ref := mustParse(t, "registry.internal/llm/tiny:a")
+	mDesc, wDesc := seedStoreModel(t, src, ref.String(), randomBytes(t, 512))
+	attRef := seedStoreAttestation(t, src, ref, mDesc, wDesc)
+
+	var bundle bytes.Buffer
+	if _, err := Save(ctx, src, []string{ref.String()}, &bundle); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	dst := openTestStore(t)
+	if _, err := Load(ctx, dst, &bundle); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := dst.Resolve(ctx, attRef); err != nil {
+		t.Errorf("attestation missing from the imported store: %v", err)
+	}
+	if _, err := dst.Resolve(ctx, ref.String()); err != nil {
+		t.Errorf("model missing from the imported store: %v", err)
 	}
 }
