@@ -24,5 +24,6 @@ decisions and the reasoning behind them.
 | [ADR-0011](0011-terminal-output-is-decoration.md) | Terminal output is decoration; the machine-readable form is the contract | accepted |
 | [ADR-0012](0012-distribution-is-format-neutral.md) | Distribution is format-neutral; serving is GGUF | accepted |
 | [ADR-0013](0013-publisher-signatures-at-import.md) | Verify a publisher's own signature when a model is imported | accepted |
+| [ADR-0014](0014-source-attestation-binds-layers-to-upstream-files.md) | A source attestation binds layers to the upstream files they came from | accepted |
 
 Use [`template.md`](template.md) for new ADRs.

@@ -123,6 +123,15 @@ via HTTP Range requests against the registry.
   signature down beside it, `palan save` writes it into the bundle, and
   `palan cp` copies it to the destination registry, so nothing has to be named
   or fetched separately.
+- A **source attestation** travels the same three ways when the model carries
+  one: a signed statement binding each layer to the upstream file it holds,
+  stored under `sha256-<manifest digest>.att` and named as a referrer, so an
+  offline host can check the chain from what a repository published back to
+  the blobs in its store. `palan save` says how many it included, and
+  `palan load --verify` refuses an attestation-shaped reference that does not
+  belong to a model in the bundle that just verified. See the
+  [security guide](security.md) for what the statement records and the two
+  limits on what it proves.
 - Verification reads whichever source holds the answer. A model whose
   signature is in the local store is verified from there, needing no registry,
   no transparency log, and no certificate authority. `palan verify` names the

@@ -203,6 +203,29 @@ upstream digest of that file. Naming a bare repository leaves nothing to
 prefer there, so it falls back instead to the packed weight layer's own
 digest, in bare hex.
 
+### Source attestation
+
+An annotation records where a layer came from; it does not, on its own, make
+that a checkable claim. A layer built from a fetched file also records
+`io.palan.source.repo`, `io.palan.source.path` and `io.palan.source.revision`,
+written only where a value exists, so an artifact packed from local files is
+unchanged.
+
+`palan sign` turns those annotations into a signed statement: an in-toto
+Statement in a DSSE envelope, predicate type `https://palan.dev/source/v1`,
+listing for each layer its own digest, the repository, the path, the commit,
+and the digest that repository published. It is stored the way a signature
+is, under cosign's `sha256-<manifest digest>.att` tag and named as a referrer
+of the model, and cosign reads it. A layer whose source is not fully known
+contributes nothing, and a statement covering no layers is not written at
+all: one that verifies while vouching for nothing would read as a checked
+chain.
+
+`palan verify` reads the statement back and holds every layer it names
+against the artifact's own manifest, so it cannot vouch for a layer the
+artifact does not contain. The statement travels with the model through
+`pull`, `save` and `cp`, each of which reports whether it did (ADR-0014).
+
 ### "Car" profile for image volumes
 
 Kubernetes image volumes mount OCI *objects* directly via the container
@@ -318,6 +341,15 @@ Three consumption patterns, from least- to most-coupled. The
   falls back to referrers, which is how a signature written by an OCI 1.1
   signing tool, carrying no tag at all, is checked
   ([ADR-0010](adr/0010-referrers-alongside-the-signature-tag.md)).
+- Signing a model packed from a repository also writes a **source
+  attestation**, a signed statement binding each layer to the upstream file
+  it holds, stored and discovered the same two ways as the signature.
+  Verification reads it back and refuses one that names a layer the artifact
+  does not contain. What it proves is that these layers hold the files that
+  repository served under those digests; the commit it records is the one the
+  repository reported, so it is a claim about palan's handling rather than
+  about the source's honesty
+  ([ADR-0014](adr/0014-source-attestation-binds-layers-to-upstream-files.md)).
 - `verify.required` (or `--verify` on a single command) refuses unsigned or
   foreign-signed models at every point one could get in or get used: `pull`
   before any weight bytes move, `load` against the bundle before anything
