@@ -104,6 +104,10 @@ packing-time import rather than a way to address models, is untouched.
 - An artifact packed from local files is unchanged, byte for byte. The
   annotations are conditional and the statement is not written when no layer
   carries a source, so nothing about an offline workflow moves.
+- A `paths-info` response is held to the files that were requested: a path
+  that was not asked for, or one repeated, refuses. The path names the file
+  whose bytes are packed, becomes a URL segment, and is written into the
+  statement, so it gets the treatment the reported commit already had.
 - palan and cosign read each other's attestations. That is a property held
   by a test that runs the real binary, not by this document: writing to the
   published format produced an attestation cosign refused outright, and only
@@ -119,14 +123,29 @@ packing-time import rather than a way to address models, is untouched.
   path and revision but no published digest. The statement says what is
   known and omits what is not, rather than implying a check that never
   happened.
+- **Verification prefers the local store on the strength of the signature
+  alone, so a store holding a model and its signature but not its
+  attestation verifies clean and reports no provenance.** That is the state
+  a failed attestation fetch leaves behind: the pull warns once and keeps
+  the model, and every verification afterwards is silent about the gap.
+  Electing the source on the attestation as well was considered and not
+  adopted, because an artifact that never had one is the ordinary case and
+  would then be pushed to the registry on every verification. The cost is
+  accepted here and recorded rather than left to be discovered: re-pulling
+  restores the attestation, and the surface that would show this directly
+  is `verify --explain`, which belongs with the verification work rather
+  than here.
 - Verification of an artifact that carries no attestation stays a success.
   Requiring one is a policy question, and the policy layer is M10's; until
   it exists, refusing here would break every artifact packed before this
   change.
 - Two repositories publishing a same-named file still produce two layers
   sharing one `org.cncf.model.filepath`. The statement distinguishes them by
-  digest and by source, so the ambiguity is now visible where it was not,
-  but the artifact still carries it.
+  the whole record rather than by digest, which matters because the two
+  layers may also share a digest: two models shipping the same licence file
+  is ordinary. Matching on digest alone would let one layer's record stand
+  in for the other's, so a statement naming one source would appear to vouch
+  for both. The artifact still carries the ambiguous file path.
 - Revisit when a source other than Hugging Face is added. The predicate's
   fields are deliberately generic, repository, path, revision and published
   digest, and nothing in them is specific to that API, but only one source
