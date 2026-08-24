@@ -3,8 +3,8 @@ module github.com/aimd54/palan
 go 1.26.0
 
 require (
-	charm.land/bubbles/v2 v2.1.1
-	charm.land/bubbletea/v2 v2.0.8
+	charm.land/bubbles/v2 v2.2.0
+	charm.land/bubbletea/v2 v2.0.9
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/fang v1.0.0
@@ -13,7 +13,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.24.1
-	github.com/secure-systems-lab/go-securesystemslib v0.11.0
+	github.com/secure-systems-lab/go-securesystemslib v0.11.1
 	github.com/sigstore/sigstore v1.10.9
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
@@ -77,10 +77,10 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
