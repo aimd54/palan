@@ -44,12 +44,12 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	seedStoreModel(t, src, "registry.internal/llm/tiny:b", weights)
 
 	var bundle bytes.Buffer
-	sigs, err := Save(ctx, src, []string{"registry.internal/llm/tiny:a", "registry.internal/llm/tiny:b"}, &bundle)
+	report, err := Save(ctx, src, []string{"registry.internal/llm/tiny:a", "registry.internal/llm/tiny:b"}, &bundle)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if sigs != 0 {
-		t.Errorf("unsigned models must contribute no signatures, got %d", sigs)
+	if report.Signatures != 0 {
+		t.Errorf("unsigned models must contribute no signatures, got %d", report.Signatures)
 	}
 
 	dst := openTestStore(t)
@@ -255,12 +255,12 @@ func TestSaveCarriesTheSignature(t *testing.T) {
 	sigRef := seedStoreSignature(t, src, ref, mDesc.Digest)
 
 	var bundle bytes.Buffer
-	sigs, err := Save(ctx, src, []string{ref.String()}, &bundle)
+	report, err := Save(ctx, src, []string{ref.String()}, &bundle)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if sigs != 1 {
-		t.Errorf("Save reported %d signatures, want 1", sigs)
+	if report.Signatures != 1 {
+		t.Errorf("Save reported %d signatures, want 1", report.Signatures)
 	}
 
 	// The point of carrying it is that the far side can address it, so assert
@@ -703,8 +703,12 @@ func TestSaveCarriesTheAttestation(t *testing.T) {
 	attRef := seedStoreAttestation(t, src, ref, mDesc, wDesc)
 
 	var bundle bytes.Buffer
-	if _, err := Save(ctx, src, []string{ref.String()}, &bundle); err != nil {
+	report, err := Save(ctx, src, []string{ref.String()}, &bundle)
+	if err != nil {
 		t.Fatalf("save: %v", err)
+	}
+	if report.Attestations != 1 {
+		t.Errorf("Save reported %d attestations, want 1", report.Attestations)
 	}
 
 	dst := openTestStore(t)

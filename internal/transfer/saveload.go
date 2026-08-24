@@ -96,42 +96,56 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 // standard OCI image layout, readable by any OCI tool
 // (see docs/architecture.md, "Client and local store": offline transfer bundles).
 //
-// A model's signature travels with it when the store holds one, so the bundle
-// can be verified on a machine that never reaches a registry. Save reports how
-// many signatures it included, since that is not something the caller's list
-// of references reveals.
-func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (int, error) {
+// A model's signature and its source attestation travel with it when the
+// store holds them, so the bundle can be verified on a machine that never
+// reaches a registry. Save reports how many of each it included, since that
+// is not something the caller's list of references reveals.
+func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (SaveReport, error) {
 	tmp, err := os.MkdirTemp("", "palan-save-*")
 	if err != nil {
-		return 0, err
+		return SaveReport{}, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	dst, err := oci.NewWithContext(ctx, tmp)
 	if err != nil {
-		return 0, err
+		return SaveReport{}, err
 	}
-	var signatures int
+	var report SaveReport
 	for _, ref := range refs {
 		desc, err := oras.Copy(ctx, st.OCI(), ref, dst, ref, oras.DefaultCopyOptions)
 		if err != nil {
-			return 0, fmt.Errorf("exporting %s: %w", ref, err)
+			return SaveReport{}, fmt.Errorf("exporting %s: %w", ref, err)
 		}
-		included, err := saveSignature(ctx, st, dst, ref, desc.Digest)
+		signed, err := saveSignature(ctx, st, dst, ref, desc.Digest)
 		if err != nil {
-			return 0, err
+			return SaveReport{}, err
 		}
-		if included {
-			signatures++
+		if signed {
+			report.Signatures++
 		}
-		if _, err := saveAttestation(ctx, st, dst, ref, desc.Digest); err != nil {
-			return 0, err
+		attested, err := saveAttestation(ctx, st, dst, ref, desc.Digest)
+		if err != nil {
+			return SaveReport{}, err
+		}
+		if attested {
+			report.Attestations++
 		}
 	}
 	if err := tarDir(tmp, w); err != nil {
-		return 0, err
+		return SaveReport{}, err
 	}
-	return signatures, nil
+	return report, nil
+}
+
+// SaveReport counts the supplementary objects a bundle carries beside the
+// models themselves. Neither count is derivable from the references the
+// caller asked for, and both decide what the far side can check.
+type SaveReport struct {
+	// Signatures is how many of the exported models carried one.
+	Signatures int
+	// Attestations is how many carried a source attestation.
+	Attestations int
 }
 
 // saveSignature copies a reference's signature into the bundle when the store
