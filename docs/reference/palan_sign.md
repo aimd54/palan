@@ -15,6 +15,12 @@ verifying it needs no transparency log, no certificate authority, and no
 registry once it is in the local store. Encrypted cosign keys are supported;
 the password comes from COSIGN_PASSWORD or an interactive prompt.
 
+Where the layers record where their files were fetched from, sign also
+writes a source attestation: a signed statement, stored the same two ways
+as the signature, binding each layer to the upstream file it holds. An
+artifact packed purely from local disk has no upstream to name, and sign
+says so rather than leaving the absence unremarked.
+
 ```
 palan sign REF --key FILE [flags]
 ```
