@@ -49,7 +49,13 @@ referrers API and tools that look there find it too.
 The signature then travels with the model through pull, save, and cp, and
 verifying it needs no transparency log, no certificate authority, and no
 registry once it is in the local store. Encrypted cosign keys are supported;
-the password comes from COSIGN_PASSWORD or an interactive prompt.`,
+the password comes from COSIGN_PASSWORD or an interactive prompt.
+
+Where the layers record where their files were fetched from, sign also
+writes a source attestation: a signed statement, stored the same two ways
+as the signature, binding each layer to the upstream file it holds. An
+artifact packed purely from local disk has no upstream to name, and sign
+says so rather than leaving the absence unremarked.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -92,7 +98,8 @@ the password comes from COSIGN_PASSWORD or an interactive prompt.`,
 			if err := json.Unmarshal(raw, &man); err != nil {
 				return fmt.Errorf("decoding %s manifest: %w", ref, err)
 			}
-			if layers := signing.LayersFromManifest(man); len(layers) > 0 {
+			layers := signing.LayersFromManifest(man)
+			if len(layers) > 0 {
 				envelope, err := attest.Build(desc, layers, signer)
 				if err != nil {
 					return err
@@ -103,6 +110,16 @@ the password comes from COSIGN_PASSWORD or an interactive prompt.`,
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Signed %s@%s\n", ref, desc.Digest)
+			// Say either way. An artifact whose layers record no source is
+			// signed without an attestation, and a reader who is not told
+			// so has no way to tell that from one where the statement was
+			// written: both exit 0 saying "Signed", and verify later
+			// reports no provenance for either.
+			if len(layers) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "Attested the source of %d layer(s)\n", len(layers))
+			} else {
+				fmt.Fprintln(cmd.ErrOrStderr(), "No source attestation written: this artifact's layers record no upstream source")
+			}
 			return nil
 		},
 	}
@@ -371,25 +388,60 @@ func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src v
 // refusal names what is wrong.
 func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) error {
 	want := signing.LayersFromManifest(man)
-	byDigest := make(map[string]attest.Layer, len(want))
+
+	// Records are matched on the whole record rather than on the digest,
+	// and counted rather than merely marked, because two layers can hold
+	// byte-identical content from different sources: two repositories
+	// shipping the same licence file is ordinary. Keyed by digest alone,
+	// one such layer's record would overwrite the other's, and a statement
+	// naming only one of them would be accepted as covering both.
+	remaining := make(map[attest.Layer]int, len(want))
+	sourced := make(map[string]int, len(want))
 	for _, l := range want {
-		byDigest[l.Digest] = l
+		remaining[l]++
+		sourced[l.Digest]++
 	}
 	haveDigest := make(map[string]bool, len(man.Layers))
 	for _, l := range man.Layers {
 		haveDigest[l.Digest.String()] = true
 	}
 
-	seen := make(map[string]bool, len(attested))
 	for _, a := range attested {
-		w, ok := byDigest[a.Digest]
-		if !ok {
-			if !haveDigest[a.Digest] {
-				return fmt.Errorf("names layer %s, which this artifact does not have", a.Digest)
-			}
+		if remaining[a] > 0 {
+			remaining[a]--
+			continue
+		}
+		if !haveDigest[a.Digest] {
+			return fmt.Errorf("names layer %s, which this artifact does not have", a.Digest)
+		}
+		if sourced[a.Digest] == 0 {
 			return fmt.Errorf("names layer %s, but the artifact's manifest records no source for it", a.Digest)
 		}
-		seen[a.Digest] = true
+		// The artifact does record a source for this digest, so either the
+		// fields disagree or the attestation claims that layer more times
+		// than the artifact has it. Report against a layer sharing the
+		// digest, which is what a reader needs to see the disagreement.
+		return unmatchedRecord(a, want)
+	}
+
+	for w, n := range remaining {
+		if n > 0 {
+			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
+		}
+	}
+	return nil
+}
+
+// unmatchedRecord explains why a records nothing in want, given that want
+// holds at least one layer of the same digest. It reports the first such
+// layer, preferring a difference in the source fields over one in the
+// published digest, so the message names the more consequential
+// disagreement when both differ.
+func unmatchedRecord(a attest.Layer, want []attest.Layer) error {
+	for _, w := range want {
+		if w.Digest != a.Digest {
+			continue
+		}
 		if a.Repo != w.Repo || a.Path != w.Path || a.Revision != w.Revision {
 			return fmt.Errorf("layer %s: attestation records %s %s@%s, the artifact's manifest records %s %s@%s",
 				a.Digest, a.Repo, a.Path, a.Revision, w.Repo, w.Path, w.Revision)
@@ -399,12 +451,9 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 				a.Digest, a.Published, w.Published)
 		}
 	}
-	for _, w := range want {
-		if !seen[w.Digest] {
-			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
-		}
-	}
-	return nil
+	// Every layer of this digest matches a record already accounted for, so
+	// the attestation claims the layer more times than the artifact has it.
+	return fmt.Errorf("layer %s: the attestation records it more times than this artifact contains it", a.Digest)
 }
 
 // provenanceLines formats one line per distinct repository and revision an
