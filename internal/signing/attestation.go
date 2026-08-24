@@ -32,6 +32,14 @@ import (
 // expects.
 const ArtifactTypeAttestation = "application/vnd.dsse.envelope.v1+json"
 
+// AnnotationPredicateType names the statement's predicate type on the
+// envelope layer. cosign writes it there on every attestation it creates,
+// so palan writes it too and an attestation from either tool has the same
+// shape. cosign does not need it to answer `verify-attestation --type`,
+// which matches on the type inside the envelope, but a consumer reading
+// manifests rather than payloads has nothing else to filter on.
+const AnnotationPredicateType = "predicateType"
+
 // AttTag is where an attestation lives, following cosign's convention so the
 // same object is readable by cosign verify-attestation.
 func AttTag(d digest.Digest) string {
@@ -100,6 +108,18 @@ func LayersFromManifest(man ocispec.Manifest) []attest.Layer {
 // referrers API, pushed under the cosign-compatible attestation tag.
 func PushAttestation(ctx context.Context, repo *remote.Repository, target ocispec.Descriptor, envelope []byte) (ocispec.Descriptor, error) {
 	envDesc := content.NewDescriptorFromBytes(ArtifactTypeAttestation, envelope)
+	// cosign refuses the attestation outright without the signature
+	// annotation, reporting the layer as missing it. The value is
+	// deliberately empty: a DSSE envelope carries its own signatures, so
+	// there is nothing to repeat here, and empty is what cosign itself
+	// writes for an attestation. predicateType is not required by cosign,
+	// which reads the type from inside the envelope, and is written because
+	// cosign writes it and a consumer reading manifests has nothing else to
+	// go on.
+	envDesc.Annotations = map[string]string{
+		AnnotationSignature:     "",
+		AnnotationPredicateType: attest.PredicateType,
+	}
 	if err := push(ctx, repo, envDesc, envelope); err != nil {
 		return ocispec.Descriptor{}, err
 	}

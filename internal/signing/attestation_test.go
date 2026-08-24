@@ -5,12 +5,16 @@ package signing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/registry/remote"
 
 	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/internal/registrytest"
@@ -76,4 +80,68 @@ func TestFetchAttestationDoesNotHideAGenuineFailure(t *testing.T) {
 	if errors.Is(err, attest.ErrNoAttestation) {
 		t.Errorf("err = %v, must not read as ErrNoAttestation: this is an outage, not an absence", err)
 	}
+}
+
+// TestPushAttestationAnnotatesTheEnvelopeLayer pins the two annotations an
+// attestation's envelope layer carries. Without the signature key, cosign
+// refuses the attestation entirely, reporting the layer as missing it,
+// which was checked by removing it and watching the interop test fail.
+// predicateType is not required by cosign, which reads the type from inside
+// the envelope; it is pinned because cosign writes it on every attestation
+// it creates and a consumer reading manifests rather than payloads has
+// nothing else to filter on. Neither annotation is reachable from palan's
+// own read path, which finds the layer by media type, so nothing but a
+// check here or the interop test catches their removal.
+func TestPushAttestationAnnotatesTheEnvelopeLayer(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	repo := testRepo(t, reg, "llm/tiny")
+
+	cfg := []byte("{}")
+	reg.PutBlob("llm/tiny", cfg)
+	subjectRaw := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`)
+	subject := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    reg.PutManifest("llm/tiny", "v1", ocispec.MediaTypeImageManifest, subjectRaw),
+		Size:      int64(len(subjectRaw)),
+	}
+
+	envelope := []byte(`{"payloadType":"application/vnd.in-toto+json","payload":"e30=","signatures":[]}`)
+	if _, err := PushAttestation(ctx, repo, subject, envelope); err != nil {
+		t.Fatalf("PushAttestation: %v", err)
+	}
+
+	raw, err := content.FetchAll(ctx, repo, mustResolve(t, repo, AttTag(subject.Digest)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		t.Fatal(err)
+	}
+	if len(man.Layers) != 1 {
+		t.Fatalf("attestation manifest carries %d layers, want exactly the envelope", len(man.Layers))
+	}
+	ann := man.Layers[0].Annotations
+	sig, ok := ann[AnnotationSignature]
+	if !ok {
+		t.Errorf("the envelope layer carries no %s annotation, so cosign refuses the attestation", AnnotationSignature)
+	}
+
+	if sig != "" {
+		t.Errorf("%s = %q, want empty: a DSSE envelope carries its own signatures", AnnotationSignature, sig)
+	}
+	if got := ann[AnnotationPredicateType]; got != attest.PredicateType {
+		t.Errorf("%s = %q, want %q", AnnotationPredicateType, got, attest.PredicateType)
+	}
+}
+
+// mustResolve resolves ref or fails the test.
+func mustResolve(t *testing.T, repo *remote.Repository, ref string) ocispec.Descriptor {
+	t.Helper()
+	desc, err := repo.Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", ref, err)
+	}
+	return desc
 }
