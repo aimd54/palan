@@ -86,14 +86,17 @@ as a tar of a standard OCI image layout. "-o -" writes to stdout.`,
 				defer func() { _ = f.Close() }()
 				w = f
 			}
-			signatures, err := transfer.Save(ctx, st, args, w)
+			report, err := transfer.Save(ctx, st, args, w)
 			if err != nil {
 				return err
 			}
 			if output != "-" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Saved %d reference(s) to %s\n", len(args), output)
-				if signatures > 0 {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Included %d signature(s)\n", signatures)
+				if report.Signatures > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Included %d signature(s)\n", report.Signatures)
+				}
+				if report.Attestations > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Included %d source attestation(s)\n", report.Attestations)
 				}
 			}
 			return nil
