@@ -15,6 +15,12 @@ The signature is looked for under its tag first, then among the referrers of
 the model, so a signature written by an OCI 1.1 signing tool is checked even
 though it carries no tag.
 
+Where sign also wrote a statement of the model's sources, verify checks it
+against the same key and against the model's own layers, and names what the
+layers came from. A model with no such statement verifies exactly as it did
+before: requiring one is a policy for something else to enforce, not a fact
+this command asserts.
+
 ```
 palan verify REF --key FILE [flags]
 ```

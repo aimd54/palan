@@ -20,7 +20,7 @@ and refuses anything else, for the reasons in
 | M6 | Security + release (sign/verify, gate, goreleaser) | ☑ shipped; cosign interop proven both directions |
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
 | M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
-| M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☐ planned |
+| M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
 | M10 | Trust policy (identities per reference; keyless verification offline) | ☐ planned |
 | M11 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
 | M12 | Ecosystem validations (KServe modelcar, OIDC auth, mirrors, upstreaming) | ☐ planned |
@@ -30,9 +30,11 @@ M8 through M13 build out one property end to end: that the bytes a host
 loads are the bytes a publisher released and an identity approved, checkable
 on any host, connected or not. Signing and verification exist today (M6);
 M8 adds the stretch before signing, checking a publisher's own digests and,
-when a key is supplied, their signature as well. What remains is a policy
-above one key and the surfaces that show and enforce the result, described
-under [Planned milestones](#planned-milestones).
+when a key is supplied, their signature as well; M9 makes that stretch
+portable, stating in a signed form which upstream file each layer holds so
+the claim survives leaving the machine that packed it. What remains is a
+policy above one key and the surfaces that show and enforce the result,
+described under [Planned milestones](#planned-milestones).
 
 ## Validated outside CI
 
@@ -70,6 +72,12 @@ a Kubernetes cluster, and a GPU host:
 - **Upstream import**: `pack hf://org/repo/file.gguf` fetches from Hugging
   Face, checks the bytes against the digest the repository publishes, and
   records it as the artifact's origin (ADR-0009).
+- **Source attestation**: a model packed from a repository, signed, pushed,
+  pulled, carried through a bundle into a store that was never pointed at the
+  registry, and verified there, with the output naming the repository and the
+  commit the listing resolved to. `cosign verify-attestation` accepts the same
+  statement, which is what holds the format claim to the tool rather than to
+  its documentation (ADR-0014).
 - **Signature discovery**: a signed model is indexed by the registry's
   referrers API as well as tagged, and a signature written by an OCI 1.1
   signing tool, which carries no tag, verifies. Both checked against zot and
@@ -99,19 +107,6 @@ a Kubernetes cluster, and a GPU host:
 In dependency order. Each lands the way the shipped ones did: with tests
 that were seen to fail before the change, and validations recorded above
 once they run against real infrastructure.
-
-### M9: an attestation binds the upstream files to the layers
-
-`pack` records the origin digest of what it read; nothing yet states, in a
-verifiable form, that the layers hold byte-for-byte those files. M9 emits a
-signed statement binding upstream file digests to layer digests, stored as a
-referrer of the model manifest and carried by `pull`, `save` and `cp` the
-way signatures already are. `verify` reads it, so the chain from a
-repository's published digests to the blobs in a store is checkable against
-a registry, a bundle, or a store with no network. Accepted when the
-statement survives a registry-to-bundle-to-second-store round trip and still
-verifies offline, and a tampered statement, a missing subject, or subjects
-that do not match the layers refuse.
 
 ### M10: a trust policy over identities
 
