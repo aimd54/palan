@@ -148,6 +148,25 @@ attestation at all, which is not a failure: there is no upstream to name.
 Verifying a model that carries no attestation stays a success. Requiring one
 is a policy question, and the policy layer is on the roadmap.
 
+There is one case worth knowing about, because it is quiet. Verification
+answers from the local store whenever the store holds the model and its
+signature, without asking a registry that may hold an attestation the store
+does not. A store can reach that state through a failed attestation fetch
+during a pull, or because someone with write access to it deleted a single
+tag: nothing is forged, every signature still verifies, and the model simply
+stops having provenance. So `verify` warns when an artifact's own layers
+record an upstream source and no statement is found:
+
+```
+Verified registry.internal/llm/qwen3:8b-q4@sha256:...
+  source: local store
+  WARNING: 3 layer(s) record an upstream source but no attestation is present,
+  so this model's provenance cannot be checked
+```
+
+Pulling again brings the statement back. A model packed from local files
+records no source and says nothing, so the warning stays meaningful.
+
 ## Enforcing verification
 
 Ad hoc, on any command that brings in or runs a model:
