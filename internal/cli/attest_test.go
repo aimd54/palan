@@ -436,15 +436,17 @@ func TestVerifyRefusesAnAttestationCoveringOnlyOneOfTwoIdenticalLayers(t *testin
 // defect: a command exiting 0 having written nothing.
 func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		layer    ocispec.Descriptor
-		wantOut  string
-		wantMiss string
+		name         string
+		layer        ocispec.Descriptor
+		wantOut      string
+		wantMiss     string
+		wantAttested bool
 	}{
 		{
-			name:    "a fetched layer is attested",
-			layer:   sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", ""),
-			wantOut: "Attested the source of 1 layer(s)",
+			name:         "a fetched layer is attested",
+			layer:        sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", ""),
+			wantOut:      "Attested the source of 1 of 1 layer(s)",
+			wantAttested: true,
 		},
 		{
 			name:     "a local layer is not, and sign says so",
@@ -455,7 +457,7 @@ func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := registrytest.New(t)
 			seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{tc.layer})
-			_, privKey := attestKeypair(t)
+			priv, privKey := attestKeypair(t)
 
 			t.Setenv("COSIGN_PASSWORD", "")
 			v := viper.New()
@@ -474,6 +476,22 @@ func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 			}
 			if tc.wantMiss != "" && !strings.Contains(both, tc.wantMiss) {
 				t.Errorf("sign reported %q, want it to contain %q", both, tc.wantMiss)
+			}
+
+			// What sign said must match what is actually on the registry.
+			// Checking the message alone would pass with the attestation
+			// never pushed, which is the defect class this test names.
+			ref := reg.Host() + "/llm/tiny:q4"
+			recorded, err := readAttestation(t, ref, verifierFor(t, priv))
+			if tc.wantAttested {
+				if err != nil {
+					t.Fatalf("sign said it attested, but no attestation is readable: %v", err)
+				}
+				if len(recorded) != 1 {
+					t.Errorf("attestation covers %d layers, want 1", len(recorded))
+				}
+			} else if !errors.Is(err, attest.ErrNoAttestation) {
+				t.Errorf("sign said it wrote none, so none must be readable; got %v (%v)", recorded, err)
 			}
 		})
 	}
@@ -506,4 +524,15 @@ func TestAttestationMismatchNamesTheSameLayerEveryTime(t *testing.T) {
 	if !strings.Contains(first.Error(), "a.safetensors") {
 		t.Errorf("refusal = %v, want it to name the first uncovered layer", first)
 	}
+}
+
+// verifierFor builds a verifier from a keypair's public half, for tests
+// that read an attestation back through internal/attest directly.
+func verifierFor(t *testing.T, priv *ecdsa.PrivateKey) signature.Verifier {
+	t.Helper()
+	v, err := signature.LoadVerifier(&priv.PublicKey, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

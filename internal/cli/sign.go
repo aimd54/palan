@@ -115,10 +115,15 @@ says so rather than leaving the absence unremarked.`,
 			// so has no way to tell that from one where the statement was
 			// written: both exit 0 saying "Signed", and verify later
 			// reports no provenance for either.
+			// Both outcomes go to stdout, because both describe what this
+			// command did and a caller reading one stream must not see a
+			// different answer from a caller reading the other. The
+			// denominator matters: without it a partly-sourced artifact
+			// reads exactly like a fully-sourced one.
 			if len(layers) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "Attested the source of %d layer(s)\n", len(layers))
+				fmt.Fprintf(cmd.OutOrStdout(), "Attested the source of %d of %d layer(s)\n", len(layers), len(man.Layers))
 			} else {
-				fmt.Fprintln(cmd.ErrOrStderr(), "No source attestation written: this artifact's layers record no upstream source")
+				fmt.Fprintln(cmd.OutOrStdout(), "No source attestation written: none of this artifact's layers record an upstream source")
 			}
 			return nil
 		},
@@ -396,10 +401,10 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	// one such layer's record would overwrite the other's, and a statement
 	// naming only one of them would be accepted as covering both.
 	remaining := make(map[attest.Layer]int, len(want))
-	sourced := make(map[string]int, len(want))
+	sourced := make(map[string]bool, len(want))
 	for _, l := range want {
 		remaining[l]++
-		sourced[l.Digest]++
+		sourced[l.Digest] = true
 	}
 	haveDigest := make(map[string]bool, len(man.Layers))
 	for _, l := range man.Layers {
@@ -414,7 +419,7 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 		if !haveDigest[a.Digest] {
 			return fmt.Errorf("names layer %s, which this artifact does not have", a.Digest)
 		}
-		if sourced[a.Digest] == 0 {
+		if !sourced[a.Digest] {
 			return fmt.Errorf("names layer %s, but the artifact's manifest records no source for it", a.Digest)
 		}
 		// The artifact does record a source for this digest, so either the
@@ -441,6 +446,16 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 // published digest, so the message names the more consequential
 // disagreement when both differ.
 func unmatchedRecord(a attest.Layer, want []attest.Layer) error {
+	// A record identical to one of the artifact's layers is not a
+	// disagreement about where that layer came from: the statement simply
+	// lists it more times than the artifact contains it. Said any other
+	// way, the message sends a reader looking for a source mismatch that
+	// does not exist.
+	for _, w := range want {
+		if w == a {
+			return fmt.Errorf("layer %s: the attestation records it more times than this artifact contains it", a.Digest)
+		}
+	}
 	for _, w := range want {
 		if w.Digest != a.Digest {
 			continue

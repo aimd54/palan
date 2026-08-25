@@ -600,8 +600,10 @@ func TestResolveRefusesAPathTheCallerNeverRequested(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient()
-	c.Endpoint = srv.URL
+	// Built directly rather than with NewClient, which reads HF_TOKEN from
+	// the environment and would put a real credential in an Authorization
+	// header aimed at this local server.
+	c := &Client{HTTP: srv.Client(), Endpoint: srv.URL}
 	_, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
 	if err == nil {
 		t.Fatal("a substituted path was accepted, so the artifact would record a file that was never requested")
@@ -631,8 +633,7 @@ func TestResolveRefusesADuplicatedPath(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient()
-	c.Endpoint = srv.URL
+	c := &Client{HTTP: srv.Client(), Endpoint: srv.URL}
 	_, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
 	if err == nil {
 		t.Fatal("a duplicated path was accepted, so a count check was satisfied by fewer files than were requested")
