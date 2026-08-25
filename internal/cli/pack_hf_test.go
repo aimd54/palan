@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
@@ -736,5 +737,60 @@ func TestPackFromDiskCarriesNoSource(t *testing.T) {
 		if f.SourceRepo != "" || f.SourcePath != "" || f.SourceRevision != "" {
 			t.Errorf("%s claims a source for a local file", f.Path)
 		}
+	}
+}
+
+// TestPackKeepsTwoNestedFilesSharingABasenameApart: a repository can
+// publish two files with the same name in different directories. Download
+// names a file by its basename, so without a directory of its own per file
+// the second overwrites the first, and pack then hashes one file's bytes
+// twice while each layer carries the other's published digest and source
+// path. The artifact is signed and attested as genuine, and nothing
+// reports the loss, because each download verified its own bytes before
+// being overwritten.
+func TestPackKeepsTwoNestedFilesSharingABasenameApart(t *testing.T) {
+	first := []byte("first shard bytes, definitely not the second")
+	second := []byte("second shard bytes, definitely not the first")
+	// Both shards come from ONE reference. Two references already get a
+	// directory each, so naming them separately would not collide and
+	// would prove nothing.
+	index := `{"metadata":{"total_size":86},"weight_map":{"x":"a/model.safetensors","y":"b/model.safetensors"}}`
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors.index.json": []byte(index),
+		"a/model.safetensors":          first,
+		"b/model.safetensors":          second,
+	})
+	hub.Revision = "c9d1e2f3000000000000000000000000000000dd"
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, _, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/repo"})
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("resolved %d files, want at least the two shards", len(files))
+	}
+
+	// Each layer must hold the bytes of the file its source names. Reading
+	// the files back is the assertion: comparing only digests or only
+	// annotations would pass while both entries pointed at one file.
+	want := map[string][]byte{"a/model.safetensors": first, "b/model.safetensors": second}
+	for _, f := range files {
+		expected, ok := want[f.SourcePath]
+		if !ok {
+			continue // the index itself, and anything else packed alongside
+		}
+		got, err := os.ReadFile(f.Path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Path, err)
+		}
+		if !bytes.Equal(got, expected) {
+			t.Errorf("%s holds %q, want %q: the layer would carry another file's bytes under this one's provenance",
+				f.SourcePath, got, expected)
+		}
+		delete(want, f.SourcePath)
+	}
+	if len(want) != 0 {
+		t.Errorf("no layer resolved for %v", want)
 	}
 }
