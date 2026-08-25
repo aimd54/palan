@@ -118,6 +118,12 @@ packing-time import rather than a way to address models, is untouched.
   different directories with the same name would otherwise collide, and the
   artifact would carry two layers hashed from one file's bytes, each
   annotated with the other's published digest and source path.
+- `sign` reports the signature as soon as it is published, before it
+  attempts the attestation. The two are separate objects and the first is
+  what verification depends on, so a failure writing the second must not
+  read as though nothing was signed: that pair verifies cleanly, and an
+  operator who is not told which half landed will either retry a push that
+  already succeeded or conclude the model is unsigned when it is not.
 - palan and cosign read each other's attestations. That is a property held
   by a test that runs the real binary, not by this document: writing to the
   published format produced an attestation cosign refused outright, and only
@@ -134,17 +140,23 @@ packing-time import rather than a way to address models, is untouched.
   known and omits what is not, rather than implying a check that never
   happened.
 - **Verification prefers the local store on the strength of the signature
-  alone, so a store holding a model and its signature but not its
-  attestation verifies clean and reports no provenance.** That is the state
-  a failed attestation fetch leaves behind: the pull warns once and keeps
-  the model, and every verification afterwards is silent about the gap.
-  Electing the source on the attestation as well was considered and not
-  adopted, because an artifact that never had one is the ordinary case and
-  would then be pushed to the registry on every verification. The cost is
-  accepted here and recorded rather than left to be discovered: re-pulling
-  restores the attestation, and the surface that would show this directly
-  is `verify --explain`, which belongs with the verification work rather
-  than here.
+  alone**, so a store holding a model and its signature but not its
+  attestation never asks a registry that does hold one. Electing the source
+  on the attestation as well was considered and not adopted, because an
+  artifact that never had one is the ordinary case and would then cost a
+  registry round trip on every verification.
+  What that trade must not cost is silence. An artifact whose own layers
+  record an upstream source was packed from one, so a statement should
+  exist; where none is found, `verify` says so and still passes. That is
+  computed from the manifest already being verified, needs no network and
+  no policy, and distinguishes a model that lost its provenance from one
+  that never had any. Losing it is not hypothetical: it is what a failed
+  attestation fetch leaves behind, and what anyone able to write to a store
+  produces by deleting a single tag, forging nothing and leaving every
+  signature valid.
+  Refusing is left to the policy layer. Lacking a statement does not make
+  an artifact wrong, only unproven, and that is a judgement for a policy to
+  make rather than this command.
 - Verification of an artifact that carries no attestation stays a success.
   Requiring one is a policy question, and the policy layer is M10's; until
   it exists, refusing here would break every artifact packed before this
