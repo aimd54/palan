@@ -203,8 +203,16 @@ func (c *Client) listFiles(ctx context.Context, ref Ref) ([]string, string, erro
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, "", fmt.Errorf("decoding the file list for %s: %w", ref.Repo, err)
 	}
+	// A listing entry names a file that may be fetched, packed and attested
+	// to. One that is not a plain path inside the repository is dropped
+	// rather than carried: it cannot name a file this repository publishes,
+	// and every later check that would see it treats it as legitimate
+	// because the repository itself reported it.
 	out := make([]string, 0, len(body.Siblings))
 	for _, s := range body.Siblings {
+		if !safeRepoPath(s.Filename) {
+			continue
+		}
 		out = append(out, s.Filename)
 	}
 	sort.Strings(out)
@@ -218,6 +226,33 @@ func (c *Client) listFiles(ctx context.Context, ref Ref) ([]string, string, erro
 // revOrMain is the URL segment naming which revision to request: rev when a
 // listing resolved one, main otherwise, which is what a caller with no
 // resolution has.
+// safeRepoPath reports whether p is a path a repository may legitimately
+// publish: a clean, relative, forward-slash path that stays inside the
+// repository. A published path is third-party text that reaches a URL
+// segment and is written into a signed annotation, so it is checked where
+// it is decoded, exactly as a reported commit is.
+//
+// filepath.Base already keeps a hostile path from escaping the download
+// directory, so this is not what stops a file being written somewhere
+// unexpected. What it stops is subtler and not otherwise caught: a path
+// that walks out of the repository resolves, on a normalising server, to
+// another repository's file, and palan would then pack those bytes and
+// sign a statement naming a path the caller never asked for.
+func safeRepoPath(p string) bool {
+	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, "\\") {
+		return false
+	}
+	if path.Clean(p) != p {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func revOrMain(rev string) string {
 	if rev == "" {
 		return "main"
@@ -276,6 +311,9 @@ func (c *Client) pathsInfo(ctx context.Context, ref Ref, rev string, paths []str
 	out := make([]File, 0, len(infos))
 	seen := make(map[string]bool, len(infos))
 	for _, i := range infos {
+		if !safeRepoPath(i.Path) {
+			return nil, fmt.Errorf("%s returned metadata for %q, which is not a path inside the repository", ref.Repo, i.Path)
+		}
 		if !requested[i.Path] {
 			return nil, fmt.Errorf("%s returned metadata for %q, which was not among the files requested", ref.Repo, i.Path)
 		}
@@ -328,6 +366,7 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) (Resolution, error) {
 	if lic := licenseFile(listing); lic != "" {
 		want = append(want, lic)
 	}
+	want = dedupe(want)
 
 	files, err := c.pathsInfo(ctx, ref, rev, want)
 	if err != nil {
@@ -337,6 +376,24 @@ func (c *Client) Resolve(ctx context.Context, ref Ref) (Resolution, error) {
 		return Resolution{}, fmt.Errorf("%s returned metadata for %d of %d requested files", ref.Repo, len(files), len(want))
 	}
 	return Resolution{Files: files, Revision: rev}, nil
+}
+
+// dedupe returns names with repeats removed, keeping first appearance
+// order. The named file can also be the licence, so the two ways a file
+// enters the request can name the same one; asking for it twice would be
+// answered twice by a server behaving correctly, and refused as a repeated
+// path.
+func dedupe(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
 }
 
 // resolveRepo selects the files a whole published model consists of. A
@@ -394,6 +451,7 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
 		}
 	}
 
+	want = dedupe(want)
 	files, err := c.pathsInfo(ctx, ref, rev, want)
 	if err != nil {
 		return Resolution{}, err
