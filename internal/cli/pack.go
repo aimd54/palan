@@ -353,9 +353,22 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			info.signer = stmt.KeyID
 		}
 
-		for _, f := range res.Files {
+		for j, f := range res.Files {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Fetching %s (%s)\n", f.Path, humanBytes(f.Size))
-			path, err := client.Download(ctx, ref, res.Revision, f, srcDir, hf.Events{})
+			// One directory per file. Download names the file by its
+			// basename, so two files a repository publishes under
+			// different directories with the same name would otherwise
+			// land on one path and the second would overwrite the first:
+			// two layers would then be hashed from one file's bytes while
+			// each carried the other's origin digest and source path, and
+			// the artifact would be signed and attested as genuine. This
+			// is the same separation srcDir already gives two references,
+			// applied to the files within one.
+			fileDir := filepath.Join(srcDir, strconv.Itoa(j))
+			if err := os.MkdirAll(fileDir, 0o750); err != nil {
+				return nil, info, err
+			}
+			path, err := client.Download(ctx, ref, res.Revision, f, fileDir, hf.Events{})
 			if err != nil {
 				return nil, info, err
 			}
