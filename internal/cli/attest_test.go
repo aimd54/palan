@@ -478,3 +478,32 @@ func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 		})
 	}
 }
+
+// TestAttestationMismatchNamesTheSameLayerEveryTime: with more than one
+// layer left uncovered, the refusal must name the same one on every run.
+// Reporting from a map walk picks an arbitrary entry, so the message a
+// caller sees, and any test or tool matching on it, changes between runs
+// for one unchanged artifact.
+func TestAttestationMismatchNamesTheSameLayerEveryTime(t *testing.T) {
+	man := ocispec.Manifest{Layers: []ocispec.Descriptor{
+		sourceLayer([]byte("first"), "huggingface.co/org/a", "a.safetensors", "aaa111", ""),
+		sourceLayer([]byte("second"), "huggingface.co/org/b", "b.safetensors", "bbb222", ""),
+		sourceLayer([]byte("third"), "huggingface.co/org/c", "c.safetensors", "ccc333", ""),
+	}}
+	// An attestation covering none of them: every layer is a candidate for
+	// the message, so an arbitrary pick has three values to choose from.
+	first := attestationMatchesManifest(nil, man)
+	if first == nil {
+		t.Fatal("an attestation covering none of the artifact's sourced layers must be refused")
+	}
+	for i := range 40 {
+		got := attestationMatchesManifest(nil, man)
+		if got == nil || got.Error() != first.Error() {
+			t.Fatalf("run %d reported %v, want the same layer as the first run: %v", i, got, first)
+		}
+	}
+	// And it must be the manifest's first layer, not merely a stable one.
+	if !strings.Contains(first.Error(), "a.safetensors") {
+		t.Errorf("refusal = %v, want it to name the first uncovered layer", first)
+	}
+}
