@@ -424,8 +424,11 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 		return unmatchedRecord(a, want)
 	}
 
-	for w, n := range remaining {
-		if n > 0 {
+	// Reported in the manifest's own layer order rather than by walking the
+	// map, so that an artifact with more than one unattested layer names the
+	// same one on every run.
+	for _, w := range want {
+		if remaining[w] > 0 {
 			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
 		}
 	}
