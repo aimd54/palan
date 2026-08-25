@@ -641,3 +641,78 @@ func TestResolveRefusesADuplicatedPath(t *testing.T) {
 		t.Errorf("the refusal must say the response repeated a path, got: %v", err)
 	}
 }
+
+// TestListingDropsAPathOutsideTheRepository: a listing entry is
+// third-party text, and every later check treats it as legitimate because
+// the repository itself reported it. A shard index naming such an entry
+// would otherwise be admitted (the entry is "present"), fetched from a URL
+// that a normalising server resolves to another repository's file, and
+// written into the signed statement as this model's source.
+func TestListingDropsAPathOutsideTheRepository(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{"model.safetensors": []byte("weights")})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/models/") && !strings.Contains(r.URL.Path, "paths-info") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"sha":%q,"siblings":[{"rfilename":"model.safetensors"},{"rfilename":"../../victim/secret.safetensors"},{"rfilename":"/etc/passwd"}]}`, testRevision)
+			return
+		}
+		hub.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{HTTP: srv.Client(), Endpoint: srv.URL}
+	listing, _, err := c.listFiles(context.Background(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("listFiles: %v", err)
+	}
+	// The legitimate file survives, so this is not passing by rejecting
+	// everything.
+	if len(listing) != 1 || listing[0] != "model.safetensors" {
+		t.Fatalf("listing = %q, want only the file inside the repository", listing)
+	}
+}
+
+// TestResolveRefusesAPathOutsideTheRepositoryInPathsInfo covers the other
+// decode point: the value that actually reaches the annotation is read
+// here, so it is checked here too rather than trusted because the listing
+// was filtered.
+func TestResolveRefusesAPathOutsideTheRepositoryInPathsInfo(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{"model.gguf": []byte("weights")})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/paths-info/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"path":"../../victim/secret.safetensors","size":7}]`)
+			return
+		}
+		hub.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{HTTP: srv.Client(), Endpoint: srv.URL}
+	_, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "model.gguf"})
+	if err == nil {
+		t.Fatal("a path outside the repository was accepted and would reach the signed statement")
+	}
+	if !strings.Contains(err.Error(), "not a path inside the repository") {
+		t.Errorf("the refusal must say why, got: %v", err)
+	}
+}
+
+// TestResolveAsksForTheLicenceOnce: the named file can also be the licence,
+// so both ways a file enters the request name the same one. Asking twice
+// gets two answers from a server behaving correctly, which the repeated
+// path check would then blame the server for.
+func TestResolveAsksForTheLicenceOnce(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"LICENSE":    []byte("Apache License, Version 2.0"),
+		"model.gguf": []byte("weights"),
+	})
+	c := testClient(hub)
+	res, err := c.Resolve(context.Background(), Ref{Repo: "org/repo", Path: "LICENSE"})
+	if err != nil {
+		t.Fatalf("naming the licence directly must resolve: %v", err)
+	}
+	if len(res.Files) != 1 || res.Files[0].Path != "LICENSE" {
+		t.Errorf("resolved %d files (%+v), want the licence exactly once", len(res.Files), res.Files)
+	}
+}
