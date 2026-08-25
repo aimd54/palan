@@ -400,10 +400,10 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	// shipping the same licence file is ordinary. Keyed by digest alone,
 	// one such layer's record would overwrite the other's, and a statement
 	// naming only one of them would be accepted as covering both.
-	remaining := make(map[attest.Layer]int, len(want))
+	remaining := make(map[layerKey]int, len(want))
 	sourced := make(map[string]bool, len(want))
 	for _, l := range want {
-		remaining[l]++
+		remaining[layerOf(l)]++
 		sourced[l.Digest] = true
 	}
 	haveDigest := make(map[string]bool, len(man.Layers))
@@ -412,8 +412,8 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	}
 
 	for _, a := range attested {
-		if remaining[a] > 0 {
-			remaining[a]--
+		if k := layerOf(a); remaining[k] > 0 {
+			remaining[k]--
 			continue
 		}
 		if !haveDigest[a.Digest] {
@@ -433,11 +433,33 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	// map, so that an artifact with more than one unattested layer names the
 	// same one on every run.
 	for _, w := range want {
-		if remaining[w] > 0 {
+		if remaining[layerOf(w)] > 0 {
 			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
 		}
 	}
 	return nil
+}
+
+// layerKey is what makes two layer records the same record: which layer it
+// is, and everything the statement asserts about where it came from.
+//
+// Spelled out rather than using attest.Layer itself as the map key, because
+// that is the type the statement is encoded from. A field added to it later
+// would silently join the matching rule, and every artifact signed by an
+// earlier release, whose statement cannot carry the new field, would start
+// refusing with no compiler error to say why.
+type layerKey struct {
+	digest, repo, path, revision, published string
+}
+
+func layerOf(l attest.Layer) layerKey {
+	return layerKey{
+		digest:    l.Digest,
+		repo:      l.Repo,
+		path:      l.Path,
+		revision:  l.Revision,
+		published: l.Published,
+	}
 }
 
 // unmatchedRecord explains why a records nothing in want, given that want
@@ -452,7 +474,7 @@ func unmatchedRecord(a attest.Layer, want []attest.Layer) error {
 	// way, the message sends a reader looking for a source mismatch that
 	// does not exist.
 	for _, w := range want {
-		if w == a {
+		if layerOf(w) == layerOf(a) {
 			return fmt.Errorf("layer %s: the attestation records it more times than this artifact contains it", a.Digest)
 		}
 	}

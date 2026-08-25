@@ -104,10 +104,20 @@ packing-time import rather than a way to address models, is untouched.
 - An artifact packed from local files is unchanged, byte for byte. The
   annotations are conditional and the statement is not written when no layer
   carries a source, so nothing about an offline workflow moves.
-- A `paths-info` response is held to the files that were requested: a path
-  that was not asked for, or one repeated, refuses. The path names the file
+- A path a repository publishes is checked for shape where it is decoded,
+  in the listing and in a `paths-info` response, and refused unless it is a
+  clean relative path inside the repository. A response is also held to the
+  files that were requested. Both are needed: checking the response against
+  the request alone proves nothing, because the request is itself built
+  from the repository's own listing, and a listing that names a path
+  walking out of the repository would satisfy it. The path names the file
   whose bytes are packed, becomes a URL segment, and is written into the
   statement, so it gets the treatment the reported commit already had.
+- Each fetched file downloads into a directory of its own. A file is named
+  on disk by its basename, so two files a repository publishes under
+  different directories with the same name would otherwise collide, and the
+  artifact would carry two layers hashed from one file's bytes, each
+  annotated with the other's published digest and source path.
 - palan and cosign read each other's attestations. That is a property held
   by a test that runs the real binary, not by this document: writing to the
   published format produced an attestation cosign refused outright, and only
