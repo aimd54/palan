@@ -24,6 +24,7 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/spf13/viper"
+	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
@@ -535,4 +536,135 @@ func verifierFor(t *testing.T, priv *ecdsa.PrivateKey) signature.Verifier {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// TestVerifyWarnsWhenSourcedLayersHaveNoAttestation: deleting an
+// attestation is a downgrade that forges nothing. The signature still
+// verifies, so without a word here the whole event is silent and the
+// output is identical to a model that was never packed from upstream.
+// The artifact's own layers are the evidence: they record where they came
+// from, so a statement should exist.
+func TestVerifyWarnsWhenSourcedLayersHaveNoAttestation(t *testing.T) {
+	reg := registrytest.New(t)
+	layer := sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", "")
+	mDesc := seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{layer})
+	priv, _ := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	// Signed without the attestation, which is what a failed attestation
+	// push leaves behind and what deleting the statement produces. The
+	// signature is untouched, so nothing is forged and nothing refuses.
+	signer, err := signature.LoadSigner(priv, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := attestTestRepo(t, reg, "llm/tiny")
+	if _, err := signing.Sign(t.Context(), repo, reg.Host()+"/llm/tiny", mDesc, signer); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	out, err := runVerifyCapture(t, ref, pubKey)
+	if err != nil {
+		t.Fatalf("the model is signed, so verify must still pass: %v", err)
+	}
+	if !strings.Contains(out, "Verified") {
+		t.Fatalf("verify reported %q, want a pass", out)
+	}
+	if !strings.Contains(out, "WARNING") || !strings.Contains(out, "no attestation is present") {
+		t.Errorf("verify reported %q, want it to say the attestation these layers imply is missing", out)
+	}
+	// The signature is genuinely fine; the point is that only this line
+	// separates the two cases.
+	if strings.Contains(out, "provenance:") {
+		t.Errorf("verify reported %q, but there is no attestation to draw provenance from", out)
+	}
+}
+
+// TestVerifyStaysQuietForAnArtifactWithNoUpstream is the other half: a
+// model packed from local files owes no statement, and warning about every
+// one of them would make the warning worthless.
+func TestVerifyStaysQuietForAnArtifactWithNoUpstream(t *testing.T) {
+	reg := registrytest.New(t)
+	seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{localLayer([]byte("weights"), "model.gguf")})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	out, err := runVerifyCapture(t, ref, pubKey)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if strings.Contains(out, "WARNING") {
+		t.Errorf("verify reported %q, but a purely local artifact owes no attestation", out)
+	}
+	if !strings.Contains(out, "Verified") {
+		t.Errorf("verify reported %q, want a clean pass", out)
+	}
+}
+
+// TestVerifyFromAStoreMissingOnlyTheAttestationWarnsRatherThanRefusing
+// pins the consequence ADR-0014 accepts. Verification prefers the local
+// store on the strength of the signature alone, so a store holding a model
+// and its signature but not its attestation never asks the registry, which
+// does hold one. That trade is deliberate: an artifact that never had an
+// attestation is the ordinary case and would otherwise cost a registry
+// round trip on every verification. What must not happen is that it passes
+// in silence.
+func TestVerifyFromAStoreMissingOnlyTheAttestationWarnsRatherThanRefusing(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights")
+	reg.PutBlob("llm/tiny", weights) // seedModel plants the manifest, not the content
+	layer := sourceLayer(weights, "huggingface.co/org/repo", "model.gguf", "abc123", "")
+	mDesc := seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{layer})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	// The registry holds everything, attestation included.
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// A store that pulled the model and its signature and did not get the
+	// attestation, which is what a failed attestation fetch leaves.
+	home := t.TempDir()
+	t.Setenv("PALAN_HOME", home)
+	st, err := openStore(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := refname.Parse(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := attestTestRepo(t, reg, "llm/tiny")
+	if _, err := oras.Copy(t.Context(), repo, "q4", st.OCI(), parsed.String(), oras.DefaultCopyOptions); err != nil {
+		t.Fatal(err)
+	}
+	sigTag := signing.SigTag(mDesc.Digest)
+	if _, err := oras.Copy(t.Context(), repo, sigTag, st.OCI(), signing.SigRef(parsed, mDesc.Digest), oras.DefaultCopyOptions); err != nil {
+		t.Fatal(err)
+	}
+
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	cmd := newVerifyCmd(v)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{ref, "--key", pubKey})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("the model and its signature are both here, so verify must pass: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "source: local store") {
+		t.Fatalf("verify reported %q, want it to have answered from the store", got)
+	}
+	if !strings.Contains(got, "WARNING") {
+		t.Errorf("verify reported %q: the registry holds an attestation this store does not, and nothing said so", got)
+	}
 }

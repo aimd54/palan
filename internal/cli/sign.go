@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/spf13/cobra"
@@ -86,6 +87,12 @@ says so rather than leaving the absence unremarked.`,
 			if _, err := signing.Sign(ctx, repo, ref.Registry+"/"+ref.Repository, desc, signer); err != nil {
 				return err
 			}
+			// Reported here, before the attestation is attempted, because
+			// from this point the signature is on the registry whatever
+			// happens next. Saying so only at the end would report total
+			// failure for a partial success, and the half that succeeded
+			// is the half verification depends on.
+			fmt.Fprintf(cmd.OutOrStdout(), "Signed %s@%s\n", ref, desc.Digest)
 
 			// Where the layers record where their files came from, sign
 			// also attests to it. An artifact packed purely from local
@@ -102,14 +109,12 @@ says so rather than leaving the absence unremarked.`,
 			if len(layers) > 0 {
 				envelope, err := attest.Build(desc, layers, signer)
 				if err != nil {
-					return err
+					return attestationNotWritten(ref, desc.Digest, err)
 				}
 				if _, err := signing.PushAttestation(ctx, repo, desc, envelope); err != nil {
-					return err
+					return attestationNotWritten(ref, desc.Digest, err)
 				}
 			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "Signed %s@%s\n", ref, desc.Digest)
 			// Say either way. An artifact whose layers record no source is
 			// signed without an attestation, and a reader who is not told
 			// so has no way to tell that from one where the statement was
@@ -180,13 +185,19 @@ this command asserts.`,
 			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
-			provenance, err := checkAttestation(ctx, v, keyPath, src, ref)
+			report, err := checkAttestation(ctx, v, keyPath, src, ref)
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.subject.Digest, src.name)
-			for _, p := range provenance {
+			for _, p := range report.provenance {
 				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
+			}
+			// On the same stream as the result it qualifies: a reader who
+			// sees "Verified" and not this line would take the artifact's
+			// provenance to have been checked.
+			if report.warning != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", report.warning)
 			}
 			return nil
 		},
@@ -354,36 +365,46 @@ func resolveVerifyKey(v *viper.Viper, keyPath string) (signature.Verifier, error
 // something else to enforce, and reporting the same output as an artifact
 // with no such statement at all is the correct answer here, not a missing
 // feature.
-func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) ([]string, error) {
+func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) (attestationReport, error) {
 	envelope, err := signing.FetchAttestation(ctx, src.target, src.subject)
 	switch {
 	case errors.Is(err, attest.ErrNoAttestation):
-		return nil, nil
+		return missingAttestation(ctx, src)
 	case err != nil:
-		return nil, fmt.Errorf("fetching the attestation for %s@%s: %w", ref, src.subject.Digest, err)
+		return attestationReport{}, fmt.Errorf("fetching the attestation for %s@%s: %w", ref, src.subject.Digest, err)
 	}
 
 	verifier, err := resolveVerifyKey(v, keyPath)
 	if err != nil {
-		return nil, err
+		return attestationReport{}, err
 	}
 	layers, err := attest.Verify(envelope, src.subject, verifier)
 	if err != nil {
-		return nil, fmt.Errorf("attestation verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
+		return attestationReport{}, fmt.Errorf("attestation verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
 	}
 
 	raw, err := content.FetchAll(ctx, src.target, src.subject)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s to check its layers: %w", ref, err)
+		return attestationReport{}, fmt.Errorf("fetching %s to check its layers: %w", ref, err)
 	}
 	var man ocispec.Manifest
 	if err := json.Unmarshal(raw, &man); err != nil {
-		return nil, fmt.Errorf("decoding %s manifest: %w", ref, err)
+		return attestationReport{}, fmt.Errorf("decoding %s manifest: %w", ref, err)
 	}
 	if err := attestationMatchesManifest(layers, man); err != nil {
-		return nil, fmt.Errorf("attestation for %s@%s does not match its artifact: %w", ref, src.subject.Digest, err)
+		return attestationReport{}, fmt.Errorf("attestation for %s@%s does not match its artifact: %w", ref, src.subject.Digest, err)
 	}
-	return provenanceLines(layers), nil
+	return attestationReport{provenance: provenanceLines(layers)}, nil
+}
+
+// attestationReport is what verify learned about an artifact's sources: one
+// provenance line per distinct source, and a warning when the artifact
+// looks like it should have carried a statement and did not. The two are
+// separate because they are not the same claim; a warning printed as a
+// provenance line would read as provenance.
+type attestationReport struct {
+	provenance []string
+	warning    string
 }
 
 // attestationMatchesManifest holds an attestation's layer records against
@@ -438,6 +459,53 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 		}
 	}
 	return nil
+}
+
+// missingAttestation decides what to say about an artifact that carries no
+// statement of its sources. Most carry none and nothing is owed, but an
+// artifact whose own layers record where they were fetched from is a
+// different case: it was packed from upstream, so a statement should exist
+// and does not.
+//
+// That is the state a failed attestation fetch leaves behind, and the state
+// anyone able to write to a store can produce by deleting one tag. Nothing
+// is forged and the signature still verifies, so the whole event is silent
+// unless it is said out loud. It is reported rather than refused, because
+// requiring a statement is a policy question and the artifact is not proven
+// wrong by lacking one, only unproven.
+//
+// This reads the manifest that is already being verified and asks no
+// registry anything it was not going to ask.
+func missingAttestation(ctx context.Context, src verifySource) (attestationReport, error) {
+	raw, err := content.FetchAll(ctx, src.target, src.subject)
+	if err != nil {
+		// The artifact verified; failing here would turn a report into a
+		// refusal on the strength of a manifest read.
+		return attestationReport{}, nil //nolint:nilerr // an unreadable manifest says nothing about provenance
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return attestationReport{}, nil //nolint:nilerr // same reasoning
+	}
+	claimed := signing.LayersFromManifest(man)
+	if len(claimed) == 0 {
+		return attestationReport{}, nil
+	}
+	return attestationReport{warning: fmt.Sprintf(
+		"WARNING: %d layer(s) record an upstream source but no attestation is present, so this model's provenance cannot be checked",
+		len(claimed))}, nil
+}
+
+// attestationNotWritten explains a failure that leaves the signature
+// published and the attestation absent. That pair verifies cleanly and
+// reports no provenance, so it is indistinguishable from a model that was
+// never packed from an upstream source, and an operator who is not told
+// which half landed will either retry a push that already succeeded or
+// conclude the model is unsigned when it is not.
+func attestationNotWritten(ref registry.Reference, d digest.Digest, err error) error {
+	return fmt.Errorf(
+		"the signature for %s@%s is on the registry, but its source attestation could not be written, "+
+			"so the model verifies with no provenance: %w", ref, d, err)
 }
 
 // layerKey is what makes two layer records the same record: which layer it
