@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -183,7 +184,7 @@ this command asserts.`,
 			if err != nil {
 				return err
 			}
-			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+			if _, err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
 			report, err := checkAttestation(ctx, v, keyPath, src, ref)
@@ -324,41 +325,114 @@ func verifyGate(v *viper.Viper, st *store.Store, doVerify bool, keyPath string) 
 		if err != nil {
 			return err
 		}
-		return verifyDigest(ctx, v, keyPath, src, ref)
+		_, err = verifyDigest(ctx, v, keyPath, src, ref)
+		return err
 	}
+}
+
+// namedVerifier is one identity a policy allows, carried with the name it was
+// configured under so a refusal can say which identities were tried.
+type namedVerifier struct {
+	name     string
+	verifier signature.Verifier
+}
+
+// resolveVerifiers returns the identities allowed to sign ref, in the order
+// they should be tried.
+//
+// An explicit --key overrides the policy, since a flag someone typed is a
+// deliberate act and the policy is the standing configuration it overrides.
+// With no policy configured, verify.key is the single allowed identity, which
+// is the behaviour that predates policies.
+func resolveVerifiers(
+	v *viper.Viper, keyPath string, ref registry.Reference,
+) ([]namedVerifier, error) {
+	if keyPath != "" {
+		nv, err := loadNamedVerifier(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		return []namedVerifier{nv}, nil
+	}
+
+	policy, err := loadPolicy(v)
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil {
+		configured := v.GetString(keyVerifyKey)
+		if configured == "" {
+			return nil, fmt.Errorf(
+				"no verification key configured: pass --key, set %s, or configure %s",
+				keyVerifyKey, keyVerifyPolicy)
+		}
+		nv, err := loadNamedVerifier(configured)
+		if err != nil {
+			return nil, err
+		}
+		return []namedVerifier{nv}, nil
+	}
+
+	repoRef := ref.Registry + "/" + ref.Repository
+	files, ok := policy.KeyFilesFor(repoRef)
+	if !ok {
+		return nil, fmt.Errorf(
+			"the trust policy names no identity allowed to sign %s; "+
+				"its patterns are %s",
+			repoRef, strings.Join(policy.Patterns(), ", "))
+	}
+	out := make([]namedVerifier, 0, len(files))
+	for _, f := range files {
+		nv, err := loadNamedVerifier(f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, nv)
+	}
+	return out, nil
+}
+
+// loadNamedVerifier reads a public key file into a verifier, keeping the path
+// as the identity's name so a refusal names a file an operator can go and
+// look at.
+func loadNamedVerifier(keyPath string) (namedVerifier, error) {
+	pemBytes, err := os.ReadFile(keyPath) // #nosec G304 -- user-chosen key file
+	if err != nil {
+		return namedVerifier{}, fmt.Errorf("reading verification key: %w", err)
+	}
+	verifier, err := signing.LoadVerifier(pemBytes)
+	if err != nil {
+		return namedVerifier{}, err
+	}
+	return namedVerifier{name: keyPath, verifier: verifier}, nil
 }
 
 // verifyDigest runs signature verification against an already-resolved
-// source, using the explicit key path or the configured verify.key. Callers
-// choose the source, so a pre-download gate can insist on the registry while
-// an offline check reads the store.
-func verifyDigest(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) error {
-	verifier, err := resolveVerifyKey(v, keyPath)
+// source, and returns the verifier that accepted it so the caller can hold
+// anything else about the artifact to the same identity.
+func verifyDigest(
+	ctx context.Context, v *viper.Viper, keyPath string, src verifySource,
+	ref registry.Reference,
+) (signature.Verifier, error) {
+	verifiers, err := resolveVerifiers(v, keyPath, ref)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	repoRef := ref.Registry + "/" + ref.Repository
-	if err := signing.Verify(ctx, src.target, src.sigRef, repoRef, src.subject, verifier); err != nil {
-		return fmt.Errorf("signature verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
+	tried := make([]string, 0, len(verifiers))
+	var lastErr error
+	for _, nv := range verifiers {
+		err := signing.Verify(
+			ctx, src.target, src.sigRef, repoRef, src.subject, nv.verifier)
+		if err == nil {
+			return nv.verifier, nil
+		}
+		lastErr = err
+		tried = append(tried, nv.name)
 	}
-	return nil
-}
-
-// resolveVerifyKey loads the verifier for keyPath, or for verify.key from
-// the config when keyPath is empty. Both the signature check and the
-// attestation check apply the same key to the same artifact.
-func resolveVerifyKey(v *viper.Viper, keyPath string) (signature.Verifier, error) {
-	if keyPath == "" {
-		keyPath = v.GetString(keyVerifyKey)
-	}
-	if keyPath == "" {
-		return nil, fmt.Errorf("no verification key configured: pass --key or set verify.key in the config")
-	}
-	pemBytes, err := os.ReadFile(keyPath) // #nosec G304 -- user-chosen key file
-	if err != nil {
-		return nil, fmt.Errorf("reading verification key: %w", err)
-	}
-	return signing.LoadVerifier(pemBytes)
+	return nil, fmt.Errorf(
+		"signature verification FAILED for %s@%s against %s: %w",
+		ref, src.subject.Digest, strings.Join(tried, ", "), lastErr)
 }
 
 // checkAttestation looks for a statement of src's sources and, when one
