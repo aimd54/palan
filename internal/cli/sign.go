@@ -477,15 +477,22 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 // This reads the manifest that is already being verified and asks no
 // registry anything it was not going to ask.
 func missingAttestation(ctx context.Context, src verifySource) (attestationReport, error) {
+	// A manifest that cannot be read or decoded is reported, not passed
+	// over. Returning nothing here would answer exactly as an artifact that
+	// legitimately owes no statement does, and this is the one place where
+	// that answer is being decided: someone who can delete a tag to strip an
+	// attestation can delete one more file to silence the report of it.
+	// The artifact's signature verified, so this is a warning rather than a
+	// refusal.
 	raw, err := content.FetchAll(ctx, src.target, src.subject)
 	if err != nil {
-		// The artifact verified; failing here would turn a report into a
-		// refusal on the strength of a manifest read.
-		return attestationReport{}, nil //nolint:nilerr // an unreadable manifest says nothing about provenance
+		return attestationReport{warning: fmt.Sprintf(
+			"WARNING: no attestation is present, and this artifact's manifest could not be read to say whether one was owed: %v", err)}, nil
 	}
 	var man ocispec.Manifest
 	if err := json.Unmarshal(raw, &man); err != nil {
-		return attestationReport{}, nil //nolint:nilerr // same reasoning
+		return attestationReport{warning: fmt.Sprintf(
+			"WARNING: no attestation is present, and this artifact's manifest could not be decoded to say whether one was owed: %v", err)}, nil
 	}
 	claimed := signing.LayersFromManifest(man)
 	if len(claimed) == 0 {
