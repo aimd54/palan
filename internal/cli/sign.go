@@ -184,10 +184,11 @@ this command asserts.`,
 			if err != nil {
 				return err
 			}
-			if _, err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+			verifier, err := verifyDigest(ctx, v, keyPath, src, ref)
+			if err != nil {
 				return err
 			}
-			report, err := checkAttestation(ctx, v, keyPath, src, ref)
+			report, err := checkAttestation(ctx, verifier, src, ref)
 			if err != nil {
 				return err
 			}
@@ -436,16 +437,21 @@ func verifyDigest(
 }
 
 // checkAttestation looks for a statement of src's sources and, when one
-// exists, verifies it against the same key verifyDigest already checked the
-// signature with, then holds every layer it records against the artifact's
-// own manifest. It returns one line per distinct source the layers came
-// from, for the caller to report.
+// exists, verifies it against verifier, the identity that just accepted the
+// artifact's signature, then holds every layer it records against the
+// artifact's own manifest. It returns one line per distinct source the
+// layers came from, for the caller to report.
+//
+// Using the signature's own verifier is the point rather than a
+// convenience: a policy may allow several identities, and a statement
+// vouched for by one of them beside a signature vouched for by another is
+// two claims about the same bytes with nothing tying them together.
 //
 // An absent attestation is not a failure: requiring one is a policy for
 // something else to enforce, and reporting the same output as an artifact
 // with no such statement at all is the correct answer here, not a missing
 // feature.
-func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) (attestationReport, error) {
+func checkAttestation(ctx context.Context, verifier signature.Verifier, src verifySource, ref registry.Reference) (attestationReport, error) {
 	envelope, err := signing.FetchAttestation(
 		ctx, src.target, src.attRef, src.subject)
 	switch {
@@ -455,10 +461,6 @@ func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src v
 		return attestationReport{}, fmt.Errorf("fetching the attestation for %s@%s: %w", ref, src.subject.Digest, err)
 	}
 
-	verifier, err := resolveVerifyKey(v, keyPath)
-	if err != nil {
-		return attestationReport{}, err
-	}
 	layers, err := attest.Verify(envelope, src.subject, verifier)
 	if err != nil {
 		return attestationReport{}, fmt.Errorf("attestation verification FAILED for %s@%s: %w", ref, src.subject.Digest, err)
