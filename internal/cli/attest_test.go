@@ -438,26 +438,37 @@ func TestVerifyRefusesAnAttestationCoveringOnlyOneOfTwoIdenticalLayers(t *testin
 func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		layer        ocispec.Descriptor
+		layers       []ocispec.Descriptor
 		wantOut      string
 		wantMiss     string
-		wantAttested bool
+		wantAttested int
 	}{
 		{
 			name:         "a fetched layer is attested",
-			layer:        sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", ""),
+			layers:       []ocispec.Descriptor{sourceLayer([]byte("weights"), "huggingface.co/org/repo", "model.gguf", "abc123", "")},
 			wantOut:      "Attested the source of 1 of 1 layer(s)",
-			wantAttested: true,
+			wantAttested: 1,
+		},
+		{
+			// The case a bare count cannot express: a mixed pack, where
+			// most of the artifact has provenance and part of it does not.
+			name: "a partly sourced artifact says how much it covers",
+			layers: []ocispec.Descriptor{
+				sourceLayer([]byte("fetched weights"), "huggingface.co/org/repo", "model.gguf", "abc123", ""),
+				localLayer([]byte("a local template"), "template.jinja"),
+			},
+			wantOut:      "Attested the source of 1 of 2 layer(s)",
+			wantAttested: 1,
 		},
 		{
 			name:     "a local layer is not, and sign says so",
-			layer:    localLayer([]byte("weights"), "model.gguf"),
+			layers:   []ocispec.Descriptor{localLayer([]byte("weights"), "model.gguf")},
 			wantMiss: "No source attestation written",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := registrytest.New(t)
-			seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{tc.layer})
+			seedModel(t, reg, "llm/tiny", "q4", tc.layers)
 			priv, privKey := attestKeypair(t)
 
 			t.Setenv("COSIGN_PASSWORD", "")
@@ -471,12 +482,14 @@ func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("sign: %v", err)
 			}
-			both := out.String() + errOut.String()
-			if tc.wantOut != "" && !strings.Contains(both, tc.wantOut) {
-				t.Errorf("sign reported %q, want it to contain %q", both, tc.wantOut)
+			// Asserted on stdout alone. Folding the streams together would
+			// pass with either line moved to stderr, and both describe the
+			// same outcome of the same command.
+			if tc.wantOut != "" && !strings.Contains(out.String(), tc.wantOut) {
+				t.Errorf("sign wrote %q to stdout, want it to contain %q (stderr: %q)", out.String(), tc.wantOut, errOut.String())
 			}
-			if tc.wantMiss != "" && !strings.Contains(both, tc.wantMiss) {
-				t.Errorf("sign reported %q, want it to contain %q", both, tc.wantMiss)
+			if tc.wantMiss != "" && !strings.Contains(out.String(), tc.wantMiss) {
+				t.Errorf("sign wrote %q to stdout, want it to contain %q (stderr: %q)", out.String(), tc.wantMiss, errOut.String())
 			}
 
 			// What sign said must match what is actually on the registry.
@@ -484,12 +497,12 @@ func TestSignSaysWhetherItWroteAnAttestation(t *testing.T) {
 			// never pushed, which is the defect class this test names.
 			ref := reg.Host() + "/llm/tiny:q4"
 			recorded, err := readAttestation(t, ref, verifierFor(t, priv))
-			if tc.wantAttested {
+			if tc.wantAttested > 0 {
 				if err != nil {
 					t.Fatalf("sign said it attested, but no attestation is readable: %v", err)
 				}
-				if len(recorded) != 1 {
-					t.Errorf("attestation covers %d layers, want 1", len(recorded))
+				if len(recorded) != tc.wantAttested {
+					t.Errorf("attestation covers %d layers, want %d", len(recorded), tc.wantAttested)
 				}
 			} else if !errors.Is(err, attest.ErrNoAttestation) {
 				t.Errorf("sign said it wrote none, so none must be readable; got %v (%v)", recorded, err)
@@ -666,5 +679,70 @@ func TestVerifyFromAStoreMissingOnlyTheAttestationWarnsRatherThanRefusing(t *tes
 	}
 	if !strings.Contains(got, "WARNING") {
 		t.Errorf("verify reported %q: the registry holds an attestation this store does not, and nothing said so", got)
+	}
+}
+
+// TestVerifyWarnsWhenTheManifestCannotBeReadToSayWhatWasOwed: the report
+// of a missing attestation is itself something that can be silenced.
+// Whoever can delete a tag to strip the statement can delete one more file
+// so the manifest cannot be read, and a report that answers "nothing to
+// say" on a failed read gives them exactly the silence they were after.
+func TestVerifyWarnsWhenTheManifestCannotBeReadToSayWhatWasOwed(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights")
+	reg.PutBlob("llm/tiny", weights)
+	layer := sourceLayer(weights, "huggingface.co/org/repo", "model.gguf", "abc123", "")
+	mDesc := seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{layer})
+	priv, _ := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	ref := reg.Host() + "/llm/tiny:q4"
+
+	signer, err := signature.LoadSigner(priv, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := attestTestRepo(t, reg, "llm/tiny")
+	if _, err := signing.Sign(t.Context(), repo, reg.Host()+"/llm/tiny", mDesc, signer); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// A store holding the model and its signature, then robbed of the one
+	// file that says what the artifact is made of. The tag still resolves,
+	// because the index records the descriptor, and the signature still
+	// verifies, because it is read from its own manifest.
+	home := t.TempDir()
+	t.Setenv("PALAN_HOME", home)
+	st, err := openStore(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := refname.Parse(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oras.Copy(t.Context(), repo, "q4", st.OCI(), parsed.String(), oras.DefaultCopyOptions); err != nil {
+		t.Fatal(err)
+	}
+	sigTag := signing.SigTag(mDesc.Digest)
+	if _, err := oras.Copy(t.Context(), repo, sigTag, st.OCI(), signing.SigRef(parsed, mDesc.Digest), oras.DefaultCopyOptions); err != nil {
+		t.Fatal(err)
+	}
+	blob := filepath.Join(home, "blobs", "sha256", mDesc.Digest.Encoded())
+	if err := os.Remove(blob); err != nil {
+		t.Fatalf("removing the manifest blob: %v", err)
+	}
+
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	cmd := newVerifyCmd(v)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{ref, "--key", pubKey})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("the signature is intact, so verify must still pass: %v", err)
+	}
+	if !strings.Contains(out.String(), "WARNING") {
+		t.Errorf("verify reported %q, want it to say it could not tell whether an attestation was owed", out.String())
 	}
 }
