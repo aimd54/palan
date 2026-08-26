@@ -1,6 +1,8 @@
 module github.com/aimd54/palan
 
-go 1.26.0
+// Minor only, no patch: setup-go installs exactly what this names, so a
+// pinned patch builds every release on that patch until someone notices.
+go 1.27
 
 require (
 	charm.land/bubbles/v2 v2.2.0
