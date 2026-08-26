@@ -157,7 +157,7 @@ tag: nothing is forged, every signature still verifies, and the model simply
 stops having provenance. So `verify` warns when an artifact's own layers
 record an upstream source and no statement is found:
 
-```
+```text
 Verified registry.internal/llm/qwen3:8b-q4@sha256:...
   source: local store
   WARNING: 3 layer(s) record an upstream source but no attestation is present, so this model's provenance cannot be checked
