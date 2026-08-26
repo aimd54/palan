@@ -160,8 +160,7 @@ record an upstream source and no statement is found:
 ```
 Verified registry.internal/llm/qwen3:8b-q4@sha256:...
   source: local store
-  WARNING: 3 layer(s) record an upstream source but no attestation is present,
-  so this model's provenance cannot be checked
+  WARNING: 3 layer(s) record an upstream source but no attestation is present, so this model's provenance cannot be checked
 ```
 
 Pulling again brings the statement back. A model packed from local files

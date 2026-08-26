@@ -104,9 +104,14 @@ packing-time import rather than a way to address models, is untouched.
 - An artifact packed from local files is unchanged, byte for byte. The
   annotations are conditional and the statement is not written when no layer
   carries a source, so nothing about an offline workflow moves.
-- A path a repository publishes is checked for shape where it is decoded,
-  in the listing and in a `paths-info` response, and refused unless it is a
-  clean relative path inside the repository. A response is also held to the
+- A path a repository publishes is checked for shape where it is decoded.
+  A listing entry that is not a clean relative path inside the repository
+  is dropped, so the repository reads as not publishing it; the same path
+  in a `paths-info` response is refused outright, since it answers a
+  request naming files already known to be well formed. Percent signs are
+  refused rather than decoded and re-inspected, because a server that
+  decodes before it normalises would otherwise act on a different path from
+  the one that was checked. A response is also held to the
   files that were requested. Both are needed: checking the response against
   the request alone proves nothing, because the request is itself built
   from the repository's own listing, and a listing that names a path
