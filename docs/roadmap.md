@@ -21,9 +21,9 @@ and refuses anything else, for the reasons in
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
 | M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
-| M10 | Trust policy (identities per reference; keyless verification offline) | ☐ planned |
-| M11 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
-| M12 | Ecosystem validations (KServe modelcar, OIDC auth, mirrors, upstreaming) | ☐ planned |
+| M10 | Trust policy (which identities may sign which references) | ☐ planned |
+| M11 | Keyless verification from carried material (no network, no log) | ☐ planned |
+| M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
 | M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
 
 M8 through M13 build out one property end to end: that the bytes a host
@@ -33,8 +33,11 @@ M8 adds the stretch before signing, checking a publisher's own digests and,
 when a key is supplied, their signature as well; M9 makes that stretch
 portable, stating in a signed form which upstream file each layer holds so
 the claim survives leaving the machine that packed it. What remains is a
-policy above one key and the surfaces that show and enforce the result,
-described under [Planned milestones](#planned-milestones).
+policy above one key, the carried material that lets it hold with no network,
+and the surfaces that show and enforce the result, described under
+[Planned milestones](#planned-milestones). Work that waits on infrastructure
+rather than on code sits outside that sequence, under
+[Ecosystem validations](#ecosystem-validations).
 
 ## Validated outside CI
 
@@ -115,14 +118,22 @@ with more than one publisher asks which identities may sign which
 references. M10 adds a policy mapping reference patterns to the identities
 allowed to sign them, covering cosign keys and OpenSSF model-signing
 identities, enforced at the four points `verify.required` already covers:
-`pull`, `load`, `run` and `serve`. The same milestone verifies a keyless
-signature from a carried bundle against a pinned trusted root, on a host
-where no transparency log is reachable. Accepted when a model signed by a
-valid key the policy does not name for that reference refuses while the same
-signature verifies under its own pattern, and a carried keyless signature
-verifies with no network and refuses with its inclusion proof stripped.
+`pull`, `load`, `run` and `serve`. Accepted when a model signed by a valid
+key the policy does not name for that reference refuses, while the same
+signature verifies under its own pattern.
 
-### M11: the chain, shown and enforced
+### M11: keyless verification from carried material
+
+A keyless signature names an identity where a key would name a file, and
+checking one normally reaches a certificate authority and a transparency
+log. Neither is reachable from a disconnected host, so the material has to
+travel with the artifact: the certificate chain, the inclusion proof, and a
+trusted root pinned when the policy was written. M11 verifies such a
+signature with no network at all, and teaches the policy format to name
+keyless identities beside the keys M10 covers. Accepted when a carried
+signature verifies offline and refuses once its inclusion proof is stripped.
+
+### M12: the chain, shown and enforced
 
 - `verify --explain`, plain text and `--json`: origin, attestation,
   signature identity, and every hop it can prove, so "prove what is on this
@@ -139,10 +150,21 @@ verifies with no network and refuses with its inclusion proof stripped.
 - The runtime channel gains the same gate, so an engine build is checked the
   way a model is when it is installed or spawned.
 
-### M12: ecosystem validations
+### M13: 1.0
 
-Independent items, each a validation with a recorded result rather than a
-feature:
+`verify.required` becomes the default, with a first-run path that does not
+strand a store predating signing. The policy file format is documented as
+stable, and a transfer benchmark against modctl and oras is published with
+its methodology. The README's claims are then re-read against what ships,
+since 1.0 is a statement about defaults as much as about features.
+
+## Ecosystem validations
+
+Independent of the milestones and of each other, and none of them gates
+1.0. Each is a validation with a recorded result rather than a feature, and
+each waits on infrastructure rather than on code: a cluster, an identity
+provider, an ACME issuer, a mirror. They run as that infrastructure comes
+within reach.
 
 - KServe modelcars, the third Kubernetes consumption pattern. Raw deployment
   mode suffices, which avoids pulling in a service mesh, so a laptop cluster
@@ -158,14 +180,6 @@ feature:
 - Offering the packing path and the origin and attestation conventions
   upstream to modctl if welcome (ADR-0005's standing plan), and a CNCF
   landscape entry.
-
-### M13: 1.0
-
-`verify.required` becomes the default, with a first-run path that does not
-strand a store predating signing. The policy file format is documented as
-stable, and a transfer benchmark against modctl and oras is published with
-its methodology. The README's claims are then re-read against what ships,
-since 1.0 is a statement about defaults as much as about features.
 
 ## Alongside the milestones
 
@@ -187,7 +201,7 @@ since 1.0 is a statement about defaults as much as about features.
 ## Deferred
 
 - OIDC device-flow `login` (basic/token + credential helpers work today).
-- Keyless (Fulcio/Rekor) signing for connected environments; M10 covers the
+- Keyless (Fulcio/Rekor) signing for connected environments; M11 covers the
   verification half.
 - Stretch goals: LoRA adapter artifacts, multimodal mmproj.
 
