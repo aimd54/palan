@@ -794,3 +794,35 @@ func TestPackKeepsTwoNestedFilesSharingABasenameApart(t *testing.T) {
 		t.Errorf("no layer resolved for %v", want)
 	}
 }
+
+// TestPackRecordsOneOriginNotTwo: an artifact carries the repository's web
+// address as org.opencontainers.image.source and the repository it was
+// fetched from in the signed source annotations. Deriving the first from a
+// hardcoded host and the second from the configured endpoint puts two
+// contradictory origins on one artifact, one of them signed.
+func TestPackRecordsOneOriginNotTwo(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{"model.gguf": []byte("weights")})
+	hub.Revision = "d4e5f6a7000000000000000000000000000000ee"
+	t.Setenv("HF_ENDPOINT", hub.URL())
+
+	files, info, err := resolveSources(t.Context(), newTestCommand(t), []string{"hf://org/repo/model.gguf"})
+	if err != nil {
+		t.Fatalf("resolveSources: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no files resolved")
+	}
+	host := strings.TrimPrefix(hub.URL(), "http://")
+	if !strings.Contains(info.sourceURL, host) {
+		t.Errorf("source URL = %q, want it to name the endpoint the bytes came from (%s)", info.sourceURL, host)
+	}
+	// The two must name the same repository on the same host, since a
+	// reader comparing them is why both are recorded.
+	if !strings.HasSuffix(info.sourceURL, files[0].SourceRepo) {
+		t.Errorf("source URL %q does not end in the source repo %q, so they disagree about where the bytes came from",
+			info.sourceURL, files[0].SourceRepo)
+	}
+	if strings.Contains(info.sourceURL, "huggingface.co") {
+		t.Errorf("source URL = %q, but nothing was fetched from huggingface.co", info.sourceURL)
+	}
+}

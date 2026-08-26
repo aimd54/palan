@@ -313,7 +313,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			return nil, info, err
 		}
 		if info.sourceURL == "" {
-			info.sourceURL = ref.URL()
+			info.sourceURL = client.URL(ref)
 		}
 
 		// A key was supplied, so every file this loop downloads must be
