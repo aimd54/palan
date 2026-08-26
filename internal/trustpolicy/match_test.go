@@ -29,14 +29,21 @@ func TestMatchHoldsAStarInsideOneSegment(t *testing.T) {
 }
 
 func TestValidatePatternRefusesWhatCannotMatch(t *testing.T) {
-	for _, bad := range []string{"", "registry.example//llm", "registry.example/a**b"} {
-		if err := ValidatePattern(bad); err == nil {
-			t.Errorf("ValidatePattern(%q) accepted a pattern that cannot be meant", bad)
+	bad := []string{
+		"",
+		"registry.example//llm",
+		"registry.example/a**b",
+		"**/**/**/**/**",
+	}
+	for _, b := range bad {
+		if err := ValidatePattern(b); err == nil {
+			t.Errorf("ValidatePattern(%q) accepted a pattern that cannot be meant", b)
 		}
 	}
-	for _, good := range []string{"**", "registry.example/**", "registry.example/llm/*"} {
-		if err := ValidatePattern(good); err != nil {
-			t.Errorf("ValidatePattern(%q) = %v, want nil", good, err)
+	good := []string{"**", "registry.example/**", "registry.example/llm/*"}
+	for _, g := range good {
+		if err := ValidatePattern(g); err != nil {
+			t.Errorf("ValidatePattern(%q) = %v, want nil", g, err)
 		}
 	}
 }

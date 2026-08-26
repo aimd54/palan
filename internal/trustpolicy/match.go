@@ -70,6 +70,7 @@ func ValidatePattern(pattern string) error {
 	if pattern == "" {
 		return fmt.Errorf("pattern is empty")
 	}
+	doubleStar := 0
 	for _, seg := range strings.Split(pattern, "/") {
 		if seg == "" {
 			return fmt.Errorf("pattern %q has an empty segment", pattern)
@@ -78,6 +79,13 @@ func ValidatePattern(pattern string) error {
 			return fmt.Errorf("pattern %q: ** must stand alone as a segment",
 				pattern)
 		}
+		if seg == "**" {
+			doubleStar++
+		}
+	}
+	if doubleStar > 4 {
+		return fmt.Errorf("pattern %q has more than 4 ** segments to prevent "+
+			"exponential backtracking during matching", pattern)
 	}
 	return nil
 }
