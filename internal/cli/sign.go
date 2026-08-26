@@ -461,29 +461,17 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	return nil
 }
 
-// missingAttestation decides what to say about an artifact that carries no
-// statement of its sources. Most carry none and nothing is owed, but an
-// artifact whose own layers record where they were fetched from is a
-// different case: it was packed from upstream, so a statement should exist
-// and does not.
+// missingAttestation decides what to say about an artifact carrying no
+// statement of its sources. Most owe none; one whose own layers record
+// where they were fetched from was packed from upstream and does owe one.
 //
-// That is the state a failed attestation fetch leaves behind, and the state
-// anyone able to write to a store can produce by deleting one tag. Nothing
-// is forged and the signature still verifies, so the whole event is silent
-// unless it is said out loud. It is reported rather than refused, because
-// requiring a statement is a policy question and the artifact is not proven
-// wrong by lacking one, only unproven.
-//
-// This reads the manifest that is already being verified and asks no
-// registry anything it was not going to ask.
+// Reported rather than refused: nothing is forged and the signature still
+// verifies, so the artifact is unproven rather than wrong, and requiring a
+// statement is a policy question.
 func missingAttestation(ctx context.Context, src verifySource) (attestationReport, error) {
-	// A manifest that cannot be read or decoded is reported, not passed
-	// over. Returning nothing here would answer exactly as an artifact that
-	// legitimately owes no statement does, and this is the one place where
-	// that answer is being decided: someone who can delete a tag to strip an
-	// attestation can delete one more file to silence the report of it.
-	// The artifact's signature verified, so this is a warning rather than a
-	// refusal.
+	// Reported, not passed over: returning nothing here is the same answer
+	// an artifact owing no statement gives, so a deleted manifest would
+	// hide a deleted attestation.
 	raw, err := content.FetchAll(ctx, src.target, src.subject)
 	if err != nil {
 		return attestationReport{warning: fmt.Sprintf(

@@ -147,16 +147,11 @@ func TestVerifyRefusesAStatementAboutAnotherArtifact(t *testing.T) {
 }
 
 // TestVerifyAcceptsASignatureOverTheIndependentlyBuiltPreAuthenticationEncoding
-// pins the DSSE framing itself. Build and Verify both call the same
-// unexported pae helper, so a bug that made both sign and check the raw
-// payload instead of the pre-authentication encoding would leave every
-// other test in this file green: Build and Verify would still agree with
-// each other, just about the wrong thing. This test signs over a
-// pre-authentication encoding built independently, from the DSSE spec
-// formula, through signStatement rather than through anything in the
-// attest package, and then asks Verify to accept the result. If Verify
-// ever authenticates something other than this exact framing, the
-// signature it receives will not match and it must refuse.
+// pins the DSSE framing. Build and Verify share one pae helper, so a bug
+// that made both use the raw payload instead would leave every other test
+// green: the two would still agree, about the wrong thing. This signs over
+// a framing built independently from the spec formula, so Verify must
+// refuse if it ever authenticates anything else.
 func TestVerifyAcceptsASignatureOverTheIndependentlyBuiltPreAuthenticationEncoding(t *testing.T) {
 	s, v := keys(t)
 	env := signStatement(t, s, attest.PayloadType, validStatement())
