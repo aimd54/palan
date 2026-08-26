@@ -66,7 +66,7 @@ notice-check: ## Fail if NOTICE no longer matches the module graph
 	go run ./hack/gennotice -check
 
 .PHONY: check
-check: fmt-check vet lint tidy-check notice-check test ## All local gates (run before every commit; mirrored in CI)
+check: fmt-check vet lint lint-docs-available tidy-check notice-check test ## All local gates (run before every commit; mirrored in CI)
 
 .PHONY: docs
 docs: ## Regenerate the CLI reference under docs/reference
@@ -86,6 +86,21 @@ demo: build ## Re-record docs/assets/demo.gif (requires vhs, ttyd, ffmpeg, gifsi
 .PHONY: lint-docs
 lint-docs: ## Lint markdown files (requires Node; config in .markdownlint-cli2.yaml)
 	npx --yes markdownlint-cli2 "**/*.md"
+
+# What `check` runs, so that a tree with no Node toolchain still has a
+# working `make check` on an otherwise pure Go project. The notice is loud
+# on purpose: the Docs workflow lints markdown on every pull request
+# whatever happens here, so a machine that cannot run it is putting the
+# check off rather than avoiding it, and a green `check` that CI then
+# fails is the outcome this target exists to prevent.
+.PHONY: lint-docs-available
+lint-docs-available:
+	@if command -v npx >/dev/null 2>&1; then \
+	  $(MAKE) --no-print-directory lint-docs; \
+	else \
+	  echo "NOTICE: npx not found, so markdown was not linted here."; \
+	  echo "        CI lints it on every pull request; install Node to see it first."; \
+	fi
 
 .PHONY: clean
 clean: ## Remove build artifacts
