@@ -83,9 +83,11 @@ type File struct {
 	SHA256 string
 }
 
-// URL returns the repository's web page, used as the packed artifact's source
-// annotation.
-func (r Ref) URL() string { return defaultEndpoint + "/" + r.Repo }
+// URL is where a reader finds the repository on the endpoint it was
+// actually fetched from. Naming the public host unconditionally would put
+// a second, contradictory origin on an artifact fetched from a mirror,
+// beside the endpoint the signed source annotations record.
+func (c *Client) URL(r Ref) string { return strings.TrimSuffix(c.endpoint(), "/") + "/" + r.Repo }
 
 // IsRef reports whether an argument is a Hugging Face source rather than a
 // local path.
