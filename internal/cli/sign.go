@@ -210,6 +210,9 @@ this command asserts.`,
 type verifySource struct {
 	target oras.ReadOnlyTarget
 	sigRef string
+	// attRef is the attestation's reference, in the same form as sigRef: a
+	// bare tag on a registry, a full reference in the local store.
+	attRef string
 	// subject is the artifact being verified. The whole descriptor is needed,
 	// not just its digest, because a signature may be attached as a referrer
 	// of it rather than under a tag.
@@ -244,6 +247,7 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 			return verifySource{
 				target:  st.OCI(),
 				sigRef:  sigRef,
+				attRef:  signing.AttRef(ref, local.Digest),
 				subject: local,
 				name:    "local store",
 			}, nil
@@ -273,6 +277,7 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 	return verifySource{
 		target:  repo,
 		sigRef:  signing.SigTag(desc.Digest),
+		attRef:  signing.AttTag(desc.Digest),
 		subject: desc,
 		name:    "registry",
 	}, nil
@@ -366,7 +371,8 @@ func resolveVerifyKey(v *viper.Viper, keyPath string) (signature.Verifier, error
 // with no such statement at all is the correct answer here, not a missing
 // feature.
 func checkAttestation(ctx context.Context, v *viper.Viper, keyPath string, src verifySource, ref registry.Reference) (attestationReport, error) {
-	envelope, err := signing.FetchAttestation(ctx, src.target, src.subject)
+	envelope, err := signing.FetchAttestation(
+		ctx, src.target, src.attRef, src.subject)
 	switch {
 	case errors.Is(err, attest.ErrNoAttestation):
 		return missingAttestation(ctx, src)

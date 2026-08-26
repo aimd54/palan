@@ -58,7 +58,8 @@ func TestFetchAttestationTreatsAHiddenMissingTagAsAbsent(t *testing.T) {
 	reg.SetMissingManifestStatus(http.StatusUnauthorized)
 
 	repo := testRepo(t, reg, "llm/tiny")
-	if _, err := FetchAttestation(ctx, repo, target); !errors.Is(err, attest.ErrNoAttestation) {
+	_, err := FetchAttestation(ctx, repo, AttTag(target.Digest), target)
+	if !errors.Is(err, attest.ErrNoAttestation) {
 		t.Fatalf("err = %v, want ErrNoAttestation: a registry hiding a missing tag behind 401 must still read as absent", err)
 	}
 }
@@ -73,7 +74,7 @@ func TestFetchAttestationDoesNotHideAGenuineFailure(t *testing.T) {
 	reg.SetMissingManifestStatus(http.StatusInternalServerError)
 
 	repo := testRepo(t, reg, "llm/tiny")
-	_, err := FetchAttestation(ctx, repo, target)
+	_, err := FetchAttestation(ctx, repo, AttTag(target.Digest), target)
 	if err == nil {
 		t.Fatal("a registry error unrelated to a hidden tag must not verify as unattested")
 	}
