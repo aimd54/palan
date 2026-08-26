@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/viper"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 
@@ -208,7 +209,8 @@ func readAttestation(t *testing.T, ref string, pubKey signature.Verifier) ([]att
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := signing.FetchAttestation(ctx, repo, desc)
+	envelope, err := signing.FetchAttestation(
+		ctx, repo, signing.AttTag(desc.Digest), desc)
 	if err != nil {
 		return nil, err
 	}
@@ -745,4 +747,70 @@ func TestVerifyWarnsWhenTheManifestCannotBeReadToSayWhatWasOwed(t *testing.T) {
 	if !strings.Contains(out.String(), "WARNING") {
 		t.Errorf("verify reported %q, want it to say it could not tell whether an attestation was owed", out.String())
 	}
+}
+
+// TestVerifyFindsAnAttestationByItsTagInTheLocalStore pins the tag path
+// rather than the referrers fallback. oci.Store answers Predecessors from
+// the manifests it holds regardless of what they are tagged, so a broken
+// tag lookup could still produce a correct result by accident; this test
+// wraps the store in noReferrers so only a correct tag lookup can answer.
+func TestVerifyFindsAnAttestationByItsTagInTheLocalStore(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	weights := []byte("weights")
+	reg.PutBlob("llm/tiny", weights) // seedModel plants only the manifest
+	layer := sourceLayer(weights, "huggingface.co/org/repo",
+		"model.gguf", "abc123", strings.Repeat("11", 32))
+	mDesc := seedModel(t, reg, "llm/tiny", "a", []ocispec.Descriptor{layer})
+
+	priv, keyFile := attestKeypair(t)
+	modelRef := reg.Host() + "/llm/tiny:a"
+	if err := runSign(t, modelRef, keyFile); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	parsed, err := refname.Parse(modelRef, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A store built the way save/load leave one: model, signature and
+	// attestation, each tagged by full reference.
+	st, err := oci.NewWithContext(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := attestTestRepo(t, reg, "llm/tiny")
+	if _, err := oras.Copy(ctx, repo, "a", st, parsed.String(),
+		oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the model into the store: %v", err)
+	}
+	sigRef := signing.SigRef(parsed, mDesc.Digest)
+	if _, err := oras.Copy(ctx, repo, signing.SigTag(mDesc.Digest), st,
+		sigRef, oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the signature into the store: %v", err)
+	}
+	attRef := signing.AttRef(parsed, mDesc.Digest)
+	if _, err := oras.Copy(ctx, repo, signing.AttTag(mDesc.Digest), st,
+		attRef, oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the attestation into the store: %v", err)
+	}
+
+	envelope, err := signing.FetchAttestation(
+		ctx, noReferrers{st}, attRef, mDesc)
+	if err != nil {
+		t.Fatalf("resolving the attestation by its store reference: %v", err)
+	}
+	if len(envelope) == 0 {
+		t.Fatal("the tag resolved but carried no envelope")
+	}
+	if _, err := attest.Verify(envelope, mDesc, verifierFor(t, priv)); err != nil {
+		t.Fatalf("the envelope the tag path returned does not verify: %v", err)
+	}
+}
+
+// noReferrers narrows a target down to Resolve, Fetch and Exists, hiding
+// Predecessors so a test can rule out the referrers fallback answering in
+// the tag lookup's place.
+type noReferrers struct {
+	oras.ReadOnlyTarget
 }

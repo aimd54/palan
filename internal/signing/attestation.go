@@ -152,13 +152,16 @@ func PushAttestation(ctx context.Context, repo *remote.Repository, target ocispe
 }
 
 // FetchAttestation returns the DSSE envelope attesting to target's sources,
-// or attest.ErrNoAttestation when target carries none. The tag is tried
+// or attest.ErrNoAttestation when target carries none. attRef is tried
 // first, because it is what this package writes by default and what every
 // registry supports; only when nothing is tagged does FetchAttestation ask
 // for referrers of target, the way signature verification already falls
 // back for a signature written by an OCI 1.1 tool with no tag of its own.
-func FetchAttestation(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.Descriptor) ([]byte, error) {
-	desc, err := src.Resolve(ctx, AttTag(target.Digest))
+// attRef differs by target: a registry tags it bare, the local store by
+// full reference, the same split SigRef already draws for signatures.
+func FetchAttestation(ctx context.Context, src oras.ReadOnlyTarget,
+	attRef string, target ocispec.Descriptor) ([]byte, error) {
+	desc, err := src.Resolve(ctx, attRef)
 	switch {
 	case err == nil:
 		return fetchEnvelope(ctx, src, desc)

@@ -84,6 +84,7 @@ any llama-server image.`,
 				src := verifySource{
 					target:  repo,
 					sigRef:  signing.SigTag(desc.Digest),
+					attRef:  signing.AttTag(desc.Digest),
 					subject: desc,
 					name:    "registry",
 				}
