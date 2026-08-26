@@ -44,7 +44,7 @@ jobs:
     env:
       # Part of the binary cache key below. Dependabot does not watch this,
       # so bump it by hand.
-      GOLANGCI_LINT_VERSION: v2.12.2
+      GOLANGCI_LINT_VERSION: v2.13.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -189,9 +189,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Scan with current stable Go: govulncheck checks the *standard
-          # library* of the toolchain in use, and our go.mod minimum
-          # (1.26.0) has stdlib CVEs fixed in later patch releases.
+          # govulncheck checks the *standard library* of the toolchain in
+          # use, so it must not run on one older than what builds a release.
           go-version: stable
       - name: Run govulncheck
         run: |
