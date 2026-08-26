@@ -208,7 +208,7 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				subject: desc,
 				name:    "bundle",
 			}
-			if err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+			if _, err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
 				return err
 			}
 			expectedSignatures[src.sigRef] = struct{}{}

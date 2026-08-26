@@ -88,7 +88,7 @@ any llama-server image.`,
 					subject: desc,
 					name:    "registry",
 				}
-				if err := verifyDigest(ctx, v, verifyKey, src, ref); err != nil {
+				if _, err := verifyDigest(ctx, v, verifyKey, src, ref); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)

@@ -5,9 +5,12 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/spf13/viper"
 
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/trustpolicy"
 )
 
@@ -45,4 +48,25 @@ func loadPolicy(v *viper.Viper) (*trustpolicy.Policy, error) {
 		})
 	}
 	return trustpolicy.New(rules)
+}
+
+// resolveVerifyKey loads the verifier for keyPath, or for verify.key from
+// the config when keyPath is empty. checkAttestation applies it to the
+// attestation using the same identity verifyDigest already checked the
+// signature with when no policy is configured.
+func resolveVerifyKey(
+	v *viper.Viper, keyPath string,
+) (signature.Verifier, error) {
+	if keyPath == "" {
+		keyPath = v.GetString(keyVerifyKey)
+	}
+	if keyPath == "" {
+		return nil, fmt.Errorf(
+			"no verification key configured: pass --key or set verify.key in the config")
+	}
+	pemBytes, err := os.ReadFile(keyPath) // #nosec G304 -- user-chosen key file
+	if err != nil {
+		return nil, fmt.Errorf("reading verification key: %w", err)
+	}
+	return signing.LoadVerifier(pemBytes)
 }
