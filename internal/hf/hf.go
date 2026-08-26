@@ -27,6 +27,7 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -242,6 +243,22 @@ func safeRepoPath(p string) bool {
 	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, "\\") {
 		return false
 	}
+	// A percent sign is refused outright rather than decoded and
+	// re-inspected. %2e%2e/%2e%2e/ passes every check made on literal
+	// segments below, and a server that decodes before it normalises
+	// resolves it exactly as the plain form would, so inspecting only what
+	// is written leaves the guard reading a different path from the one the
+	// server will act on. No file this client fetches needs one.
+	if strings.ContainsRune(p, '%') {
+		return false
+	}
+	// Control bytes never appear in a published filename, and this path is
+	// printed to a terminal before anything parses it.
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
 	if path.Clean(p) != p {
 		return false
 	}
@@ -251,6 +268,23 @@ func safeRepoPath(p string) bool {
 		}
 	}
 	return true
+}
+
+// resolveURL builds a file's download URL with the path escaped by the URL
+// encoder rather than pasted in. Concatenating leaves whatever the
+// repository wrote in the request line verbatim, so a path this client
+// accepted as literal text could still reach the server as something else
+// once decoded.
+func resolveURL(endpoint, repo, rev, file string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parsing the endpoint %q: %w", endpoint, err)
+	}
+	// Assigning Path and leaving RawPath unset makes String escape each
+	// segment once, from the decoded form.
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + repo + "/resolve/" + rev + "/" + file
+	u.RawPath = ""
+	return u.String(), nil
 }
 
 func revOrMain(rev string) string {
@@ -471,7 +505,11 @@ func (c *Client) resolveRepo(ctx context.Context, ref Ref) (Resolution, error) {
 // come from rather than whatever main holds when the two calls land on
 // either side of a push. An empty rev reads from main.
 func (c *Client) FetchSmall(ctx context.Context, ref Ref, rev, name string) ([]byte, error) {
-	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + revOrMain(rev) + "/" + name
+	target, err := resolveURL(c.endpoint(), ref.Repo, revOrMain(rev), name)
+	if err != nil {
+		return nil, err
+	}
+	url := target
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -633,8 +671,11 @@ func (c *Client) attempt(ctx context.Context, ref Ref, rev string, f File, parti
 
 // stream performs the ranged GET, appending to the partial file.
 func (c *Client) stream(ctx context.Context, ref Ref, rev string, f File, partial string, offset *int64, hasher *hash.Hash, ev Events) (retErr error) {
-	url := c.endpoint() + "/" + ref.Repo + "/resolve/" + revOrMain(rev) + "/" + f.Path
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	target, err := resolveURL(c.endpoint(), ref.Repo, revOrMain(rev), f.Path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
