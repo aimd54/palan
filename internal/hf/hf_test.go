@@ -717,3 +717,57 @@ func TestResolveAsksForTheLicenceOnce(t *testing.T) {
 		t.Errorf("resolved %d files (%+v), want the licence exactly once", len(res.Files), res.Files)
 	}
 }
+
+// TestSafeRepoPathRejectsAnEncodedWalk: checking only literal ".."
+// segments reads a different path from the one the server acts on. A
+// server that percent-decodes before it normalises resolves
+// %2e%2e/%2e%2e/ exactly as the plain form, so a guard that inspects only
+// what is written lets through the very thing it exists to stop.
+func TestSafeRepoPathRejectsAnEncodedWalk(t *testing.T) {
+	for _, p := range []string{
+		"%2e%2e/%2e%2e/victim/secret.safetensors",
+		"..%2f..%2fvictim/secret.safetensors",
+		"%2E%2E/x",
+		"a%00b",
+		"nul\x00l",
+		"bell\x07",
+	} {
+		if safeRepoPath(p) {
+			t.Errorf("safeRepoPath(%q) = true, want false", p)
+		}
+	}
+	// Paths a repository legitimately publishes must still pass, or the
+	// guard would be passing by refusing everything.
+	for _, p := range []string{
+		"model.safetensors",
+		"onnx/model.safetensors",
+		"a b/c.gguf",
+		"model-00001-of-00002.safetensors",
+	} {
+		if !safeRepoPath(p) {
+			t.Errorf("safeRepoPath(%q) = false, want true", p)
+		}
+	}
+}
+
+// TestResolveURLEscapesThePathItIsGiven: the fetch URL was concatenated,
+// so whatever a repository wrote reached the request line verbatim. Built
+// through the URL encoder, a path is escaped once from its decoded form,
+// which makes the bytes on the wire the bytes that were checked.
+func TestResolveURLEscapesThePathItIsGiven(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"onnx/model.safetensors", "https://hf.example/org/repo/resolve/main/onnx/model.safetensors"},
+		{"a b/c.gguf", "https://hf.example/org/repo/resolve/main/a%20b/c.gguf"},
+		// Refused by safeRepoPath before it reaches here; escaped anyway,
+		// so the two defences do not depend on each other.
+		{"%2e%2e/x", "https://hf.example/org/repo/resolve/main/%252e%252e/x"},
+	} {
+		got, err := resolveURL("https://hf.example", "org/repo", "main", tc.in)
+		if err != nil {
+			t.Fatalf("resolveURL(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("resolveURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
