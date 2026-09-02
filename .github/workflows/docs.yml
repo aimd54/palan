@@ -3,25 +3,17 @@
 
 # Markdown linting, split out from the CI workflow so that documentation
 # changes do not drag the Go build, test, and interop suites along with them.
-# CI ignores the same paths this workflow claims, so exactly one of the two
-# runs for a documentation-only change and both run for a mixed one.
+# It runs for every change rather than only for the ones that touch markdown:
+# the lint takes seconds, and a check that reports every time is one a branch
+# rule can require, where a path-filtered one would leave code-only changes
+# waiting on a verdict that never arrives.
 
 name: Docs
 
 on:
   push:
     branches: [main]
-    paths:
-      - "**.md"
-      - "docs/**"
-      - ".markdownlint-cli2.yaml"
-      - ".github/workflows/docs.yml"
   pull_request:
-    paths:
-      - "**.md"
-      - "docs/**"
-      - ".markdownlint-cli2.yaml"
-      - ".github/workflows/docs.yml"
 
 # Default to no permissions; the job requests exactly what it needs.
 permissions: {}
