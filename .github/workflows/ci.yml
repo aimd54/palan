@@ -31,7 +31,11 @@ concurrency:
 
 jobs:
   # Which halves of the tree a change touches, so the jobs below can stand
-  # down without the workflow having to skip.
+  # down without the workflow having to skip. The filter starts by matching
+  # everything and then subtracts: a set built only from exclusions matches
+  # no file and still reports true, which reads as "there is code here" for
+  # every change and quietly runs the whole suite against a typo in a
+  # heading.
   changes:
     name: Detect changes
     runs-on: ubuntu-24.04
@@ -50,7 +54,9 @@ jobs:
         with:
           filters: |
             code:
-              - '!**.md'
+              - '**'
+              - '!*.md'
+              - '!**/*.md'
               - '!docs/**'
 
   lint:
