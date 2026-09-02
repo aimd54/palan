@@ -207,6 +207,72 @@ otherwise be trusted.
 This is the recommended configuration once your pipeline signs everything;
 palan ships it opt-in.
 
+## Trust policy
+
+`verify.key` names one key trusted for everything. A registry that carries
+models from more than one publisher needs a finer answer: which identity
+may sign which reference. A trust policy answers it, configured under
+`verify.policy` as an ordered list of rules:
+
+```yaml
+verify:
+  required: true
+  policy:
+    - pattern: registry.internal/llm/*
+      keys:
+        - /etc/palan/team-a.pub
+    - pattern: registry.internal/**
+      keys:
+        - /etc/palan/vendor.pub
+        - /etc/palan/vendor-next.pub
+```
+
+Each rule pairs a pattern with the keys allowed to sign what it matches.
+Rules are tried in order, and the first pattern that matches a reference
+decides; nothing further down the list is consulted, so an operator writes
+the narrowest pattern first and the broadest one last. Above, anything
+under `llm/` answers to team-a's key alone; every other repository under
+`registry.internal` falls through to the vendor keys.
+
+A pattern matches `registry/repository`, never the tag. A tag moves, so a
+policy keyed to one would be re-pointable by whoever can push a tag next,
+which is the opposite of what a policy is for.
+
+Within one segment, `*` matches any run of characters that does not cross a
+slash, so it matches exactly one path element: `registry.internal/llm/*`
+matches `registry.internal/llm/qwen3` but not
+`registry.internal/llm/team/qwen3`. A segment that is exactly `**` matches
+any number of segments, including none, and it is the only form that can
+span a slash. An operator who means "everything under this registry"
+writes `registry.internal/**`. Writing `registry.internal/*` instead
+matches only a repository with nothing nested under it, so every model one
+level deeper is refused: the mistake is a lockout, not a bypass.
+
+A rule may list more than one key. Any one of them verifying is enough, so
+rotating a signing key is naming the outgoing and incoming key in the same
+rule and dropping the outgoing one once nothing still carries its
+signature.
+
+A reference that no pattern matches is refused, and the refusal names the
+reference and lists every pattern the policy holds, so a typo or a missing
+rule is visible rather than guessed at. `verify.policy` set but empty is
+refused the same way rather than read as "nothing may sign here": a key
+with no rule under it is a half-finished edit far more often than it is a
+deliberate lockdown. A pattern built from more than four `**` segments is
+also refused, which keeps matching a bounded operation regardless of what
+a rule author writes.
+
+Configuring `verify.policy` replaces `verify.key` outright: once a policy
+is set, `verify.key` is never consulted, matched or not. `--key` on the
+command line overrides both for that one invocation, since a flag someone
+typed is a deliberate act that the standing configuration yields to.
+
+A model's source attestation, where one exists, is checked against the
+identity that verified its signature, not against every key the policy
+allows for that reference: a statement signed by a different holder does
+not pass just because that holder also appears elsewhere in the same
+policy.
+
 ## Registry authentication
 
 - `palan login REGISTRY` validates credentials and stores them in the
