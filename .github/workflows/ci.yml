@@ -3,20 +3,15 @@
 
 name: CI
 
-# Documentation-only changes skip this workflow entirely; markdown linting
-# lives in docs.yml, which claims the same paths this one ignores. A change
-# touching both docs and code still runs here, because a path filter only
-# skips when every changed file matches it.
+# This workflow always starts, and decides per job whether there is anything
+# to do. A path filter on the trigger would skip the workflow outright, and a
+# check that never reports cannot be required: a branch rule waiting on it
+# would block every documentation-only change forever. A job skipped by its
+# own condition still reports, and counts as passing.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   # A run that never started cannot be re-run, and a push event is not
   # replayable, so a commit whose run was lost has no other way back to a
   # verdict short of an empty commit.
@@ -35,8 +30,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which halves of the tree a change touches, so the jobs below can stand
+  # down without the workflow having to skip.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -81,6 +101,8 @@ jobs:
 
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -104,6 +126,8 @@ jobs:
 
   e2e:
     name: End-to-end and interop
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -179,6 +203,8 @@ jobs:
 
   govulncheck:
     name: Vulnerability scan
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -196,3 +222,27 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./...
+
+  # One check to require. It reports for every pull request, including one
+  # that touched no code at all, and refuses unless every job above either
+  # passed or stood down. Requiring the jobs individually would work too,
+  # until someone adds a fifth and forgets to add it to the branch rule.
+  gate:
+    name: CI gate
+    needs: [changes, lint, test, e2e, govulncheck]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refuse unless every job above passed or stood down
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "a job this gate covers reported $r"; exit 1 ;;
+            esac
+          done
