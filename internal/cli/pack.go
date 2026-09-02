@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -353,22 +354,26 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			info.signer = stmt.KeyID
 		}
 
-		for j, f := range res.Files {
+		// Tracks, within this reference, the repository path that claimed
+		// each destination, so a second path the filesystem folds onto the
+		// same file is caught rather than silently overwriting it.
+		written := make(map[string]string, len(res.Files))
+		for _, f := range res.Files {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Fetching %s (%s)\n", f.Path, humanBytes(f.Size))
-			// One directory per file. Download names the file by its
-			// basename, so two files a repository publishes under
-			// different directories with the same name would otherwise
-			// land on one path and the second would overwrite the first:
-			// two layers would then be hashed from one file's bytes while
-			// each carried the other's origin digest and source path, and
-			// the artifact would be signed and attested as genuine. This
-			// is the same separation srcDir already gives two references,
-			// applied to the files within one.
-			fileDir := filepath.Join(srcDir, strconv.Itoa(j))
+			// Laid out by repository path so a shard index and its shards
+			// land as siblings again.
+			fileDir, err := repoFileDir(srcDir, ref.Repo, f.Path)
+			if err != nil {
+				return nil, info, err
+			}
 			if err := os.MkdirAll(fileDir, 0o750); err != nil {
 				return nil, info, err
 			}
-			path, err := client.Download(ctx, ref, res.Revision, f, fileDir, hf.Events{})
+			dest := filepath.Join(fileDir, filepath.Base(f.Path))
+			if err := claimDest(written, ref.Repo, f.Path, dest); err != nil {
+				return nil, info, err
+			}
+			localPath, err := client.Download(ctx, ref, res.Revision, f, fileDir, hf.Events{})
 			if err != nil {
 				return nil, info, err
 			}
@@ -382,7 +387,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			// the one path this check skips, by exact name, rather than
 			// by any broader rule.
 			if stmt != nil && f.Path != omsig.FileName {
-				sum, err := fileSHA256(path)
+				sum, err := fileSHA256(localPath)
 				if err != nil {
 					return nil, info, err
 				}
@@ -397,7 +402,7 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 				info.originSHA256 = "sha256:" + f.SHA256
 			}
 			out = append(out, pack.File{
-				Path:           path,
+				Path:           localPath,
 				Name:           filepath.Base(f.Path),
 				OriginSHA256:   f.SHA256,
 				SourceRepo:     sourceRepo(client, ref),
@@ -407,6 +412,69 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 		}
 	}
 	return out, info, nil
+}
+
+// repoFileDir turns a file's repository-relative path into the directory
+// Download should write it under: srcDir joined with the path's own
+// directory part, so files a repository publishes side by side stay
+// siblings on disk and only two files sharing a full repository path could
+// still land on the same destination.
+//
+// repoPath is publisher-supplied text reaching this from a remote API, so it
+// is checked here rather than trusted, the same way gatherSafetensorsShards
+// refuses a shard name that is not a plain file beside the index: an
+// absolute path, a ".." component, a backslash, or anything else path.Clean
+// would rewrite is refused outright rather than joined and hoped clean.
+// internal/hf's safeRepoPath is the primary guard against a hostile path,
+// applied in listFiles and pathsInfo before resolveSources ever sees a
+// result, and stricter than this one: it also refuses "%" and control
+// bytes. This check exists on top of it because nothing enforces that a
+// path reaching here went through that one.
+func repoFileDir(srcDir, repo, repoPath string) (string, error) {
+	refused := fmt.Errorf("%s published %q, which is not a path inside the repository", repo, repoPath)
+	if repoPath == "" || strings.HasPrefix(repoPath, "/") || strings.Contains(repoPath, `\`) {
+		return "", refused
+	}
+	if path.Clean(repoPath) != repoPath {
+		return "", refused
+	}
+	for _, seg := range strings.Split(repoPath, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", refused
+		}
+	}
+	return filepath.Join(srcDir, filepath.FromSlash(path.Dir(repoPath))), nil
+}
+
+// claimDest registers dest as repoPath's destination within one reference,
+// refusing when the filesystem already reports something there. srcDir
+// starts empty for this invocation and every repository path in one
+// reference is distinct, so an occupied destination can only be another
+// repository path this call already wrote, resolved onto the same file by
+// a filesystem that folds case or Unicode normalisation, such as APFS or
+// NTFS. Asking the filesystem this way catches that on whatever filesystem
+// is actually in use, without normalising repoPath here.
+func claimDest(written map[string]string, repo, repoPath, dest string) error {
+	fi, err := os.Stat(dest)
+	if os.IsNotExist(err) {
+		written[dest] = repoPath
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for d, prior := range written {
+		pi, statErr := os.Stat(d)
+		if statErr != nil {
+			continue
+		}
+		if os.SameFile(fi, pi) {
+			return fmt.Errorf("%s published both %q and %q, and this filesystem cannot hold them apart as two files",
+				repo, prior, repoPath)
+		}
+	}
+	return fmt.Errorf("%s published %q, and %s already holds a file this run did not put there",
+		repo, repoPath, dest)
 }
 
 // sourceRepo names a repository the way a reader outside palan would: the
