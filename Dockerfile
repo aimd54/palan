@@ -5,7 +5,7 @@
 # (see docs/guides/kubernetes.md): `palan pull $MODEL --output /models`
 # into an emptyDir.
 
-FROM golang:1.27@sha256:65b6f280bf050ec5af12716857e8ea8439d694dbba8f31ceeb7630670071f2bb AS build
+FROM golang:1.27@sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
