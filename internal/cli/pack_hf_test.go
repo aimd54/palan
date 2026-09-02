@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -23,6 +25,8 @@ import (
 	"github.com/aimd54/palan/internal/omsig"
 	"github.com/aimd54/palan/internal/omsig/omsigtest"
 	"github.com/aimd54/palan/internal/pack"
+	"github.com/aimd54/palan/internal/safetensors"
+	"github.com/aimd54/palan/internal/safetensors/safetensorstest"
 	"github.com/aimd54/palan/internal/store"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
@@ -824,5 +828,222 @@ func TestPackRecordsOneOriginNotTwo(t *testing.T) {
 	}
 	if strings.Contains(info.sourceURL, "huggingface.co") {
 		t.Errorf("source URL = %q, but nothing was fetched from huggingface.co", info.sourceURL)
+	}
+}
+
+// tinyShard builds a minimal but real safetensors container, small enough
+// for a fixture and large enough for the format's own reader to parse.
+func tinyShard(tensorName string) []byte {
+	return safetensorstest.Shard(safetensorstest.Tensor{
+		Name: tensorName, DType: "BF16", Shape: []int64{8, 8},
+	})
+}
+
+// layerFilepaths reads the org.cncf.model.filepath annotation off every
+// layer in a manifest, which is where a packed file's name lands.
+func layerFilepaths(manifest ocispec.Manifest) map[string]bool {
+	out := make(map[string]bool, len(manifest.Layers))
+	for _, l := range manifest.Layers {
+		out[l.Annotations[modelspec.AnnotationFilepath]] = true
+	}
+	return out
+}
+
+// TestPackWholeSafetensorsRepositoryEndToEnd packs a single-file
+// safetensors repository through the pack command itself, not just
+// resolveSources. Every other hf:// safetensors test in this file stops at
+// the resolved file list and never calls pack, so a resolve that looked
+// right but left config.json unreachable from the weight file's directory
+// would still pass the whole suite while the command failed for every user.
+func TestPackWholeSafetensorsRepositoryEndToEnd(t *testing.T) {
+	hub := hftest.New(t, map[string][]byte{
+		"model.safetensors": tinyShard("w"),
+		"config.json":       []byte(`{"architectures":["Qwen3ForCausalLM"],"max_position_embeddings":4096}`),
+	})
+	t.Setenv("HF_ENDPOINT", hub.URL())
+	home := t.TempDir()
+	t.Setenv(store.EnvHome, home)
+
+	cmd := newPackCmd(viper.New())
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"hf://org/repo", "-t", "registry.example/llm/tiny-st:v1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("pack exited with an error: %v", err)
+	}
+
+	st, err := store.Open(t.Context(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := st.Resolve(t.Context(), "registry.example/llm/tiny-st:v1")
+	if err != nil {
+		t.Fatalf("the packed artifact is not in the store: %v", err)
+	}
+	manifest, err := store.FetchManifest(t.Context(), st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetching the packed manifest: %v", err)
+	}
+	names := layerFilepaths(manifest)
+	for _, want := range []string{"model.safetensors", "config.json"} {
+		if !names[want] {
+			t.Errorf("packed artifact does not carry %s; layers: %v", want, names)
+		}
+	}
+}
+
+// TestPackShardedSafetensorsRepositoryEndToEnd packs a sharded safetensors
+// repository through the pack command. The shard index is stated at the
+// repository root, and gatherSafetensorsShards stats each shard beside it,
+// so this fails a step earlier than the single-file case when the fetched
+// files do not land beside each other.
+func TestPackShardedSafetensorsRepositoryEndToEnd(t *testing.T) {
+	shard1 := tinyShard("t1")
+	shard2 := tinyShard("t2")
+	// total_size counts tensor bytes only; each shard file also carries its
+	// own header, so the true bytes on disk comfortably clear this figure,
+	// the same margin internal/pack's own sharded fixtures rely on.
+	index := `{"metadata":{"total_size":256},"weight_map":{"t1":"model-00001-of-00002.safetensors","t2":"model-00002-of-00002.safetensors"}}`
+	hub := hftest.New(t, map[string][]byte{
+		safetensors.IndexName:              []byte(index),
+		"model-00001-of-00002.safetensors": shard1,
+		"model-00002-of-00002.safetensors": shard2,
+		safetensors.ConfigName:             []byte(`{"architectures":["Qwen3ForCausalLM"],"max_position_embeddings":4096}`),
+	})
+	t.Setenv("HF_ENDPOINT", hub.URL())
+	home := t.TempDir()
+	t.Setenv(store.EnvHome, home)
+
+	cmd := newPackCmd(viper.New())
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"hf://org/repo", "-t", "registry.example/llm/tiny-sharded:v1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("pack exited with an error: %v", err)
+	}
+
+	st, err := store.Open(t.Context(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := st.Resolve(t.Context(), "registry.example/llm/tiny-sharded:v1")
+	if err != nil {
+		t.Fatalf("the packed artifact is not in the store: %v", err)
+	}
+	manifest, err := store.FetchManifest(t.Context(), st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("fetching the packed manifest: %v", err)
+	}
+	names := layerFilepaths(manifest)
+	for _, want := range []string{
+		"model-00001-of-00002.safetensors",
+		"model-00002-of-00002.safetensors",
+		safetensors.IndexName,
+		safetensors.ConfigName,
+	} {
+		if !names[want] {
+			t.Errorf("packed artifact does not carry %s; layers: %v", want, names)
+		}
+	}
+
+	// Both names being present is not enough: if the two shards had
+	// collapsed onto one file on disk, both layers would carry that one
+	// file's digest under their own name and origin annotation, and the
+	// assertion above would still pass.
+	digests := map[string]digest.Digest{}
+	for _, l := range manifest.Layers {
+		digests[l.Annotations[modelspec.AnnotationFilepath]] = l.Digest
+	}
+	d1, d2 := digests["model-00001-of-00002.safetensors"], digests["model-00002-of-00002.safetensors"]
+	if d1 == "" || d2 == "" {
+		t.Fatalf("could not find both shard layers; layers: %v", names)
+	}
+	if d1 == d2 {
+		t.Errorf("both shards carry digest %s: they collapsed onto one file", d1)
+	}
+}
+
+// TestRepoFileDirRefusesAPathEscapingItsDirectory: a file's repository-relative
+// path is publisher-supplied text arriving from a remote API, and it becomes
+// half of a local filesystem path once a directory is laid out per file. An
+// absolute path, a ".." component, or a backslash must be refused outright
+// rather than joined and hoped clean, the same way gatherSafetensorsShards
+// refuses a shard name that is not a plain file beside the index.
+func TestRepoFileDirRefusesAPathEscapingItsDirectory(t *testing.T) {
+	srcDir := t.TempDir()
+	for _, bad := range []string{
+		"../evil.bin",
+		"a/../../evil.bin",
+		"/etc/passwd",
+		"a/./b.bin",
+		"",
+	} {
+		_, err := repoFileDir(srcDir, "org/repo", bad)
+		if err == nil {
+			t.Errorf("repoFileDir(%q) succeeded, want a refusal", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not a path inside the repository") {
+			t.Errorf("repoFileDir(%q) error = %q, want it to name the refusal rather than a generic error", bad, err)
+		}
+	}
+}
+
+// TestClaimDestRefusesRepositoryPathsThatResolveToOneFile covers two
+// repository paths differing only in case, such as an index naming
+// Model-A.safetensors and model-a.safetensors, which a case-insensitive
+// filesystem such as APFS or NTFS resolves to one file. Where the
+// filesystem folds them itself, writing the first destination already
+// creates the second and the condition is the real one; where it does not,
+// a hard link stands in, making destB name the exact file destA does.
+// Either way claimDest sees two destinations that are one file, which is
+// what it must detect regardless of how they got that way.
+func TestClaimDestRefusesRepositoryPathsThatResolveToOneFile(t *testing.T) {
+	dir := t.TempDir()
+	destA := filepath.Join(dir, "Model-A.safetensors")
+	destB := filepath.Join(dir, "model-a.safetensors")
+	if err := os.WriteFile(destA, []byte("weights"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(destB); os.IsNotExist(err) {
+		if err := os.Link(destA, destB); err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
+
+	written := map[string]string{destA: "Model-A.safetensors"}
+	err := claimDest(written, "org/repo", "model-a.safetensors", destB)
+	if err == nil {
+		t.Fatal("claimDest succeeded for two paths resolving to one file, want a refusal")
+	}
+	for _, want := range []string{"Model-A.safetensors", "model-a.safetensors"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestClaimDestAllowsDistinctFiles proves claimDest does not refuse two
+// repository paths whose destinations are genuinely different files, so the
+// collision check above is catching an actual collision and not merely
+// refusing a second file on principle. It claims and writes each
+// destination in the same order resolveSources does, since claimDest is
+// meant to run before the file it guards exists on disk.
+func TestClaimDestAllowsDistinctFiles(t *testing.T) {
+	dir := t.TempDir()
+	destA := filepath.Join(dir, "a.safetensors")
+	destB := filepath.Join(dir, "b.safetensors")
+
+	written := map[string]string{}
+	if err := claimDest(written, "org/repo", "a.safetensors", destA); err != nil {
+		t.Fatalf("claimDest: %v", err)
+	}
+	if err := os.WriteFile(destA, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := claimDest(written, "org/repo", "b.safetensors", destB); err != nil {
+		t.Fatalf("claimDest: %v", err)
 	}
 }
