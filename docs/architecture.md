@@ -356,6 +356,13 @@ Three consumption patterns, from least- to most-coupled. The
   reaches the store, `run` before deciding to fetch, and `serve` each time a
   model is loaded. The last one is what covers a store changed after import,
   since the others only see content on its way in.
+- `verify.policy` decides *which* identity may sign *which* reference, where
+  `verify.key` trusts one key for everything. Rules pair a pattern over
+  `registry/repository` with the keys allowed to sign what it matches, the
+  first match decides, and a reference no rule names is refused. A
+  companion `verify.sources` names the key a source repository must have
+  signed its own published digests with, so an import is checked because the
+  host is configured rather than because an operator remembered a flag.
 
 See the [Security guide](guides/security.md) for signing workflows,
 authentication, and TLS configuration, and

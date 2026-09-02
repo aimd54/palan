@@ -49,6 +49,56 @@ Because the signature covers files a repository hosts, `--oms-key` only
 applies to `hf://` sources: a PATH list holding a local file is refused
 rather than packed with part of the artifact unverified.
 
+A host can name that key once instead of relying on every operator to type
+`--oms-key` by hand. `verify.sources` names, per pattern, the key a Hugging
+Face repository must be signed with:
+
+```yaml
+verify:
+  sources:
+    - pattern: org/**
+      oms-key: /etc/palan/org.pub
+```
+
+The pattern matches the `org/repo` of an `hf://` reference, never a
+revision or a filename, and the first pattern that matches a reference
+wins, the same as [Trust policy](#trust-policy)'s `verify.policy`. An
+explicit `--oms-key` on the command line always wins outright: when it is
+given, no rule is consulted. A malformed `verify.sources` still refuses
+every `pack`, including one that passed the flag, because the rules are
+read before any source is looked at. Once a rule does match,
+everything `--oms-key` already enforces still applies: a repository
+publishing no signature is refused, a file the signature omits is refused,
+and bytes that hash differently are refused.
+
+`verify.sources` supplies a key; it does not gate. A source that no rule
+names is imported with no publisher-signature check at all, exactly as
+though `--oms-key` had never been passed, whether that source is a local
+`pack ./dir` or a Hugging Face repository nobody has written a rule for
+yet. This is the opposite of `verify.policy` under
+[Trust policy](#trust-policy), which refuses a reference no pattern
+matches: a policy decides who may sign, while this decides only which key
+to check when one applies. `verify.sources` set to an empty list is
+refused, on the same reasoning that section gives, and deleting the rules
+while leaving `verify.sources:` behind reads as no rules at all, so every
+import goes unchecked while the file still looks configured. Remove the
+key rather than emptying it.
+
+An artifact records one signer, so the key is settled across the whole
+argument list before anything downloads. A rule that names a key while a
+local file, or a repository no rule names, sits in the same invocation is
+refused: the signature covers the files that one repository published, so
+anything beside them is covered by nothing, and packing it anyway would put
+bytes no signature reaches into an artifact whose manifest names the key as
+having vouched for it. Two rules naming different keys for two repositories
+in one invocation are refused for the same reason, since only one of the
+two could be recorded. Pack them separately, or name every source in one
+rule's pattern.
+
+An import under a rule says which repository it held against which key, and
+an import no rule names says that nothing was checked, so a pattern that
+silently matches nothing does not look like a pattern that matched.
+
 ## Signing models
 
 Signatures are cosign-compatible and **work fully offline**, with no
@@ -145,8 +195,10 @@ repository, path and commit but no published digest, because there was none
 to check against. An artifact packed entirely from local files carries no
 attestation at all, which is not a failure: there is no upstream to name.
 
-Verifying a model that carries no attestation stays a success. Requiring one
-is a policy question, and the policy layer is on the roadmap.
+Verifying a model that carries no attestation stays a success. Requiring
+one is a separate question from who may sign: the trust policy below names
+the identities allowed to sign a reference, and refusing a model that
+carries no statement about where its files came from is still ahead.
 
 There is one case worth knowing about, because it is quiet. Verification
 answers from the local store whenever the store holds the model and its
@@ -212,7 +264,13 @@ palan ships it opt-in.
 `verify.key` names one key trusted for everything. A registry that carries
 models from more than one publisher needs a finer answer: which identity
 may sign which reference. A trust policy answers it, configured under
-`verify.policy` as an ordered list of rules:
+`verify.policy` as an ordered list of rules.
+
+A policy decides *who* may sign, not *whether* anything is checked. On a
+host where `verify.required` is false and no command passes `--verify`,
+`pull`, `load`, `run` and `serve` verify nothing and consult no rule,
+which is why the example below turns it on. `palan verify` asks either
+way, since checking is the whole of what it does.
 
 ```yaml
 verify:
@@ -255,17 +313,36 @@ signature.
 
 A reference that no pattern matches is refused, and the refusal names the
 reference and lists every pattern the policy holds, so a typo or a missing
-rule is visible rather than guessed at. `verify.policy` set but empty is
-refused the same way rather than read as "nothing may sign here": a key
-with no rule under it is a half-finished edit far more often than it is a
-deliberate lockdown. A pattern built from more than four `**` segments is
+rule is visible rather than guessed at. `verify.policy` set to an empty list is
+refused the same way rather than read as "nothing may sign here": a list
+with no rule in it is a half-finished edit far more often than it is a
+deliberate lockdown. Deleting the rules but leaving `verify.policy:` behind
+with nothing after it reads as no policy at all, and `verify.key` governs
+again, so remove the whole block rather than emptying it. A pattern built
+from more than four `**` segments is
 also refused, which keeps matching a bounded operation regardless of what
 a rule author writes.
 
+The keys a rule names are read from disk each time a reference is
+verified rather than held from startup, so replacing or removing a key
+file changes what verifies without restarting `serve`. That takes effect
+the next time a model is loaded, not on the next request: `serve` checks
+at load, so a model already resident keeps answering under the key it was
+admitted with until it is evicted. Removing a key file is not a way to cut
+off a model that is already serving.
+
+Holding a model's source attestation to the identity that signed the model
+is something `palan verify` does. The gates at `pull`, `load`, `run` and
+`serve` check the signature against the policy and stop there, so a model
+whose attestation was signed by a different key the same rule allows passes
+them and is caught by an explicit `palan verify`.
+
 Configuring `verify.policy` replaces `verify.key` outright: once a policy
-is set, `verify.key` is never consulted, matched or not. `--key` on the
-command line overrides both for that one invocation, since a flag someone
-typed is a deliberate act that the standing configuration yields to.
+is set, `verify.key` is never consulted, matched or not. `--verify-key` on
+the command line overrides both for that one invocation, since a key
+someone typed is a deliberate act that the standing configuration yields
+to. On `sign` and `verify`, where the key is the whole point of the
+command, the same flag is spelled `--key`.
 
 A model's source attestation, where one exists, is checked against the
 identity that verified its signature, not against every key the policy

@@ -35,8 +35,21 @@ serve:
 
 verify:
   required: false              # verify signatures on every pull
-  key: ""                      # public key used when --verify-key is not passed
+  key: ""                      # public key, when no policy names one per reference
+  # policy:                    # rules of pattern + keys; a set policy replaces key
+  # sources:                   # rules of pattern + oms-key, for hf:// imports
 ```
+
+Both list keys are absent by default, and neither accepts an empty list:
+written as `policy: []` the load is refused, so a host that wants no policy
+leaves the key out entirely.
+
+`verify.policy` maps reference patterns to the keys allowed to sign them,
+and once it names any rule `verify.key` is no longer consulted.
+`verify.sources` names the key a Hugging Face repository must have signed
+its own published file digests with, so `pack --oms-key` need not be passed
+by hand. Both are described in the [security
+guide](../guides/security.md).
 
 ## Related environment variables
 

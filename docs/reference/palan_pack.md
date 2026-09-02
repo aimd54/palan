@@ -85,7 +85,7 @@ palan pack PATH... -t REF [flags]
   -h, --help                   help for pack
       --license string         SPDX license expression (default: the GGUF header's general.license; safetensors publishes none)
       --ngl int                default GPU layer count for serving; unset means serve passes no --n-gpu-layers (io.palan.serve.defaults)
-      --oms-key string         public key (PEM) that must have signed the source repository's own file digests
+      --oms-key string         public key (PEM) that must have signed the source repository's own file digests (default: the key verify.sources names for it)
       --origin-sha256 string   SHA-256 of the original upstream file (default: the weight digest)
       --profile string         output profile: artifact|car|both (default "artifact")
       --push                   push to the registry after packing

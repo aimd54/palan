@@ -33,6 +33,7 @@ const (
 	keyVerifyRequired = "verify.required"
 	keyVerifyKey      = "verify.key"
 	keyVerifyPolicy   = "verify.policy"
+	keyVerifySources  = "verify.sources"
 )
 
 func newSignCmd(v *viper.Viper) *cobra.Command {
