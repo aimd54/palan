@@ -21,7 +21,7 @@ and refuses anything else, for the reasons in
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
 | M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
-| M10 | Trust policy (which identities may sign which references) | ☐ planned |
+| M10 | Trust policy (which identities may sign which references) | ☑ shipped; enforced at the same four points as `verify.required`, each checked to leave the store or the served spec untouched on a refusal |
 | M11 | Keyless verification from carried material (no network, no log) | ☐ planned |
 | M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
 | M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
@@ -32,9 +32,11 @@ on any host, connected or not. Signing and verification exist today (M6);
 M8 adds the stretch before signing, checking a publisher's own digests and,
 when a key is supplied, their signature as well; M9 makes that stretch
 portable, stating in a signed form which upstream file each layer holds so
-the claim survives leaving the machine that packed it. What remains is a
-policy above one key, the carried material that lets it hold with no network,
-and the surfaces that show and enforce the result, described under
+the claim survives leaving the machine that packed it; M10 puts a policy
+above the single key, naming which identities may sign which references
+rather than trusting one key for everything a registry holds. What remains
+is the carried material that lets verification hold with no network, and
+the surfaces that show and enforce the result, described under
 [Planned milestones](#planned-milestones). Work that waits on infrastructure
 rather than on code sits outside that sequence, under
 [Ecosystem validations](#ecosystem-validations).
@@ -110,17 +112,6 @@ a Kubernetes cluster, and a GPU host:
 In dependency order. Each lands the way the shipped ones did: with tests
 that were seen to fail before the change, and validations recorded above
 once they run against real infrastructure.
-
-### M10: a trust policy over identities
-
-Verification answers whether the configured key signed the model; a registry
-with more than one publisher asks which identities may sign which
-references. M10 adds a policy mapping reference patterns to the identities
-allowed to sign them, covering cosign keys and OpenSSF model-signing
-identities, enforced at the four points `verify.required` already covers:
-`pull`, `load`, `run` and `serve`. Accepted when a model signed by a valid
-key the policy does not name for that reference refuses, while the same
-signature verifies under its own pattern.
 
 ### M11: keyless verification from carried material
 
