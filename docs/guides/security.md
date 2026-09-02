@@ -323,6 +323,16 @@ from more than four `**` segments is
 also refused, which keeps matching a bounded operation regardless of what
 a rule author writes.
 
+A policy is read when a reference is about to be verified, not when the
+process starts, so a rule with a pattern the loader cannot accept is
+reported at the first verification rather than at launch. On a host where
+`verify.required` is false and no command passes `--verify`, or on a
+command given `--verify-key`, nothing verifies and the policy is never
+read, so a malformed one sits unreported until something asks it a
+question. `verify.sources` behaves the other way round: `pack` reads it
+before looking at any source, so a malformed one refuses every import
+straight away.
+
 The keys a rule names are read from disk each time a reference is
 verified rather than held from startup, so replacing or removing a key
 file changes what verifies without restarting `serve`. That takes effect
