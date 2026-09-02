@@ -35,6 +35,12 @@ import (
 // sources, before pack.Options exists to carry it through.
 var omsKey string
 
+// verifySources holds the running command's verify.sources policy, for the
+// same reason omsKey is a package variable: resolveSources reads it
+// directly. RunE sets it before resolving sources and clears it again
+// before returning, so it never outlives one invocation.
+var verifySources *sourcePolicy
+
 func newPackCmd(v *viper.Viper) *cobra.Command {
 	var (
 		tag       string
@@ -127,6 +133,13 @@ modelcars; tagged REF-car), or "both".`,
 			if profile != "artifact" && profile != "car" && profile != "both" {
 				return fmt.Errorf("invalid --profile %q (artifact|car|both)", profile)
 			}
+
+			sp, err := loadSourcePolicy(v)
+			if err != nil {
+				return err
+			}
+			verifySources = sp
+			defer func() { verifySources = nil }()
 
 			files, fetched, err := resolveSources(ctx, cmd, args)
 			// Registered ahead of the error check: a refused import can
@@ -225,7 +238,7 @@ modelcars; tagged REF-car), or "both".`,
 	cmd.Flags().IntVar(&ctxSize, "ctx", 0, "default context size for serving (io.palan.serve.defaults)")
 	cmd.Flags().IntVar(&ngl, "ngl", 0, "default GPU layer count for serving; unset means serve passes no --n-gpu-layers (io.palan.serve.defaults)")
 	cmd.Flags().StringVar(&originSHA, "origin-sha256", "", "SHA-256 of the original upstream file (default: the weight digest)")
-	cmd.Flags().StringVar(&omsKey, "oms-key", "", "public key (PEM) that must have signed the source repository's own file digests")
+	cmd.Flags().StringVar(&omsKey, "oms-key", "", "public key (PEM) that must have signed the source repository's own file digests (default: the key verify.sources names for it)")
 	cmd.Flags().BoolVar(&doPush, "push", false, "push to the registry after packing")
 	must(cmd.MarkFlagRequired("tag"))
 	return cmd
@@ -239,8 +252,8 @@ type fetchedSources struct {
 	originSHA256 string
 	// signer identifies the key that verified the source repository's
 	// signature over its own file digests (sha256:<hex> of the public
-	// key), recorded as io.palan.origin.signer. Empty when --oms-key was
-	// not given, so no such signature was checked.
+	// key), recorded as io.palan.origin.signer. Empty when neither the flag
+	// nor a source rule named a key, so no such signature was checked.
 	signer string
 }
 
@@ -260,19 +273,26 @@ type fetchedSources struct {
 // published a signature over: a local path carries no such signature, and
 // packing one anyway, whether alone or mixed with a repository, would either
 // silently skip verification or annotate the whole artifact as vouched-for
-// when part of it never was. Both are worse than refusing, so this checks
-// every argument against the key before resolving or downloading any of
-// them.
+// when part of it never was. Both are worse than refusing, so a key on the
+// command line and a key a rule supplies are both checked against every
+// argument before anything resolves.
 func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]pack.File, fetchedSources, error) {
 	var info fetchedSources
-	if omsKey != "" {
-		for _, a := range args {
-			if !hf.IsRef(a) {
-				return nil, info, fmt.Errorf(
-					"--oms-key was given and %q is not a Hugging Face source: a supplied key can only be honoured for files a repository published a signature over, and a local file is not one of those",
-					a)
-			}
+	// The first argument that is not a repository, if any. A key covers the
+	// files a repository published a signature over, so a local file beside
+	// one cannot be held against it, whether the key arrived on the command
+	// line or from the configuration.
+	var localArg string
+	for _, a := range args {
+		if !hf.IsRef(a) {
+			localArg = a
+			break
 		}
+	}
+	if omsKey != "" && localArg != "" {
+		return nil, info, fmt.Errorf(
+			"--oms-key was given and %q is not a Hugging Face source: a supplied key can only be honoured for files a repository published a signature over, and a local file is not one of those",
+			localArg)
 	}
 	if !slices.ContainsFunc(args, hf.IsRef) {
 		out := make([]pack.File, 0, len(args))
@@ -280,6 +300,53 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 			out = append(out, pack.File{Path: a})
 		}
 		return out, info, nil
+	}
+
+	// One artifact records one io.palan.origin.signer, so the key has to be
+	// settled across the whole list before anything downloads. A list a
+	// policy covers only in part would otherwise annotate the artifact as
+	// vouched for by a key that never saw some of its bytes.
+	sourceKey := omsKey
+	var ruledRepo string
+	if sourceKey == "" && verifySources != nil {
+		var unruledRepo string
+		for _, a := range args {
+			if !hf.IsRef(a) {
+				continue
+			}
+			ref, perr := hf.ParseRef(a)
+			if perr != nil {
+				return nil, info, perr
+			}
+			key, ok := verifySources.keyFor(ref.Repo)
+			if !ok {
+				unruledRepo = ref.Repo
+				continue
+			}
+			if ruledRepo != "" && key != sourceKey {
+				return nil, info, fmt.Errorf(
+					"source rules name different key files for %s and %s, and one artifact records one signer: pack them separately, or name one key for both",
+					ruledRepo, ref.Repo)
+			}
+			ruledRepo, sourceKey = ref.Repo, key
+		}
+		if ruledRepo != "" && unruledRepo != "" {
+			return nil, info, fmt.Errorf(
+				"a source rule names a key for %s and none names %s: one artifact records one signer, so packing both would vouch for files no signature covers",
+				ruledRepo, unruledRepo)
+		}
+		if ruledRepo != "" && localArg != "" {
+			return nil, info, fmt.Errorf(
+				"a source rule names a key for %s and %q is not a Hugging Face source: a key can only be honoured for files a repository published a signature over, and a local file is not one of those",
+				ruledRepo, localArg)
+		}
+		// A configured policy that checked nothing looks exactly like no
+		// policy at all, so the import says which it was.
+		if ruledRepo != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Holding every fetched file against the signature its own repository published, checked with %s\n", sourceKey)
+		} else if unruledRepo != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "No source rule names %s, so no publisher signature was checked\n", unruledRepo)
+		}
 	}
 
 	tmp, err := os.MkdirTemp("", "palan-fetch-*")
@@ -322,9 +389,13 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 		// signature is fetched now, before anything downloads, so an
 		// unsigned repository is refused up front rather than after
 		// spending the transfer.
+		//
+		// Settled across the whole list above, so it is the same key for
+		// every reference here, and empty when nothing named one.
+		keyPath := sourceKey
 		var stmt *omsig.Statement
-		if omsKey != "" {
-			pem, err := os.ReadFile(omsKey) // #nosec G304 -- operator-supplied key path
+		if keyPath != "" {
+			pem, err := os.ReadFile(keyPath) // #nosec G304 -- operator- or policy-supplied key path
 			if err != nil {
 				return nil, info, fmt.Errorf("reading the verification key: %w", err)
 			}

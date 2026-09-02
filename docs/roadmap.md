@@ -21,7 +21,7 @@ and refuses anything else, for the reasons in
 | M7 | Format-neutral distribution (safetensors packing, serving scope stated) | ☑ shipped (ADR-0012); exercised against a published model, single-file and sharded, through a registry and an air gap |
 | M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
-| M10 | Trust policy (which identities may sign which references) | ☑ shipped; enforced at the same four points as `verify.required`, each checked to leave the store or the served spec untouched on a refusal |
+| M10 | Trust policy (which identities may sign which references) | ☑ shipped; enforced at the same four points as `verify.required`, each checked to leave the store or the served spec untouched on a refusal, with a companion rule set naming the key a source must be signed with at import |
 | M11 | Keyless verification from carried material (no network, no log) | ☐ planned |
 | M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
 | M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
@@ -34,7 +34,8 @@ when a key is supplied, their signature as well; M9 makes that stretch
 portable, stating in a signed form which upstream file each layer holds so
 the claim survives leaving the machine that packed it; M10 puts a policy
 above the single key, naming which identities may sign which references
-rather than trusting one key for everything a registry holds. What remains
+rather than trusting one key for everything a registry holds, and names
+per source the publisher key an import must be held against. What remains
 is the carried material that lets verification hold with no network, and
 the surfaces that show and enforce the result, described under
 [Planned milestones](#planned-milestones). Work that waits on infrastructure
