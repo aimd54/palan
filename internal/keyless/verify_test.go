@@ -285,21 +285,61 @@ func TestASubjectPatternAdmitsAMatchingSigner(t *testing.T) {
 
 // TestAnIdentityMatchingEverythingIsRefused catches the pattern somebody
 // writes to make a refusal go away.
+//
+// The table is checked against Validate rather than through Verify. A
+// pattern that leaves the authority open does not happen to match the
+// fixture's own signer, so verification would refuse it either way and the
+// test would pass whether the guard existed or not.
 func TestAnIdentityMatchingEverythingIsRefused(t *testing.T) {
-	bundle, root := loadFixtures(t)
-
 	// The bare wildcards are what somebody tries first. The rest are what
-	// they write next when the first is refused, and they mean the same
-	// thing: no domain is pinned, so a signer chooses their own.
+	// they write next when the first is refused, and every one of them
+	// leaves the authority open, so a signer chooses their own.
+	//
+	// The workflow shapes are the ones that matter. Anchoring on the
+	// workflow file and wildcarding the organisation is the ordinary way
+	// to write a keyless identity, and under a provider every repository
+	// on a forge shares it admits any repository with a file of that name.
 	for _, subject := range []string{
 		"*", "**", "*@*", "**@**", "*.*", "https://*", "*@*.*",
+		"*/.github/workflows/release.yml@refs/tags/*",
+		"*/.gitlab-ci.yml@*",
+		"*@example.com*",
+		"https://*.example.com/org/repo/*",
+		"https://*/org/repo/*",
+		"*.github/workflows/ci.yaml@*",
+		// A wildcard inside the domain with no dot after it does not
+		// anchor a domain, it extends one: this matches an address at
+		// "evilexample.com".
+		"*@*example.com",
+		"*@ex*ample.com",
+		// A pattern that names no domain at all.
+		"*@",
 	} {
-		_, err := Verify(bundle, fixtureArtifact, root, []Identity{
-			{Subject: subject, Issuer: fixtureIssuer},
-		})
-		if err == nil {
+		if err := (Identity{Subject: subject, Issuer: fixtureIssuer}).Validate(); err == nil {
 			t.Errorf("subject %q was accepted as a policy", subject)
 		}
+	}
+}
+
+// TestTheAuthorityGuardIsConsulted proves the table above is enforced where
+// it matters and not merely by a function nothing calls: the same pattern
+// is refused by a verification that would otherwise have succeeded.
+func TestTheAuthorityGuardIsConsulted(t *testing.T) {
+	bundle, root := loadFixtures(t)
+
+	// The control: pinning the fixture signer's own domain verifies.
+	if _, err := Verify(bundle, fixtureArtifact, root,
+		[]Identity{{Subject: "*@soyland.com", Issuer: fixtureIssuer}}); err != nil {
+		t.Fatalf("a pattern pinning the signer's domain was refused: %v", err)
+	}
+	// The same signer, reached by a pattern that pins no authority.
+	_, err := Verify(bundle, fixtureArtifact, root,
+		[]Identity{{Subject: "*@*", Issuer: fixtureIssuer}})
+	if err == nil {
+		t.Fatal("a pattern pinning no authority was used to verify")
+	}
+	if !strings.Contains(err.Error(), "wildcards the domain") {
+		t.Errorf("refusal does not name the pattern's fault: %v", err)
 	}
 }
 
@@ -312,7 +352,22 @@ func TestAPatternPinningADomainIsAccepted(t *testing.T) {
 	for _, subject := range []string{
 		"*@soyland.com",
 		"cody@soyland.com",
+		// A wildcard inside an address's domain is safe, because an
+		// address has no path and matching anchors the literal tail to
+		// the end of the identity.
 		"*@*.soyland.com",
+		// An exact subject can only match itself, so there is no
+		// authority to pin. These are what an internal forge and a
+		// workload identity actually look like, and refusing them pushes
+		// an operator towards turning verification off.
+		"spiffe://prod/ns/ci/sa/builder",
+		"https://gitea/acme/repo/main",
+		// A host needs no dot to be a host.
+		"https://gitea/acme/repo/*",
+		"https://192.168.10.4/acme/repo/*",
+		// Neither an address nor a URL with a host, so there is no
+		// authority to pin; being exact, it can only match itself.
+		"urn:example:builder",
 	} {
 		if err := (Identity{Subject: subject, Issuer: fixtureIssuer}).Validate(); err != nil {
 			t.Errorf("subject %q was refused: %v", subject, err)
@@ -429,6 +484,11 @@ func TestAForgedLogIndexIsRefused(t *testing.T) {
 	got, err := Verify(edited, fixtureArtifact, root, fixtureIdentity())
 	if err == nil {
 		t.Fatalf("a relabelled log index verified, reported as entry %d", got.LogIndex)
+	}
+	// Asserted, because a bundle that failed to parse at all would refuse
+	// too, and would prove nothing about the index being covered.
+	if !strings.Contains(err.Error(), "did not sign this entry as stated") {
+		t.Errorf("refusal does not point at the log's signature: %v", err)
 	}
 }
 

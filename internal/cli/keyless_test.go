@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/viper"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 
@@ -77,7 +78,7 @@ func pushBlob(t *testing.T, repo *remote.Repository, desc ocispec.Descriptor, da
 
 // writeTrustRoot puts a log's pinned material on disk, which is where a
 // policy names it.
-func writeTrustRoot(t *testing.T, l *keylesstest.Log) string {
+func writeTrustRootFile(t *testing.T, l *keylesstest.Log) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "trusted-root.json")
 	if err := os.WriteFile(path, l.TrustedRoot, 0o600); err != nil {
@@ -119,7 +120,7 @@ func TestVerifyAcceptsAKeylessSignature(t *testing.T) {
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
 
 	out, err := runVerifyUnderPolicy(t, ref, keylessPolicy(
-		reg.Host(), writeTrustRoot(t, l), keylessSigner.Subject, keylessSigner.Issuer))
+		reg.Host(), writeTrustRootFile(t, l), keylessSigner.Subject, keylessSigner.Issuer))
 	if err != nil {
 		t.Fatalf("verifying a keyless signature: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestVerifyRefusesAKeylessSignatureWithNoInclusionProof(t *testing.T) {
 	attachBundle(t, attestTestRepo(t, reg, "llm/qwen3"), desc, stripped)
 
 	_, err = runVerifyUnderPolicy(t, reg.Host()+"/llm/qwen3:v1", keylessPolicy(
-		reg.Host(), writeTrustRoot(t, l), keylessSigner.Subject, keylessSigner.Issuer))
+		reg.Host(), writeTrustRootFile(t, l), keylessSigner.Subject, keylessSigner.Issuer))
 	if err == nil {
 		t.Fatal("a keyless signature with no inclusion proof verified")
 	}
@@ -174,7 +175,7 @@ func TestVerifyRefusesAKeylessSignerNoRuleNames(t *testing.T) {
 		[]ocispec.Descriptor{localLayer([]byte("weights"), "model.gguf")})
 
 	_, err := runVerifyUnderPolicy(t, ref, keylessPolicy(
-		reg.Host(), writeTrustRoot(t, l),
+		reg.Host(), writeTrustRootFile(t, l),
 		"https://forge.example/someone/else/.github/workflows/release.yml@refs/tags/*",
 		keylessSigner.Issuer))
 	if err == nil {
@@ -196,7 +197,7 @@ func TestAPulledKeylessSignatureVerifiesWithTheRegistryGone(t *testing.T) {
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
 
 	home := t.TempDir()
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	if err := runPullUnderPolicy(t, home, ref, rules); err != nil {
 		t.Fatalf("pulling under a keyless policy: %v", err)
@@ -281,7 +282,7 @@ func TestSaveAndLoadCarryAKeylessSignature(t *testing.T) {
 	reg.PutBlob("llm/qwen3", weights)
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
 
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	source := t.TempDir()
 	if err := runPullUnderPolicy(t, source, ref, rules); err != nil {
@@ -309,7 +310,7 @@ func TestLoadRefusesAKeylessSignatureBelongingToNoModel(t *testing.T) {
 	reg.PutBlob("llm/qwen3", weights)
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
 
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	source := t.TempDir()
 	if err := runPullUnderPolicy(t, source, ref, rules); err != nil {
@@ -441,7 +442,7 @@ func TestAnUntaggedBundleInTheStoreVerifiesOffline(t *testing.T) {
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
 
 	home := t.TempDir()
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	if err := runPullUnderPolicy(t, home, ref, rules); err != nil {
 		t.Fatalf("pulling under a keyless policy: %v", err)
@@ -516,7 +517,7 @@ func TestAShadowingBundleDoesNotHideTheRealOne(t *testing.T) {
 	attachBundle(t, repo, desc, mine.Bundle(t, desc.Digest, keylessSigner))
 
 	out, err := runVerifyUnderPolicy(t, reg.Host()+"/llm/qwen3:v1", keylessPolicy(
-		reg.Host(), writeTrustRoot(t, mine), keylessSigner.Subject, keylessSigner.Issuer))
+		reg.Host(), writeTrustRootFile(t, mine), keylessSigner.Subject, keylessSigner.Issuer))
 	if err != nil {
 		t.Fatalf("a shadowing signature hid the real one: %v", err)
 	}
@@ -543,7 +544,7 @@ func TestEveryBundleTravels(t *testing.T) {
 
 	home := t.TempDir()
 	ref := reg.Host() + "/llm/qwen3:v1"
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, mine),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, mine),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	if err := runPullUnderPolicy(t, home, ref, rules); err != nil {
 		t.Fatalf("pulling under a keyless policy: %v", err)
@@ -601,7 +602,7 @@ func TestAnExplicitKeyRulesOutKeyless(t *testing.T) {
 	priv, _ := attestKeypair(t)
 	pubFile := attestPubKeyFile(t, priv)
 
-	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
 		keylessSigner.Subject, keylessSigner.Issuer)
 	// The same policy without the flag accepts this model, so the refusal
 	// below is the flag's doing and not a broken fixture.
@@ -633,11 +634,146 @@ func TestKeylessVerificationSaysProvenanceWasNotChecked(t *testing.T) {
 	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{layer})
 
 	out, err := runVerifyUnderPolicy(t, ref, keylessPolicy(
-		reg.Host(), writeTrustRoot(t, l), keylessSigner.Subject, keylessSigner.Issuer))
+		reg.Host(), writeTrustRootFile(t, l), keylessSigner.Subject, keylessSigner.Issuer))
 	if err != nil {
 		t.Fatalf("verifying: %v", err)
 	}
 	if !strings.Contains(out, "provenance left unchecked") {
 		t.Errorf("verify output = %q, want it to say the provenance was not checked", out)
+	}
+}
+
+// TestSaveCarriesABundleTheStoreDoesNotName covers a bundle that reached
+// the store without palan's name on it.
+//
+// The store is a plain OCI layout so other tooling can work on it, so a
+// bundle can be attached there by something that knows only the subject
+// relationship. Addressing it by the name it ought to carry fails on
+// exactly that bundle, and taking the export down with it means the model
+// cannot be carried across a gap at all.
+func TestSaveCarriesABundleTheStoreDoesNotName(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights whose signature the store never named")
+	reg.PutBlob("llm/qwen3", weights)
+	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
+
+	home := t.TempDir()
+	rules := keylessPolicy(reg.Host(), writeTrustRootFile(t, l),
+		keylessSigner.Subject, keylessSigner.Issuer)
+	if err := runPullUnderPolicy(t, home, ref, rules); err != nil {
+		t.Fatalf("pulling under a keyless policy: %v", err)
+	}
+	untagBundle(t, home, ref)
+
+	var tar bytes.Buffer
+	saveFromHome(t, home, ref, &tar)
+
+	// It has to arrive, not merely not crash: an export that succeeds while
+	// silently dropping the signature leaves the far side unable to verify
+	// a model it was told had travelled.
+	reg.Close()
+	far := t.TempDir()
+	if err := runLoadUnderPolicyInHome(t, far, tar.Bytes(), rules); err != nil {
+		t.Fatalf("loading a bundle the source store did not name: %v", err)
+	}
+	if n := storedBundleCount(t, far, ref); n != 1 {
+		t.Errorf("the far store holds %d keyless signature(s), want 1", n)
+	}
+}
+
+// keylessBundleLayout builds a transfer bundle holding a model and the
+// keyless signature attached to it, as an OCI layout the import guard can
+// be pointed at directly. A transfer bundle is whatever a courier handed
+// over, so the guard is the thing under test rather than the export that
+// produced it.
+func keylessBundleLayout(t *testing.T) (*oci.Store, registry.Reference, ocispec.Descriptor, ocispec.Descriptor, []string, *keylesstest.Log) {
+	t.Helper()
+	ctx := context.Background()
+
+	reg := registrytest.New(t)
+	weights := []byte("weights that travel with a keyless signature")
+	reg.PutBlob("llm/tiny", weights)
+	mDesc := seedModel(t, reg, "llm/tiny", "a", []ocispec.Descriptor{localLayer(weights, "tiny.gguf")})
+	l := keylesstest.NewLog(t)
+	attachBundle(t, attestTestRepo(t, reg, "llm/tiny"), mDesc,
+		l.Bundle(t, mDesc.Digest, keylessSigner))
+
+	parsed, err := refname.Parse(reg.Host()+"/llm/tiny:a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := oci.NewWithContext(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := attestTestRepo(t, reg, "llm/tiny")
+	if _, err := oras.Copy(ctx, repo, "a", layout, parsed.String(), oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the model into the bundle: %v", err)
+	}
+	attached, err := signing.BundleReferrers(ctx, repo, mDesc)
+	if err != nil || len(attached) != 1 {
+		t.Fatalf("the registry holds %d keyless signatures: %v", len(attached), err)
+	}
+	bundleRef := signing.BundleRef(parsed, attached[0].Digest)
+	if _, err := oras.Copy(ctx, repo, attached[0].Digest.String(), layout, bundleRef, oras.DefaultCopyOptions); err != nil {
+		t.Fatalf("copying the keyless signature into the bundle: %v", err)
+	}
+	return layout, parsed, mDesc, attached[0], []string{parsed.String(), bundleRef}, l
+}
+
+// TestBundleVerifierAcceptsAKeylessBundle is the control the refusal below
+// needs: without it a refusal could be the setup failing rather than the
+// guard working.
+func TestBundleVerifierAcceptsAKeylessBundle(t *testing.T) {
+	ctx := context.Background()
+	layout, parsed, _, _, refs, l := keylessBundleLayout(t)
+
+	v := viper.New()
+	v.Set(keyVerifyPolicy, keylessPolicy(parsed.Registry, writeTrustRootFile(t, l),
+		keylessSigner.Subject, keylessSigner.Issuer))
+	var out bytes.Buffer
+	if err := bundleVerifier(v, "", &out)(ctx, layout, refs); err != nil {
+		t.Fatalf("a bundle whose model verifies keylessly must be accepted: %v", err)
+	}
+}
+
+// TestBundleVerifierRefusesForeignContentUnderABundleName closes the hole a
+// name-only check leaves.
+//
+// A keyless signature is named after itself, and the names the guard will
+// accept are composed from what is attached to the model. So whoever builds
+// a transfer bundle chooses those names: leaving the real signature in the
+// layout keeps its name in the accepted set, while the name itself is
+// pointed at something else entirely. Only resolving the name and comparing
+// what comes back catches it.
+func TestBundleVerifierRefusesForeignContentUnderABundleName(t *testing.T) {
+	ctx := context.Background()
+	layout, parsed, mDesc, bDesc, refs, l := keylessBundleLayout(t)
+
+	// The signature manifest stays in the layout, so it is still a
+	// referrer of the model and its name is still one the guard accepts.
+	// The name now resolves to the model manifest instead.
+	name := refs[1]
+	if err := layout.Tag(ctx, mDesc, name); err != nil {
+		t.Fatal(err)
+	}
+	got, err := layout.Resolve(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Digest == bDesc.Digest {
+		t.Fatal("the name still resolves to the signature, so this test would prove nothing")
+	}
+
+	v := viper.New()
+	v.Set(keyVerifyPolicy, keylessPolicy(parsed.Registry, writeTrustRootFile(t, l),
+		keylessSigner.Subject, keylessSigner.Issuer))
+	var out bytes.Buffer
+	err = bundleVerifier(v, "", &out)(ctx, layout, refs)
+	if err == nil {
+		t.Fatal("foreign content was accepted under a keyless signature's name")
+	}
+	if !strings.Contains(err.Error(), "rather than the keyless signature") {
+		t.Errorf("refusal does not say the name resolves elsewhere: %v", err)
 	}
 }

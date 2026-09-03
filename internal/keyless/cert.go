@@ -50,10 +50,8 @@ func (id Identity) Validate() error {
 	if id.Issuer == "" {
 		return fmt.Errorf("names no issuer for subject %q", id.Subject)
 	}
-	if !pinsADomain(id.Subject) {
-		return fmt.Errorf(
-			"subject %q pins no domain, so it matches identities from parties this policy does not control; anchor it on the domain the signer belongs to, as in \"*@example.com\"",
-			id.Subject)
+	if err := pinsAnAuthority(id.Subject); err != nil {
+		return fmt.Errorf("subject %q %w", id.Subject, err)
 	}
 	if strings.Contains(id.Issuer, "*") {
 		return fmt.Errorf(
@@ -62,47 +60,66 @@ func (id Identity) Validate() error {
 	return nil
 }
 
-// pinsADomain reports whether a subject pattern holds at least one domain
-// name outside its wildcards.
+// pinsAnAuthority reports whether a subject pattern names, without a
+// wildcard, the part of an identity that its holder cannot choose.
 //
-// A subject is an email address or a URL, and in both the domain is the
-// part a signer cannot choose for themselves: everything else, the local
-// part of an address or the path of a workflow, is theirs to pick. A
-// pattern that pins no domain therefore matches identities belonging to
-// whoever cares to mint one. "*" is the obvious way to write that and the
-// easy one to catch; "*@*" is what somebody writes immediately afterwards,
-// and it means the same thing.
-func pinsADomain(pattern string) bool {
-	for _, literal := range strings.Split(pattern, "*") {
-		for _, token := range strings.FieldsFunc(literal, func(r rune) bool {
-			return r == '/' || r == '@' || r == ':'
-		}) {
-			if isDomain(token) {
-				return true
-			}
-		}
+// An identity is an email address or a URL. In an address that part is the
+// domain after the last "@"; in a URL it is the host. Everything else, the
+// local part of an address or the path of a workflow, is the signer's to
+// pick, so a pattern that wildcards the authority matches identities
+// belonging to whoever cares to mint one.
+//
+// This is a structural test rather than a search for something
+// domain-shaped anywhere in the pattern. A workflow path ends in a file
+// name such as "release.yml", which reads exactly like a domain, so
+// "*/.github/workflows/release.yml@refs/tags/*" would otherwise pass while
+// pinning nothing at all. Under a provider every repository on a forge
+// shares, that admits any repository with a workflow of that name.
+func pinsAnAuthority(pattern string) error {
+	// An exact subject can only ever match itself, so there is no
+	// authority to pin and nothing to check.
+	if !strings.Contains(pattern, "*") {
+		return nil
 	}
-	return false
+	if i := strings.Index(pattern, "://"); i >= 0 {
+		host := pattern[i+len("://"):]
+		if j := strings.Index(host, "/"); j >= 0 {
+			host = host[:j]
+		}
+		// No relaxation for a host, because matching does not treat "/" as
+		// a boundary: "https://*.example.com/org/*" would also match
+		// "https://elsewhere.test/x.example.com/org/y".
+		if host == "" || strings.Contains(host, "*") {
+			return fmt.Errorf(
+				"wildcards the host, so it matches identities from any host; name the host literally, as in \"https://forge.example/org/repo/*\"")
+		}
+		return nil
+	}
+	if i := strings.LastIndex(pattern, "@"); i >= 0 {
+		return pinsAMailDomain(pattern[i+1:])
+	}
+	return fmt.Errorf(
+		"is neither an address nor a URL, so there is no authority in it to pin; write it as \"*@example.com\" or \"https://forge.example/...\"")
 }
 
-// isDomain reports whether a token looks like a registrable domain: dotted,
-// with a label either side of the last dot and an alphabetic one at the
-// end. The last test is what keeps a dotted version such as "v1.4.0" from
-// standing in for a domain.
-func isDomain(token string) bool {
-	i := strings.LastIndex(token, ".")
-	if i <= 0 || i == len(token)-1 {
-		return false
-	}
-	if len(token[:i]) < 2 || len(token[i+1:]) < 2 {
-		return false
-	}
-	for _, r := range token[i+1:] {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
-			return false
+// pinsAMailDomain checks the domain of an address pattern. A wildcard
+// inside it is allowed when a literal domain suffix follows, because an
+// address has no path: matching anchors the pattern's tail to the end of
+// the identity, so "*@*.example.com" can only match an address in that
+// domain.
+func pinsAMailDomain(domain string) error {
+	tail := domain
+	if i := strings.LastIndex(domain, "*"); i >= 0 {
+		tail = domain[i+1:]
+		if !strings.HasPrefix(tail, ".") {
+			return fmt.Errorf(
+				"wildcards the domain, so it matches an address at any domain; end it on a literal domain, as in \"*@example.com\"")
 		}
 	}
-	return true
+	if tail == "" {
+		return fmt.Errorf("names no domain")
+	}
+	return nil
 }
 
 // matches reports whether a certificate's subject and issuer satisfy this

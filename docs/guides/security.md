@@ -417,14 +417,42 @@ characters, which is what makes a workflow identity usable: it carries the
 git ref that built it, so it changes with every release and an exact name
 would have to be edited each time.
 
-A subject pattern must pin a domain. In both an address and a URL the domain
-is the part a signer cannot choose for themselves, while the local part of
-an address and the path of a workflow are theirs to pick, so a pattern that
-pins no domain matches identities belonging to whoever cares to mint one.
-`*@example.com` is fine and so is a workflow pattern anchored on its forge;
-`*` and `*@*` are refused when the config loads. A certificate naming its
-holder more than once is refused too, since there is no reading of "who
-signed this" that returns two answers.
+A subject pattern must name, without a wildcard, the part of an identity
+its holder cannot choose. In an address that is the domain after the last
+`@`; in a URL it is the host. The local part of an address and the path of
+a workflow are the signer's to pick, so a pattern that wildcards the
+authority matches identities belonging to whoever cares to mint one.
+
+```yaml
+# Accepted
+*@example.com                                          # any address at that domain
+*@*.example.com                                        # and at its subdomains
+https://forge.example/org/repo/.github/workflows/*     # any workflow in that repository
+https://gitea/acme/repo/*                              # a host needs no dot
+spiffe://prod/ns/ci/sa/builder                         # exact: it can only match itself
+
+# Refused when the config loads
+*                                                      # everything
+*@*                                                    # any address anywhere
+*/.github/workflows/release.yml@refs/tags/*            # any repository with that file
+https://*.example.com/org/repo/*                        # matching ignores "/", so this
+                                                        # reaches other hosts too
+*@*example.com                                          # extends a domain rather than
+                                                        # anchoring one: evilexample.com
+```
+
+The third refusal is the one worth reading twice. Anchoring on the workflow
+file and wildcarding the organisation looks like the obvious way to write a
+workflow identity, and it pins nothing: the file name is the signer's to
+choose, and under a provider every repository on a forge shares, any
+repository with a `release.yml` satisfies it. Name the repository and
+wildcard the ref instead.
+
+An exact subject, one with no `*` at all, is always accepted: it can only
+match itself.
+
+A certificate naming its holder more than once is refused, since there is
+no reading of "who signed this" that returns two answers.
 
 The issuer is the OpenID provider that authenticated the holder, and it is
 matched exactly. A subject on its own is a name any provider can mint, so
