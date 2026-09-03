@@ -360,6 +360,162 @@ allows for that reference: a statement signed by a different holder does
 not pass just because that holder also appears elsewhere in the same
 policy.
 
+## Keyless signatures
+
+A keyless signature names its signer instead of naming a key. There is no
+key file to distribute: the signer authenticates to an OpenID provider,
+receives a certificate that lives about ten minutes, signs with it, and the
+signature is recorded in a public transparency log.
+
+Checking one normally means asking a certificate authority whether the
+certificate was issued and asking the log whether the signature was
+recorded. An air-gapped host can ask neither, so palan checks a signature
+that carries the answers with it: the certificate, the log entry, and an
+inclusion proof showing that entry really is in the log. What cannot travel
+with the artifact is the decision about whom to trust, so that is pinned
+separately, as a file.
+
+palan verifies keyless signatures and does not make them. Signing that way
+needs the services this feature exists to avoid depending on.
+
+### Pinning a root
+
+The pinned file is a Sigstore trusted root: which certificate authorities
+may issue signing certificates, and which transparency logs are believed.
+For the public Sigstore instance, `cosign` will write one:
+
+```sh
+cosign trusted-root create   --fulcio="url=https://fulcio.sigstore.dev,certificate-chain=fulcio.pem"   --rekor="url=https://rekor.sigstore.dev,public-key=rekor.pub,start-time=2021-01-12T00:00:00Z"   --out /etc/palan/sigstore-root.json
+```
+
+Copy that file to the disconnected host. It is public material, not a
+secret, and it is the thing an operator decides on: everything else arrives
+with the artifact and is checked against it.
+
+### Naming who may sign
+
+A policy rule names identities where it would otherwise name keys, and the
+root they are checked against:
+
+```yaml
+verify:
+  required: true
+  policy:
+    - pattern: registry.internal/vendor/**
+      trust-root: /etc/palan/sigstore-root.json
+      identities:
+        - subject: https://github.com/vendor/models/.github/workflows/release.yml@refs/tags/*
+          issuer: https://token.actions.githubusercontent.com
+    - pattern: registry.internal/**
+      keys:
+        - /etc/palan/team.pub
+```
+
+The subject is what the certificate says its holder is: an email address
+for a person, a URL for a workload. `*` in a subject stands for any run of
+characters, which is what makes a workflow identity usable: it carries the
+git ref that built it, so it changes with every release and an exact name
+would have to be edited each time.
+
+The issuer is the OpenID provider that authenticated the holder, and it is
+matched exactly. A subject on its own is a name any provider can mint, so
+without the issuer a signer authenticated anywhere at all would pass as the
+signer authenticated where it matters. A rule naming a subject and no
+issuer is refused when the config loads.
+
+A rule may name keys and identities together. That is what a migration
+looks like from the inside: signatures made either way are accepted while
+publishers move between them, and the rule narrows again afterwards.
+
+`trust-root` is pinned per rule rather than once for the whole file,
+because two registries need not draw on the same Sigstore instance. Naming
+identities without a root, or a root without identities, is refused when
+the config loads: neither half does anything alone, and a root nothing
+reads would leave somebody believing they had pinned something.
+
+A subject of `*` is refused. It admits every identity the issuer ever
+certified, which is not a policy.
+
+### What is checked, and in what order
+
+```sh
+palan verify registry.internal/vendor/qwen3:8b-q4
+# Verified registry.internal/vendor/qwen3:8b-q4@sha256:...
+#   source: local store
+#   signer: https://github.com/vendor/models/.github/workflows/release.yml@refs/tags/v2.1.0 (via https://token.actions.githubusercontent.com), logged at 2026-08-30T09:14:02Z as entry 421889301
+```
+
+The signer is reported because it is the one thing the result establishes
+that the configuration did not already state. With a key, the identity is
+the file you named; here it is whatever the certificate turned out to say,
+and the policy pattern it matched may be broader than the signer it
+admitted.
+
+In order: the signature is checked against its own certificate; the
+transparency log entry is checked to be in a log the pinned root names,
+by rebuilding the log root from the inclusion proof and requiring the log's
+signed checkpoint to agree; the proven entry is checked to be about this
+signature rather than some other entry in the same log; the certificate is
+checked to chain to a pinned authority *as of the moment the log recorded
+the signature*; the signer is checked against the rule; and the signed
+statement is checked to be about this artifact's digest.
+
+The time matters more than it looks. A keyless certificate is expired by
+the time anyone verifies it, so checking it against the present would
+refuse every keyless signature ever made. It is checked against log time
+instead, and log time is only believed once the inclusion proof has been
+shown to rebuild a root the log key signed.
+
+Holding the proven entry against the signature in hand is the check that a
+proof cannot make for itself. A valid inclusion proof shows that *some*
+entry is in the log, and a log holds millions.
+
+### Carrying one across a gap
+
+A keyless signature is attached to the model as a referrer and carries no
+tag of its own, which is how the tools that write one publish it. `pull`
+finds it there and brings it into the store, `save` puts it in the transfer
+bundle, and `load` imports it:
+
+```sh
+palan pull registry.internal/vendor/qwen3:8b-q4
+# Keyless signature stored alongside the model
+
+palan save registry.internal/vendor/qwen3:8b-q4 -o qwen3.tar
+# Included 1 keyless signature(s)
+```
+
+On the far side, `palan verify` and `palan load --verify` work with no
+registry at all, given the trusted root on disk.
+
+If a keyless signature could not be carried, `pull` says so and keeps the
+model. The model is still there; what is gone is the ability to check it
+later without a registry.
+
+### What is not checked
+
+The signed certificate timestamp inside the certificate is not verified.
+It would catch a certificate authority that issued a certificate without
+logging it, which is a compromise of an authority you have already chosen
+to pin.
+
+A source attestation is checked against the key that signed the model, and
+a keyless signature supplies an identity rather than a key. A model
+verified this way whose layers record upstream sources therefore reports
+its provenance as unchecked:
+
+```text
+  WARNING: 2 layer(s) record an upstream source, and a source attestation
+  is checked against the key that signed the model, so a model verified by
+  a keyless signature has its provenance left unchecked
+```
+
+Only the Sigstore bundle form is read. `cosign sign` writes it with
+`--new-bundle-format`; without that flag it attaches the certificate and a
+signed entry timestamp instead, and a signed entry timestamp is the log's
+promise to record an entry rather than evidence that it did. palan refuses
+that form rather than accept it as though the two were the same.
+
 ## Registry authentication
 
 - `palan login REGISTRY` validates credentials and stores them in the
@@ -379,7 +535,8 @@ policy.
 
 ## Not implemented yet (tracked on the roadmap)
 
-- Keyless (Fulcio/Rekor) signing, which requires online infrastructure.
+- Keyless (Fulcio/Rekor) *signing*, which requires online infrastructure.
+  Verifying a keyless signature is implemented, and needs none.
 - OIDC device-flow login from the CLI. `palan login` takes a username with a
   prompt or `--password-stdin`, and stores the result in the Docker credentials
   store.

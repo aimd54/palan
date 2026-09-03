@@ -22,7 +22,7 @@ and refuses anything else, for the reasons in
 | M8 | Import provenance (whole `hf://` repositories, publisher digests and signatures) | ☑ shipped; whole repositories resolve from the shard index, and a publisher signature is checked against every file when a key is supplied |
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
 | M10 | Trust policy (which identities may sign which references) | ☑ shipped; enforced at the same four points as `verify.required`, each checked to leave the store or the served spec untouched on a refusal, with a companion rule set naming the key a source must be signed with at import |
-| M11 | Keyless verification from carried material (no network, no log) | ☐ planned |
+| M11 | Keyless verification from carried material (no network, no log) | ☑ shipped (ADR-0015); a signature carrying its certificate and inclusion proof verifies against a pinned root with the registry gone, and is refused once that proof is stripped |
 | M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
 | M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
 
@@ -113,17 +113,6 @@ a Kubernetes cluster, and a GPU host:
 In dependency order. Each lands the way the shipped ones did: with tests
 that were seen to fail before the change, and validations recorded above
 once they run against real infrastructure.
-
-### M11: keyless verification from carried material
-
-A keyless signature names an identity where a key would name a file, and
-checking one normally reaches a certificate authority and a transparency
-log. Neither is reachable from a disconnected host, so the material has to
-travel with the artifact: the certificate chain, the inclusion proof, and a
-trusted root pinned when the policy was written. M11 verifies such a
-signature with no network at all, and teaches the policy format to name
-keyless identities beside the keys M10 covers. Accepted when a carried
-signature verifies offline and refuses once its inclusion proof is stripped.
 
 ### M12: the chain, shown and enforced
 
