@@ -36,6 +36,11 @@ type progress struct {
 	// attProblem records why an attestation did not travel, when the reason
 	// was a failure rather than the registry simply holding none.
 	attProblem error
+	// bundled records whether a keyless signature travelled with the
+	// artifact, and bundleProblem why it did not when the reason was
+	// something other than the registry holding none.
+	bundled       atomic.Bool
+	bundleProblem error
 }
 
 func newProgress(quiet bool) *progress {
@@ -92,6 +97,14 @@ func (pr *progress) events() transfer.Events {
 				pr.mu.Unlock()
 			}
 		},
+		OnBundle: func(stored bool, problem error) {
+			pr.bundled.Store(stored)
+			if problem != nil {
+				pr.mu.Lock()
+				pr.bundleProblem = problem
+				pr.mu.Unlock()
+			}
+		},
 	}
 }
 
@@ -124,8 +137,11 @@ func (pr *progress) report() {
 	if pr.attested.Load() {
 		fmt.Fprintln(os.Stderr, "Source attestation stored alongside the model")
 	}
+	if pr.bundled.Load() {
+		fmt.Fprintln(os.Stderr, "Keyless signature stored alongside the model")
+	}
 	pr.mu.Lock()
-	problem, attProblem := pr.sigProblem, pr.attProblem
+	problem, attProblem, bundleProblem := pr.sigProblem, pr.attProblem, pr.bundleProblem
 	pr.mu.Unlock()
 	if problem != nil {
 		// The transfer stands; only offline verification is affected.
@@ -134,5 +150,10 @@ func (pr *progress) report() {
 	if attProblem != nil {
 		// Likewise: the model is here, its provenance record is not.
 		fmt.Fprintf(os.Stderr, "Warning: no source attestation stored (%v)\n", attProblem)
+	}
+	if bundleProblem != nil {
+		// Likewise again, and it costs more: a keyless signature is the
+		// only material an offline host can check one with.
+		fmt.Fprintf(os.Stderr, "Warning: no keyless signature stored (%v)\n", bundleProblem)
 	}
 }

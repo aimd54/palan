@@ -23,6 +23,7 @@ import (
 	"oras.land/oras-go/v2/registry"
 
 	"github.com/aimd54/palan/internal/attest"
+	"github.com/aimd54/palan/internal/keyless"
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/internal/store"
@@ -148,7 +149,8 @@ func newVerifyCmd(v *viper.Viper) *cobra.Command {
 		Short: "Verify a model's signature against a public key",
 		Example: `  # Verify against a registry, or from the local store when it holds the signature
   palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub`,
-		Long: `Verify checks a model's signature against a public key.
+		Long: `Verify checks a model's signature against a public key, or against the
+keyless identities a trust policy names.
 
 A model already in the local store is verified from there, so verification
 needs no registry, no transparency log, and no certificate authority. Anything
@@ -159,11 +161,21 @@ The signature is looked for under its tag first, then among the referrers of
 the model, so a signature written by an OCI 1.1 signing tool is checked even
 though it carries no tag.
 
+A keyless signature names its signer instead of naming a key. Where a policy
+rule lists identities, verify reads the signature bundle that travels with
+the model, holds its certificate against the trusted root the rule pins, and
+requires the transparency log entry to carry an inclusion proof that the same
+root's log key has signed. All of that material travels with the artifact, so
+this too needs no network. The signer is reported, since it is the one thing
+the result establishes that the configuration did not already state.
+
 Where sign also wrote a statement of the model's sources, verify checks it
 against the same key and against the model's own layers, and names what the
 layers came from. A model with no such statement verifies exactly as it did
 before: requiring one is a policy for something else to enforce, not a fact
-this command asserts.`,
+this command asserts. A source attestation is checked against the key that
+signed the model, so a model verified by a keyless signature has its
+provenance reported as unchecked rather than checked.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -194,6 +206,13 @@ this command asserts.`,
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.subject.Digest, src.name)
+			// Who signed is only worth a line when the answer was not
+			// already given on the command line or in the config: a
+			// keyless signature names its signer, and that name is what
+			// the policy matched.
+			if verifier.keyless != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "  signer: %s\n", verifier.keyless)
+			}
 			for _, p := range report.provenance {
 				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
 			}
@@ -214,18 +233,53 @@ this command asserts.`,
 type verifySource struct {
 	target oras.ReadOnlyTarget
 	sigRef string
-	// attRef is filled by the verify command alone: it is the only caller
-	// that goes on to check an attestation, and the gates at pull, load,
-	// run and serve stop at the signature.
-	//
 	// attRef is the attestation's reference, in the same form as sigRef: a
-	// bare tag on a registry, a full reference in the local store.
+	// bare tag on a registry, a full reference in the local store. Only the
+	// verify command reads it, since the gates at pull, load, run and serve
+	// stop at the signature, but every source fills it: a field left empty
+	// by some callers is a field the next caller forgets.
 	attRef string
+	// bundleRef is where a keyless signature would be under palan's own
+	// tag, in the same two forms. A bundle written by a signing tool has no
+	// tag at all, so this is where to look first and not the only place.
+	bundleRef string
 	// subject is the artifact being verified. The whole descriptor is needed,
 	// not just its digest, because a signature may be attached as a referrer
 	// of it rather than under a tag.
 	subject ocispec.Descriptor
 	name    string
+}
+
+// remoteSource names where a registry keeps everything attached to desc.
+// A registry holds one repository, so each attachment is a bare tag.
+//
+// Sources are built here and not by each caller in turn. Every attachment a
+// verification may need is named in one place, so adding a fourth kind
+// cannot leave one call site addressing it and another leaving it blank,
+// which reads downstream as an artifact that carries nothing.
+func remoteSource(target oras.ReadOnlyTarget, desc ocispec.Descriptor, name string) verifySource {
+	return verifySource{
+		target:    target,
+		sigRef:    signing.SigTag(desc.Digest),
+		attRef:    signing.AttTag(desc.Digest),
+		bundleRef: signing.BundleTag(desc.Digest),
+		subject:   desc,
+		name:      name,
+	}
+}
+
+// layoutSource names where an OCI layout keeps them: by full reference,
+// because the local store and a transfer bundle each hold many
+// repositories and a bare tag would not say which.
+func layoutSource(target oras.ReadOnlyTarget, ref registry.Reference, desc ocispec.Descriptor, name string) verifySource {
+	return verifySource{
+		target:    target,
+		sigRef:    signing.SigRef(ref, desc.Digest),
+		attRef:    signing.AttRef(ref, desc.Digest),
+		bundleRef: signing.BundleRef(ref, desc.Digest),
+		subject:   desc,
+		name:      name,
+	}
 }
 
 // resolveVerifySource prefers the local store, so verification works with no
@@ -247,18 +301,13 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 	switch {
 	case localErr == nil:
 		sigRef := signing.SigRef(ref, local.Digest)
-		held, sigErr := storeHoldsSignature(ctx, st, sigRef, local)
+		held, sigErr := storeHoldsSignature(
+			ctx, st, sigRef, signing.BundleRef(ref, local.Digest), local)
 		switch {
 		case sigErr != nil:
 			return verifySource{}, fmt.Errorf("reading the local store: %w", sigErr)
 		case held:
-			return verifySource{
-				target:  st.OCI(),
-				sigRef:  sigRef,
-				attRef:  signing.AttRef(ref, local.Digest),
-				subject: local,
-				name:    "local store",
-			}, nil
+			return layoutSource(st.OCI(), ref, local, "local store"), nil
 		}
 	case !errors.Is(localErr, errdef.ErrNotFound):
 		return verifySource{}, fmt.Errorf("reading the local store: %w", localErr)
@@ -282,24 +331,30 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 		}
 		return verifySource{}, err
 	}
-	return verifySource{
-		target:  repo,
-		sigRef:  signing.SigTag(desc.Digest),
-		attRef:  signing.AttTag(desc.Digest),
-		subject: desc,
-		name:    "registry",
-	}, nil
+	return remoteSource(repo, desc, "registry"), nil
 }
 
 // storeHoldsSignature reports whether the store can verify this artifact
-// without a network, either from the signature tag or from a signature
-// attached to the artifact as a referrer.
-func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef string, subject ocispec.Descriptor) (bool, error) {
+// without a network, from the signature tag, from a signature attached to
+// the artifact as a referrer, or from a keyless signature bundle. A model
+// signed only the keyless way would otherwise be sent to the registry for
+// a signature it is already holding, which on a disconnected host means
+// refusing an artifact it can verify.
+func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef, bundleRef string, subject ocispec.Descriptor) (bool, error) {
 	switch _, err := st.Resolve(ctx, sigRef); {
 	case err == nil:
 		return true, nil
 	case !errors.Is(err, errdef.ErrNotFound):
 		return false, err
+	}
+	switch _, err := st.Resolve(ctx, bundleRef); {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, errdef.ErrNotFound):
+		return false, err
+	}
+	if bundles, err := signing.BundleReferrers(ctx, st.OCI(), subject); err == nil && len(bundles) > 0 {
+		return true, nil
 	}
 	refs, err := registry.Referrers(ctx, st.OCI(), subject, signing.ArtifactTypeSignature)
 	if err != nil {
@@ -343,57 +398,75 @@ type namedVerifier struct {
 	verifier signature.Verifier
 }
 
-// resolveVerifiers returns the identities allowed to sign ref, in the order
-// they should be tried.
+// allowedSigners is everyone permitted to sign one reference: the keys a
+// signature may verify under, and the keyless identities a bundle may name.
+// A policy rule can carry either or both, so both travel together and a
+// refusal can say what was tried.
+type allowedSigners struct {
+	verifiers  []namedVerifier
+	identities []keyless.Identity
+	// trustRoot is the file the identities are checked against. It is read
+	// only if a keyless signature is actually tried, so a rule naming keys
+	// as well keeps working on a host where the root file is absent.
+	trustRoot string
+}
+
+// resolveVerifiers returns the identities allowed to sign ref.
 //
 // An explicit --key overrides the policy, since a flag someone typed is a
 // deliberate act and the policy is the standing configuration it overrides.
-// With no policy configured, verify.key is the single allowed identity, which
-// is the behaviour that predates policies.
+// It also rules out keyless: naming a key file is a statement about how the
+// artifact is to be checked, not merely which key to add.
+//
+// With no policy configured, verify.key is the single allowed identity,
+// which is the behaviour that predates policies.
 func resolveVerifiers(
 	v *viper.Viper, keyPath string, ref registry.Reference,
-) ([]namedVerifier, error) {
+) (allowedSigners, error) {
 	if keyPath != "" {
 		nv, err := loadNamedVerifier(keyPath)
 		if err != nil {
-			return nil, err
+			return allowedSigners{}, err
 		}
-		return []namedVerifier{nv}, nil
+		return allowedSigners{verifiers: []namedVerifier{nv}}, nil
 	}
 
 	policy, err := loadPolicy(v)
 	if err != nil {
-		return nil, err
+		return allowedSigners{}, err
 	}
 	if policy == nil {
 		configured := v.GetString(keyVerifyKey)
 		if configured == "" {
-			return nil, fmt.Errorf(
+			return allowedSigners{}, fmt.Errorf(
 				"no verification key configured: pass --key, set %s, or configure %s",
 				keyVerifyKey, keyVerifyPolicy)
 		}
 		nv, err := loadNamedVerifier(configured)
 		if err != nil {
-			return nil, err
+			return allowedSigners{}, err
 		}
-		return []namedVerifier{nv}, nil
+		return allowedSigners{verifiers: []namedVerifier{nv}}, nil
 	}
 
 	repoRef := ref.Registry + "/" + ref.Repository
-	files, ok := policy.KeyFilesFor(repoRef)
+	rule, ok := policy.RuleFor(repoRef)
 	if !ok {
-		return nil, fmt.Errorf(
+		return allowedSigners{}, fmt.Errorf(
 			"the trust policy names no identity allowed to sign %s; "+
 				"its patterns are %s",
 			repoRef, strings.Join(policy.Patterns(), ", "))
 	}
-	out := make([]namedVerifier, 0, len(files))
-	for _, f := range files {
+	out := allowedSigners{
+		identities: rule.Identities,
+		trustRoot:  rule.TrustRoot,
+	}
+	for _, f := range rule.KeyFiles {
 		nv, err := loadNamedVerifier(f)
 		if err != nil {
-			return nil, err
+			return allowedSigners{}, err
 		}
-		out = append(out, nv)
+		out.verifiers = append(out.verifiers, nv)
 	}
 	return out, nil
 }
@@ -413,32 +486,90 @@ func loadNamedVerifier(keyPath string) (namedVerifier, error) {
 	return namedVerifier{name: keyPath, verifier: verifier}, nil
 }
 
+// verifiedBy is the identity that accepted an artifact's signature.
+//
+// Exactly one of its fields is set. The distinction is not cosmetic:
+// anything else about the artifact that must be held to the same identity
+// needs the verifier, and a keyless signature supplies no such verifier, so
+// a caller has to notice rather than carry a nil one.
+type verifiedBy struct {
+	// key is the verifier that accepted a key-based signature.
+	key signature.Verifier
+	// keyless is who a keyless signature turned out to name.
+	keyless *keyless.Result
+}
+
 // verifyDigest runs signature verification against an already-resolved
-// source, and returns the verifier that accepted it so the caller can hold
+// source, and returns the identity that accepted it so the caller can hold
 // anything else about the artifact to the same identity.
+//
+// Keys are tried before keyless identities, and only because a key check is
+// local arithmetic while a keyless one reads a trusted root off disk. Order
+// carries no precedence: a rule naming both accepts a signature of either
+// kind, which is what makes a migration between them possible.
 func verifyDigest(
 	ctx context.Context, v *viper.Viper, keyPath string, src verifySource,
 	ref registry.Reference,
-) (signature.Verifier, error) {
-	verifiers, err := resolveVerifiers(v, keyPath, ref)
+) (verifiedBy, error) {
+	allowed, err := resolveVerifiers(v, keyPath, ref)
 	if err != nil {
-		return nil, err
+		return verifiedBy{}, err
 	}
 	repoRef := ref.Registry + "/" + ref.Repository
-	tried := make([]string, 0, len(verifiers))
+	tried := make([]string, 0, len(allowed.verifiers)+1)
 	var lastErr error
-	for _, nv := range verifiers {
+	for _, nv := range allowed.verifiers {
 		err := signing.Verify(
 			ctx, src.target, src.sigRef, repoRef, src.subject, nv.verifier)
 		if err == nil {
-			return nv.verifier, nil
+			return verifiedBy{key: nv.verifier}, nil
 		}
 		lastErr = err
 		tried = append(tried, nv.name)
 	}
-	return nil, fmt.Errorf(
+	if len(allowed.identities) > 0 {
+		result, err := verifyKeyless(ctx, src, allowed)
+		if err == nil {
+			return verifiedBy{keyless: result}, nil
+		}
+		lastErr = err
+		tried = append(tried, describeIdentities(allowed.identities))
+	}
+	return verifiedBy{}, fmt.Errorf(
 		"signature verification FAILED for %s@%s against %s: %w",
 		ref, src.subject.Digest, strings.Join(tried, ", "), lastErr)
+}
+
+// verifyKeyless checks the keyless signature carried beside the artifact.
+//
+// Everything it needs is already at hand: the bundle travels with the
+// artifact and the trusted root is a file, so this reaches no certificate
+// authority and no transparency log.
+func verifyKeyless(ctx context.Context, src verifySource, allowed allowedSigners) (*keyless.Result, error) {
+	raw, err := os.ReadFile(allowed.trustRoot) // #nosec G304 -- operator-chosen trusted root
+	if err != nil {
+		return nil, fmt.Errorf("reading the trusted root the policy pins: %w", err)
+	}
+	root, err := keyless.LoadTrustedRoot(raw)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", allowed.trustRoot, err)
+	}
+	bundle, err := signing.FetchBundle(ctx, src.target, src.bundleRef, src.subject)
+	if err != nil {
+		return nil, err
+	}
+	return keyless.Verify(bundle, src.subject.Digest, root, allowed.identities)
+}
+
+// describeIdentities names the keyless signers a refusal tried, so the
+// message lists them beside the key files rather than saying only that
+// something keyless was attempted.
+func describeIdentities(ids []keyless.Identity) string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, fmt.Sprintf("%s (via %s)", id.Subject, id.Issuer))
+	}
+	return strings.Join(out, ", ")
 }
 
 // checkAttestation looks for a statement of src's sources and, when one
@@ -456,7 +587,15 @@ func verifyDigest(
 // something else to enforce, and reporting the same output as an artifact
 // with no such statement at all is the correct answer here, not a missing
 // feature.
-func checkAttestation(ctx context.Context, verifier signature.Verifier, src verifySource, ref registry.Reference) (attestationReport, error) {
+func checkAttestation(ctx context.Context, by verifiedBy, src verifySource, ref registry.Reference) (attestationReport, error) {
+	// A source attestation is a statement by whoever signed the artifact,
+	// held against that same signer. A keyless signature names an identity
+	// rather than supplying a key to check a second statement with, so the
+	// statement is left unchecked, and said to be.
+	if by.key == nil {
+		return uncheckedAttestation(ctx, src)
+	}
+	verifier := by.key
 	envelope, err := signing.FetchAttestation(
 		ctx, src.target, src.attRef, src.subject)
 	switch {
@@ -560,23 +699,52 @@ func missingAttestation(ctx context.Context, src verifySource) (attestationRepor
 	// Reported, not passed over: returning nothing here is the same answer
 	// an artifact owing no statement gives, so a deleted manifest would
 	// hide a deleted attestation.
-	raw, err := content.FetchAll(ctx, src.target, src.subject)
-	if err != nil {
-		return attestationReport{warning: fmt.Sprintf(
-			"WARNING: no attestation is present, and this artifact's manifest could not be read to say whether one was owed: %v", err)}, nil
+	claimed, unreadable := claimedSources(ctx, src)
+	if unreadable != "" {
+		return attestationReport{warning: "WARNING: no attestation is present, and " + unreadable}, nil
 	}
-	var man ocispec.Manifest
-	if err := json.Unmarshal(raw, &man); err != nil {
-		return attestationReport{warning: fmt.Sprintf(
-			"WARNING: no attestation is present, and this artifact's manifest could not be decoded to say whether one was owed: %v", err)}, nil
-	}
-	claimed := signing.LayersFromManifest(man)
-	if len(claimed) == 0 {
+	if claimed == 0 {
 		return attestationReport{}, nil
 	}
 	return attestationReport{warning: fmt.Sprintf(
 		"WARNING: %d layer(s) record an upstream source but no attestation is present, so this model's provenance cannot be checked",
-		len(claimed))}, nil
+		claimed)}, nil
+}
+
+// uncheckedAttestation says what a keyless verification did not establish.
+//
+// Silence here would be the same output an artifact with nothing to state
+// produces, so a model whose layers name upstream files would read as one
+// packed from local disk. The signature is still good; its provenance is
+// simply unproven.
+func uncheckedAttestation(ctx context.Context, src verifySource) (attestationReport, error) {
+	claimed, unreadable := claimedSources(ctx, src)
+	if unreadable != "" {
+		return attestationReport{warning: "WARNING: the source attestation was not checked, and " + unreadable}, nil
+	}
+	if claimed == 0 {
+		return attestationReport{}, nil
+	}
+	return attestationReport{warning: fmt.Sprintf(
+		"WARNING: %d layer(s) record an upstream source, and a source attestation is checked against the key that signed the model, so a model verified by a keyless signature has its provenance left unchecked",
+		claimed)}, nil
+}
+
+// claimedSources counts the layers whose annotations record where they were
+// fetched from, and says why it could not tell when the manifest cannot be
+// read.
+func claimedSources(ctx context.Context, src verifySource) (int, string) {
+	raw, err := content.FetchAll(ctx, src.target, src.subject)
+	if err != nil {
+		return 0, fmt.Sprintf(
+			"this artifact's manifest could not be read to say whether one was owed: %v", err)
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return 0, fmt.Sprintf(
+			"this artifact's manifest could not be decoded to say whether one was owed: %v", err)
+	}
+	return len(signing.LayersFromManifest(man)), ""
 }
 
 // attestationNotWritten explains a failure that leaves the signature

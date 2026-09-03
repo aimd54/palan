@@ -4,7 +4,8 @@ Verify a model's signature against a public key
 
 ### Synopsis
 
-Verify checks a model's signature against a public key.
+Verify checks a model's signature against a public key, or against the
+keyless identities a trust policy names.
 
 A model already in the local store is verified from there, so verification
 needs no registry, no transparency log, and no certificate authority. Anything
@@ -15,11 +16,21 @@ The signature is looked for under its tag first, then among the referrers of
 the model, so a signature written by an OCI 1.1 signing tool is checked even
 though it carries no tag.
 
+A keyless signature names its signer instead of naming a key. Where a policy
+rule lists identities, verify reads the signature bundle that travels with
+the model, holds its certificate against the trusted root the rule pins, and
+requires the transparency log entry to carry an inclusion proof that the same
+root's log key has signed. All of that material travels with the artifact, so
+this too needs no network. The signer is reported, since it is the one thing
+the result establishes that the configuration did not already state.
+
 Where sign also wrote a statement of the model's sources, verify checks it
 against the same key and against the model's own layers, and names what the
 layers came from. A model with no such statement verifies exactly as it did
 before: requiring one is a policy for something else to enforce, not a fact
-this command asserts.
+this command asserts. A source attestation is checked against the key that
+signed the model, so a model verified by a keyless signature has its
+provenance reported as unchecked rather than checked.
 
 ```
 palan verify REF --key FILE [flags]

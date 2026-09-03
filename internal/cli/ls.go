@@ -78,7 +78,7 @@ func listLocal(ctx context.Context) ([]modelRow, error) {
 		// Signatures and attestations are tagged manifests like anything
 		// else, but they are attached to a model rather than being one, so
 		// listing them as models would be noise.
-		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) {
+		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) || signing.IsBundleTag(e.Ref) {
 			continue
 		}
 		rows = append(rows, describeRef(ctx, st.OCI(), e.Ref, e.Descriptor))

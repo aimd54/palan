@@ -157,7 +157,7 @@ func storeItems(ctx context.Context) ([]list.Item, error) {
 	}
 	items := make([]list.Item, 0, len(entries))
 	for _, e := range entries {
-		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) {
+		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) || signing.IsBundleTag(e.Ref) {
 			continue
 		}
 		items = append(items, modelItem{ref: e.Ref, desc: pickerDescription(ctx, st, e)})
