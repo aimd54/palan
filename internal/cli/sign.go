@@ -214,6 +214,10 @@ this command asserts.`,
 type verifySource struct {
 	target oras.ReadOnlyTarget
 	sigRef string
+	// attRef is filled by the verify command alone: it is the only caller
+	// that goes on to check an attestation, and the gates at pull, load,
+	// run and serve stop at the signature.
+	//
 	// attRef is the attestation's reference, in the same form as sigRef: a
 	// bare tag on a registry, a full reference in the local store.
 	attRef string
