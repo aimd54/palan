@@ -224,15 +224,17 @@ func saveAttestation(ctx context.Context, st *store.Store, dst *oci.Store, ref s
 	return true, nil
 }
 
-// saveBundle copies a reference's keyless signature into the bundle when
-// the store has one, the same way saveSignature copies its signature. Most
-// artifacts carry none, so a missing one is reported rather than treated as
-// a failure.
 // saveBundles copies every keyless signature attached to a reference into
 // the bundle and reports how many travelled. They are found by asking what
 // refers to the model rather than by name, because a bundle is named after
 // itself and an artifact may carry several. Most artifacts carry none, so
 // none is reported rather than treated as a failure.
+//
+// Each is copied by digest and named at the destination. A bundle in the
+// store need not carry palan's name for it: the store is a plain OCI
+// layout, so another tool can attach one knowing only the subject
+// relationship. Resolving the name first would fail on exactly that
+// bundle and take the whole export down with it.
 func saveBundles(ctx context.Context, st *store.Store, dst *oci.Store, ref string, target ocispec.Descriptor) (int, error) {
 	parsed, err := registry.ParseReference(ref)
 	if err != nil {
@@ -244,8 +246,8 @@ func saveBundles(ctx context.Context, st *store.Store, dst *oci.Store, ref strin
 		return 0, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
 	}
 	for _, b := range bundles {
-		bundleRef := signing.BundleRef(parsed, b.Digest)
-		if _, err := oras.Copy(ctx, st.OCI(), bundleRef, dst, bundleRef, oras.DefaultCopyOptions); err != nil {
+		if _, err := oras.Copy(ctx, st.OCI(), b.Digest.String(), dst,
+			signing.BundleRef(parsed, b.Digest), oras.DefaultCopyOptions); err != nil {
 			return 0, fmt.Errorf("exporting a keyless signature for %s: %w", ref, err)
 		}
 	}

@@ -135,9 +135,10 @@ func TestKeylessSignatureIsIndexedByTheRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Filtered the way palan filters, so a registry that indexed the bundle
-	// under some other artifact type fails here rather than silently going
-	// undiscovered.
+	// Asked for by exact artifact type, which is stricter than palan's own
+	// filter: palan lists referrers unfiltered and selects by media type
+	// prefix. A registry that indexed the bundle under some other type
+	// fails here rather than silently going undiscovered later.
 	refs, err := registry.Referrers(context.Background(), native, desc, bundleMediaType)
 	if err != nil {
 		t.Fatalf("the registry does not serve the referrers API natively: %v", err)
@@ -148,7 +149,17 @@ func TestKeylessSignatureIsIndexedByTheRegistry(t *testing.T) {
 
 	// And there is deliberately no tag: this is the shape a signing tool
 	// publishes, and finding it must not depend on one existing.
-	if _, err := repo.Resolve(context.Background(), signing.BundleTag(refs[0].Digest)); err == nil {
+	//
+	// The name is checked to be usable first. A malformed reference would
+	// also fail to resolve, and this assertion would then pass while
+	// showing nothing about whether a tag exists.
+	tag := signing.BundleTag(refs[0].Digest)
+	if err := (registry.Reference{
+		Registry: parsedHost(t, ref), Repository: "llm/keyless-indexed", Reference: tag,
+	}).ValidateReference(); err != nil {
+		t.Fatalf("the bundle tag %q is not a usable reference: %v", tag, err)
+	}
+	if _, err := repo.Resolve(context.Background(), tag); err == nil {
 		t.Error("the bundle resolves under a tag, so this test would not prove referrer discovery")
 	}
 }
@@ -171,8 +182,10 @@ func TestKeylessVerifyThroughARealRegistry(t *testing.T) {
 	cfg := writeKeylessConfig(t, host+"/**", writeTrustRootFile(t, l),
 		e2eSigner.Subject, e2eSigner.Issuer)
 
-	// verify.required is set, so the pull itself is gated on the keyless
-	// signature: a pull that succeeds has already verified one.
+	// verify.required is set, so the pull is gated on the keyless
+	// signature. That the gate is what runs is established by the sibling
+	// refusal test rather than by this one; here the pull is the way the
+	// signature reaches a store that never saw it.
 	consumer := t.TempDir()
 	out := palan(t, consumer, "--config", cfg, "pull", ref)
 	if !strings.Contains(out, "Keyless signature stored alongside the model") {
@@ -288,4 +301,15 @@ func TestCosignNewBundleFormatIsReadAsABundle(t *testing.T) {
 	if !strings.Contains(out, "public key rather than by certificate") {
 		t.Errorf("palan did not read cosign's bundle; it refused for another reason:\n%s", out)
 	}
+}
+
+// parsedHost returns the registry host of a reference, for building a
+// reference to validate.
+func parsedHost(t *testing.T, ref string) string {
+	t.Helper()
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Registry
 }

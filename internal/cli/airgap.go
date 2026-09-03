@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	digest "github.com/opencontainers/go-digest"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	oras "oras.land/oras-go/v2"
@@ -192,7 +193,11 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 	return func(ctx context.Context, bundle oras.ReadOnlyTarget, refs []string) error {
 		expectedSignatures := make(map[string]struct{}, len(refs))
 		expectedAttestations := make(map[string]struct{}, len(refs))
-		expectedBundles := make(map[string]struct{}, len(refs))
+		// Names alone decide nothing here: a bundle's name is composed
+		// from what is attached to a model, so an attacker who attaches a
+		// manifest gets to choose an accepted name. The digest each name
+		// must resolve to is recorded with it.
+		expectedBundles := make(map[string]digest.Digest, len(refs))
 		for _, raw := range refs {
 			if signing.IsSigTag(raw) || signing.IsAttTag(raw) || signing.IsBundleTag(raw) {
 				continue
@@ -219,7 +224,7 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				return err
 			}
 			for _, b := range attached {
-				expectedBundles[signing.BundleRef(ref, b.Digest)] = struct{}{}
+				expectedBundles[signing.BundleRef(ref, b.Digest)] = b.Digest
 			}
 			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
 		}
@@ -237,9 +242,23 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 						"bundle contains %q, which is not the attestation of any verified model; refusing to import", raw)
 				}
 			case signing.IsBundleTag(raw):
-				if _, ok := expectedBundles[raw]; !ok {
+				want, ok := expectedBundles[raw]
+				if !ok {
 					return fmt.Errorf(
 						"bundle contains %q, which is not the keyless signature of any verified model; refusing to import", raw)
+				}
+				// The name has to resolve to the manifest it names.
+				// Otherwise any content at all travels under a name the
+				// first pass accepted, and what arrives is not what was
+				// checked.
+				got, err := bundle.Resolve(ctx, raw)
+				if err != nil {
+					return fmt.Errorf("resolving %q: %w", raw, err)
+				}
+				if got.Digest != want {
+					return fmt.Errorf(
+						"bundle contains %q, which holds %s rather than the keyless signature %s it names; refusing to import",
+						raw, got.Digest, want)
 				}
 			}
 		}
