@@ -3,7 +3,9 @@
 
 // Package trustpolicy decides which identities are allowed to sign which
 // references. It holds no keys and opens no files: it answers questions
-// about names, so it needs neither a registry nor a keyring to test.
+// about names, so it needs neither a registry nor a keyring to test. A rule
+// names key files and keyless identities; reading either is somebody
+// else's job.
 package trustpolicy
 
 import (

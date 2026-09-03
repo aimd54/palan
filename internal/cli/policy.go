@@ -8,14 +8,24 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/aimd54/palan/internal/keyless"
 	"github.com/aimd54/palan/internal/trustpolicy"
 )
 
 // policyRule is the YAML shape of one verify.policy entry. It exists so the
 // config format and the policy model can move independently.
 type policyRule struct {
-	Pattern string   `mapstructure:"pattern"`
-	Keys    []string `mapstructure:"keys"`
+	Pattern    string         `mapstructure:"pattern"`
+	Keys       []string       `mapstructure:"keys"`
+	Identities []identityRule `mapstructure:"identities"`
+	TrustRoot  string         `mapstructure:"trust-root"`
+}
+
+// identityRule is the YAML shape of one keyless signer: who they are, and
+// which OpenID provider is trusted to say so.
+type identityRule struct {
+	Subject string `mapstructure:"subject"`
+	Issuer  string `mapstructure:"issuer"`
 }
 
 // loadPolicy reads verify.policy from the config, returning nil when none is
@@ -39,9 +49,15 @@ func loadPolicy(v *viper.Viper) (*trustpolicy.Policy, error) {
 	}
 	rules := make([]trustpolicy.Rule, 0, len(raw))
 	for _, r := range raw {
+		ids := make([]keyless.Identity, 0, len(r.Identities))
+		for _, id := range r.Identities {
+			ids = append(ids, keyless.Identity{Subject: id.Subject, Issuer: id.Issuer})
+		}
 		rules = append(rules, trustpolicy.Rule{
-			Pattern:  r.Pattern,
-			KeyFiles: r.Keys,
+			Pattern:    r.Pattern,
+			KeyFiles:   r.Keys,
+			Identities: ids,
+			TrustRoot:  r.TrustRoot,
 		})
 	}
 	return trustpolicy.New(rules)

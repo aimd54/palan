@@ -1370,3 +1370,162 @@ func TestPackUnderSourcesPolicySaysWhetherItChecked(t *testing.T) {
 		})
 	}
 }
+
+// TestARuleCanNameAKeylessIdentity covers the shape M11 adds: a signer
+// named by who they are rather than by a key file, with the trusted root
+// the certificate is held against.
+func TestARuleCanNameAKeylessIdentity(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern":    "registry.example/llm/**",
+		"trust-root": "/etc/palan/sigstore-root.json",
+		"identities": []map[string]any{{
+			"subject": "https://forge.example/org/repo/.github/workflows/release.yml@refs/tags/*",
+			"issuer":  "https://token.forge.example",
+		}},
+	}})
+
+	p, err := loadPolicy(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, ok := p.RuleFor("registry.example/llm/qwen3")
+	if !ok {
+		t.Fatal("the rule does not match the reference it names")
+	}
+	if rule.TrustRoot != "/etc/palan/sigstore-root.json" {
+		t.Errorf("trust root = %q, want the configured path", rule.TrustRoot)
+	}
+	if len(rule.Identities) != 1 {
+		t.Fatalf("the rule carries %d identities, want 1", len(rule.Identities))
+	}
+	if got := rule.Identities[0].Issuer; got != "https://token.forge.example" {
+		t.Errorf("issuer = %q, want the configured provider", got)
+	}
+}
+
+// TestARuleMayNameBothAKeyAndAnIdentity is what a migration looks like from
+// the inside: signatures made either way are accepted while publishers move
+// from one to the other.
+func TestARuleMayNameBothAKeyAndAnIdentity(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern":    "registry.example/**",
+		"keys":       []string{"/keys/team.pub"},
+		"trust-root": "/etc/palan/sigstore-root.json",
+		"identities": []map[string]any{{
+			"subject": "release@example.com",
+			"issuer":  "https://token.forge.example",
+		}},
+	}})
+
+	p, err := loadPolicy(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, ok := p.RuleFor("registry.example/llm/qwen3")
+	if !ok {
+		t.Fatal("the rule does not match the reference it names")
+	}
+	if len(rule.KeyFiles) != 1 || len(rule.Identities) != 1 {
+		t.Fatalf("rule carries %d keys and %d identities, want one of each",
+			len(rule.KeyFiles), len(rule.Identities))
+	}
+}
+
+// TestAKeylessRuleWithNoTrustRootIsRefused: without a pinned root there is
+// nothing to check a certificate against, so the rule could never admit
+// anything and would refuse for a reason pointing at the signature.
+func TestAKeylessRuleWithNoTrustRootIsRefused(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern": "registry.example/**",
+		"identities": []map[string]any{{
+			"subject": "release@example.com",
+			"issuer":  "https://token.forge.example",
+		}},
+	}})
+
+	_, err := loadPolicy(v)
+	if err == nil {
+		t.Fatal("a keyless rule with no trust root loaded")
+	}
+	if !strings.Contains(err.Error(), "trust-root") {
+		t.Errorf("refusal does not name what is missing: %v", err)
+	}
+}
+
+// TestATrustRootWithNoIdentityIsRefused catches the other half-finished
+// edit, where somebody pins a root and believes it is doing something.
+func TestATrustRootWithNoIdentityIsRefused(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern":    "registry.example/**",
+		"keys":       []string{"/keys/team.pub"},
+		"trust-root": "/etc/palan/sigstore-root.json",
+	}})
+
+	_, err := loadPolicy(v)
+	if err == nil {
+		t.Fatal("a trust root that nothing reads loaded")
+	}
+	if !strings.Contains(err.Error(), "nothing would be checked") {
+		t.Errorf("refusal does not say the root is unread: %v", err)
+	}
+}
+
+// TestARuleNamingNeitherIsRefused keeps the empty allow-list refusal that
+// predates keyless identities, now that a rule has two ways to name a
+// signer and could satisfy neither.
+func TestARuleNamingNeitherIsRefused(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{
+		{"pattern": "registry.example/**"},
+	})
+
+	_, err := loadPolicy(v)
+	if err == nil {
+		t.Fatal("a rule naming no signer at all loaded")
+	}
+	if !strings.Contains(err.Error(), "neither a key nor an identity") {
+		t.Errorf("refusal does not say what is missing: %v", err)
+	}
+}
+
+// TestAnIdentityMatchingEverySignerIsRefusedAtLoad reports the pattern
+// somebody writes to make a refusal go away when the config is read, rather
+// than at the moment a signature is checked against it.
+func TestAnIdentityMatchingEverySignerIsRefusedAtLoad(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern":    "registry.example/**",
+		"trust-root": "/etc/palan/sigstore-root.json",
+		"identities": []map[string]any{{
+			"subject": "*",
+			"issuer":  "https://token.forge.example",
+		}},
+	}})
+
+	if _, err := loadPolicy(v); err == nil {
+		t.Fatal("an identity matching every signer loaded")
+	}
+}
+
+// TestAnIdentityWithNoIssuerIsRefused: a subject is a name any provider can
+// mint, so one without the provider that asserted it is not an identity.
+func TestAnIdentityWithNoIssuerIsRefused(t *testing.T) {
+	v := viper.New()
+	v.Set(keyVerifyPolicy, []map[string]any{{
+		"pattern":    "registry.example/**",
+		"trust-root": "/etc/palan/sigstore-root.json",
+		"identities": []map[string]any{{"subject": "release@example.com"}},
+	}})
+
+	_, err := loadPolicy(v)
+	if err == nil {
+		t.Fatal("an identity with no issuer loaded")
+	}
+	if !strings.Contains(err.Error(), "issuer") {
+		t.Errorf("refusal does not name what is missing: %v", err)
+	}
+}
