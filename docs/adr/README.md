@@ -25,5 +25,6 @@ decisions and the reasoning behind them.
 | [ADR-0012](0012-distribution-is-format-neutral.md) | Distribution is format-neutral; serving is GGUF | accepted |
 | [ADR-0013](0013-publisher-signatures-at-import.md) | Verify a publisher's own signature when a model is imported | accepted |
 | [ADR-0014](0014-source-attestation-binds-layers-to-upstream-files.md) | A source attestation binds layers to the upstream files they came from | accepted |
+| [ADR-0015](0015-keyless-verification-from-carried-material.md) | Keyless signatures are verified from material carried with the artifact | accepted |
 
 Use [`template.md`](template.md) for new ADRs.
