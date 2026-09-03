@@ -108,6 +108,26 @@ func runVerifyUnderPolicyWithKey(
 	return out.String(), err
 }
 
+// runVerifyUnderPolicyWithKeyFlag runs verify with --key on the command
+// line beside a configured policy, which is how an operator overrides the
+// standing configuration for one invocation.
+func runVerifyUnderPolicyWithKeyFlag(
+	t *testing.T, ref string, rules []map[string]any, keyPath string,
+) (string, error) {
+	t.Helper()
+	t.Setenv("PALAN_HOME", t.TempDir())
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	v.Set(keyVerifyPolicy, rules)
+	cmd := newVerifyCmd(v)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{ref, "--key", keyPath})
+	err := cmd.Execute()
+	return out.String(), err
+}
+
 // TestAValidKeyThePolicyDoesNotNameForThatReferenceRefuses pins the core
 // behaviour a trust policy exists to provide: a signature that is
 // genuinely valid still refuses when no rule names the key for this

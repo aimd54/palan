@@ -210,8 +210,17 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 				return err
 			}
 			expectedSignatures[src.sigRef] = struct{}{}
-			expectedAttestations[signing.AttRef(ref, desc.Digest)] = struct{}{}
-			expectedBundles[src.bundleRef] = struct{}{}
+			expectedAttestations[src.attRef] = struct{}{}
+			// Named from what is actually attached to this model, since a
+			// bundle is named after itself and there is no single
+			// reference to predict.
+			attached, err := signing.BundleReferrers(ctx, bundle, desc)
+			if err != nil {
+				return err
+			}
+			for _, b := range attached {
+				expectedBundles[signing.BundleRef(ref, b.Digest)] = struct{}{}
+			}
 			fmt.Fprintf(out, "Verified %s@%s\n", ref, desc.Digest)
 		}
 

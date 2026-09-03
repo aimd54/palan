@@ -100,12 +100,15 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 	case len(bundles) == 0:
 		ev.bundle(false, nil) // no keyless signature, nothing more to carry
 	default:
-		from := bundles[0].Digest.String()
-		if _, err := oras.Copy(ctx, srcRepo, from, dstRepo, from, opts); err != nil {
-			ev.bundle(false, fmt.Errorf("copying the keyless signature for %s: %w", src, err))
-		} else {
-			ev.bundle(true, nil)
+		var problem error
+		for _, b := range bundles {
+			from := b.Digest.String()
+			if _, err := oras.Copy(ctx, srcRepo, from, dstRepo, from, opts); err != nil {
+				problem = fmt.Errorf("copying a keyless signature for %s: %w", src, err)
+				break
+			}
 		}
+		ev.bundle(problem == nil, problem)
 	}
 
 	return desc, nil
@@ -150,13 +153,11 @@ func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (Sav
 		if attested {
 			report.Attestations++
 		}
-		bundled, err := saveBundle(ctx, st, dst, ref, desc.Digest)
+		bundled, err := saveBundles(ctx, st, dst, ref, desc)
 		if err != nil {
 			return SaveReport{}, err
 		}
-		if bundled {
-			report.Bundles++
-		}
+		report.Bundles += bundled
 	}
 	if err := tarDir(tmp, w); err != nil {
 		return SaveReport{}, err
@@ -227,23 +228,28 @@ func saveAttestation(ctx context.Context, st *store.Store, dst *oci.Store, ref s
 // the store has one, the same way saveSignature copies its signature. Most
 // artifacts carry none, so a missing one is reported rather than treated as
 // a failure.
-func saveBundle(ctx context.Context, st *store.Store, dst *oci.Store, ref string, d digest.Digest) (bool, error) {
+// saveBundles copies every keyless signature attached to a reference into
+// the bundle and reports how many travelled. They are found by asking what
+// refers to the model rather than by name, because a bundle is named after
+// itself and an artifact may carry several. Most artifacts carry none, so
+// none is reported rather than treated as a failure.
+func saveBundles(ctx context.Context, st *store.Store, dst *oci.Store, ref string, target ocispec.Descriptor) (int, error) {
 	parsed, err := registry.ParseReference(ref)
 	if err != nil {
 		// Not a registry-shaped reference, so no signature can be addressed.
-		return false, nil //nolint:nilerr // exporting the artifact alone is correct here
+		return 0, nil //nolint:nilerr // exporting the artifact alone is correct here
 	}
-	bundleRef := signing.BundleRef(parsed, d)
-	if _, err := st.Resolve(ctx, bundleRef); err != nil {
-		if errors.Is(err, errdef.ErrNotFound) {
-			return false, nil
+	bundles, err := signing.BundleReferrers(ctx, st.OCI(), target)
+	if err != nil {
+		return 0, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
+	}
+	for _, b := range bundles {
+		bundleRef := signing.BundleRef(parsed, b.Digest)
+		if _, err := oras.Copy(ctx, st.OCI(), bundleRef, dst, bundleRef, oras.DefaultCopyOptions); err != nil {
+			return 0, fmt.Errorf("exporting a keyless signature for %s: %w", ref, err)
 		}
-		return false, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
 	}
-	if _, err := oras.Copy(ctx, st.OCI(), bundleRef, dst, bundleRef, oras.DefaultCopyOptions); err != nil {
-		return false, fmt.Errorf("exporting the keyless signature for %s: %w", ref, err)
-	}
-	return true, nil
+	return len(bundles), nil
 }
 
 // LoadOption configures Load.

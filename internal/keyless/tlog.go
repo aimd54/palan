@@ -21,15 +21,25 @@ import (
 )
 
 // verifyLogEntry establishes when a signature was recorded, and that it was
-// recorded at all.
+// recorded at all. Those are two separate claims proven by two separate
+// signatures, and conflating them is the easiest mistake to make here.
 //
-// The order matters. The checkpoint is a log root the log itself signed, so
-// it is checked first and everything after is measured against it: the
-// inclusion proof must rebuild that exact root, and the entry the proof
-// covers must be about this signature rather than some other one the log
-// also holds. Only then is the entry's timestamp worth anything, and the
-// timestamp is what lets a certificate that expired minutes after it was
-// issued be checked against the moment it was used.
+// The inclusion proof, with its checkpoint, proves that an entry is in the
+// log. It says nothing about when: a checkpoint signs the log's size and
+// root and carries no date, and the proof binds only the entry's bytes,
+// which carry none either. The entry's timestamp is proven instead by the
+// log's signature over it, the signed entry timestamp, and that signature
+// is what makes the timestamp worth anything at all.
+//
+// The timestamp has to be worth something, because a keyless signing
+// certificate lives about ten minutes and is checked against the moment
+// the log recorded the signature rather than against the present. An
+// unproven timestamp would put the expiry of every such certificate in the
+// hands of whoever wrote the bundle, which is to say there would be no
+// expiry.
+//
+// So the timestamp is proven first, and everything measured against it
+// follows.
 func verifyLogEntry(entry *protorekor.TransparencyLogEntry, root *TrustedRoot, sig, payload, certDER []byte) (time.Time, error) {
 	proof := entry.GetInclusionProof()
 	if proof == nil {
@@ -41,13 +51,26 @@ func verifyLogEntry(entry *protorekor.TransparencyLogEntry, root *TrustedRoot, s
 			"the inclusion proof carries no checkpoint, so its log root is unsigned and proves nothing")
 	}
 
-	integrated := time.Unix(entry.GetIntegratedTime(), 0).UTC()
 	id := hex.EncodeToString(entry.GetLogId().GetKeyId())
 	key, ok := root.logs[id]
 	if !ok {
 		return time.Time{}, fmt.Errorf(
 			"the entry names transparency log %s, which the trusted root does not list", id)
 	}
+	logVerifier, err := signature.LoadVerifier(key.public, crypto.SHA256)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("loading the transparency log key: %w", err)
+	}
+
+	// The log is named by the entry, and the key is chosen by that name, so
+	// on its own the name proves nothing. What binds them is that the
+	// signature checked here covers the name too: an entry relabelled to a
+	// different pinned log would need that log's signature, and one
+	// relabelled to a log the root does not list was already refused above.
+	if err := verifyEntryTimestamp(entry, logVerifier); err != nil {
+		return time.Time{}, err
+	}
+	integrated := time.Unix(entry.GetIntegratedTime(), 0).UTC()
 	if !key.valid.covers(integrated) {
 		return time.Time{}, fmt.Errorf(
 			"the entry is dated %s, outside the window the trusted root gives transparency log %s",
@@ -57,7 +80,7 @@ func verifyLogEntry(entry *protorekor.TransparencyLogEntry, root *TrustedRoot, s
 	// The checkpoint's own fields are read back out of the text the log
 	// signed, never out of the surrounding envelope, so that anything the
 	// signature does not cover cannot influence what is compared.
-	signedRoot, signedSize, err := verifyCheckpoint(proof.GetCheckpoint().GetEnvelope(), key.public)
+	signedRoot, signedSize, err := verifyCheckpoint(proof.GetCheckpoint().GetEnvelope(), logVerifier)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -94,6 +117,52 @@ func verifyLogEntry(entry *protorekor.TransparencyLogEntry, root *TrustedRoot, s
 	return integrated, nil
 }
 
+// entryTimestamp is what a transparency log signs when it accepts an entry.
+// The fields are declared in the order the canonical form sorts them, so
+// encoding the struct produces those bytes directly: the values are an
+// integer, a base64 string and a hex string, none of which the canonical
+// form would render differently from the ordinary encoder.
+type entryTimestamp struct {
+	Body           string `json:"body"`
+	IntegratedTime int64  `json:"integratedTime"`
+	LogID          string `json:"logID"`
+	LogIndex       int64  `json:"logIndex"`
+}
+
+// verifyEntryTimestamp checks the log's own signature over when it recorded
+// this entry.
+//
+// This is the only thing that dates a signature. Everything else in a
+// bundle is either undated or dated by whoever wrote the bundle, so without
+// this a certificate would be checked against a moment the bundle chose,
+// and a certificate that may be checked against any moment does not expire.
+//
+// An entry carrying no such signature is refused rather than accepted with
+// its stated time, because accepting it is the same as having no expiry
+// check while reporting one.
+func verifyEntryTimestamp(entry *protorekor.TransparencyLogEntry, verifier signature.Verifier) error {
+	set := entry.GetInclusionPromise().GetSignedEntryTimestamp()
+	if len(set) == 0 {
+		return fmt.Errorf(
+			"the log entry carries no signed timestamp, so nothing dates this signature and its certificate cannot be held to the moment it was used")
+	}
+	signed, err := json.Marshal(entryTimestamp{
+		Body:           base64.StdEncoding.EncodeToString(entry.GetCanonicalizedBody()),
+		IntegratedTime: entry.GetIntegratedTime(),
+		LogID:          hex.EncodeToString(entry.GetLogId().GetKeyId()),
+		LogIndex:       entry.GetLogIndex(),
+	})
+	if err != nil {
+		return fmt.Errorf("encoding the entry's timestamp: %w", err)
+	}
+	if err := verifier.VerifySignature(
+		bytes.NewReader(set), bytes.NewReader(signed)); err != nil {
+		return fmt.Errorf(
+			"the transparency log did not sign this entry as stated, so its date, its index and its contents are all unproven: %w", err)
+	}
+	return nil
+}
+
 // verifyCheckpoint checks a signed tree head and returns the log root and
 // tree size it commits to.
 //
@@ -101,17 +170,13 @@ func verifyLogEntry(entry *protorekor.TransparencyLogEntry, root *TrustedRoot, s
 // text, a blank line, then one signature line per signer. The signature
 // covers the text and the newline ending it, and not the blank line that
 // separates text from signatures.
-func verifyCheckpoint(envelope string, public crypto.PublicKey) ([]byte, int64, error) {
+func verifyCheckpoint(envelope string, verifier signature.Verifier) ([]byte, int64, error) {
 	split := strings.LastIndex(envelope, "\n\n")
 	if split < 0 {
 		return nil, 0, fmt.Errorf("the checkpoint has no signature block")
 	}
 	text, sigs := envelope[:split+1], envelope[split+2:]
 
-	verifier, err := signature.LoadVerifier(public, crypto.SHA256)
-	if err != nil {
-		return nil, 0, fmt.Errorf("loading the transparency log key: %w", err)
-	}
 	if err := verifyAnyNoteSignature(text, sigs, verifier); err != nil {
 		return nil, 0, err
 	}

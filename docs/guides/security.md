@@ -417,6 +417,15 @@ characters, which is what makes a workflow identity usable: it carries the
 git ref that built it, so it changes with every release and an exact name
 would have to be edited each time.
 
+A subject pattern must pin a domain. In both an address and a URL the domain
+is the part a signer cannot choose for themselves, while the local part of
+an address and the path of a workflow are theirs to pick, so a pattern that
+pins no domain matches identities belonging to whoever cares to mint one.
+`*@example.com` is fine and so is a workflow pattern anchored on its forge;
+`*` and `*@*` are refused when the config loads. A certificate naming its
+holder more than once is refused too, since there is no reading of "who
+signed this" that returns two answers.
+
 The issuer is the OpenID provider that authenticated the holder, and it is
 matched exactly. A subject on its own is a name any provider can mint, so
 without the issuer a signer authenticated anywhere at all would pass as the
@@ -451,31 +460,52 @@ the file you named; here it is whatever the certificate turned out to say,
 and the policy pattern it matched may be broader than the signer it
 admitted.
 
-In order: the signature is checked against its own certificate; the
-transparency log entry is checked to be in a log the pinned root names,
-by rebuilding the log root from the inclusion proof and requiring the log's
-signed checkpoint to agree; the proven entry is checked to be about this
-signature rather than some other entry in the same log; the certificate is
-checked to chain to a pinned authority *as of the moment the log recorded
+In order: the signature is checked against its own certificate; the log's
+own signature over the entry is checked, which is what establishes when the
+signature was recorded; the entry is checked to be in a log the pinned root
+names, by rebuilding the log root from the inclusion proof and requiring the
+log's signed checkpoint to agree; the proven entry is checked to be about
+this signature rather than some other entry in the same log; the certificate
+is checked to chain to a pinned authority *as of the moment the log recorded
 the signature*; the signer is checked against the rule; and the signed
 statement is checked to be about this artifact's digest.
 
-The time matters more than it looks. A keyless certificate is expired by
-the time anyone verifies it, so checking it against the present would
-refuse every keyless signature ever made. It is checked against log time
-instead, and log time is only believed once the inclusion proof has been
-shown to rebuild a root the log key signed.
+Two different signatures by the log are involved and they prove different
+things. The **checkpoint** signs the log's size and its root, so it proves
+an entry is in the log and says nothing about when: it carries no date, and
+neither do the entry's bytes. The **signed entry timestamp** signs the
+entry's bytes together with the date, the log's identity and the entry's
+position, and it is the only thing that dates a signature.
 
-Holding the proven entry against the signature in hand is the check that a
-proof cannot make for itself. A valid inclusion proof shows that *some*
+That distinction decides whether certificate expiry means anything. A
+keyless certificate is expired by the time anyone verifies it, so checking
+it against the present would refuse every keyless signature ever made; it is
+checked against log time instead. If log time were taken from the bundle
+unchecked, whoever wrote the bundle would choose it, and a certificate that
+can be checked against any moment does not expire at all. Someone holding
+key material recovered long after the fact could then sign a model today and
+date it inside the ten minutes when the certificate was live.
+
+So an entry carrying no signed timestamp is refused, rather than accepted
+with the date it states.
+
+Holding the proven entry against the signature in hand is the check that an
+inclusion proof cannot make for itself. A valid proof shows that *some*
 entry is in the log, and a log holds millions.
 
 ### Carrying one across a gap
 
 A keyless signature is attached to the model as a referrer and carries no
-tag of its own, which is how the tools that write one publish it. `pull`
-finds it there and brings it into the store, `save` puts it in the transfer
-bundle, and `load` imports it:
+tag of its own, which is how the tools that write one publish it. It is
+always found that way, by asking what refers to the model, and never by a
+tag: a tag is something anybody with push access can create, and it would
+otherwise decide which signature gets checked.
+
+For the same reason every signature attached to a model is checked, and
+every one travels. An artifact can carry several, which is ordinary during a
+key rotation and is also what somebody with push access does to shadow a
+real one. `pull` brings them all into the store, `save` puts them all in the
+transfer bundle, and `load` imports them:
 
 ```sh
 palan pull registry.internal/vendor/qwen3:8b-q4
