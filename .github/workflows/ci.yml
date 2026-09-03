@@ -31,11 +31,11 @@ concurrency:
 
 jobs:
   # Which halves of the tree a change touches, so the jobs below can stand
-  # down without the workflow having to skip. The filter starts by matching
-  # everything and then subtracts: a set built only from exclusions matches
-  # no file and still reports true, which reads as "there is code here" for
-  # every change and quietly runs the whole suite against a typo in a
-  # heading.
+  # down without the workflow having to skip. The comparison is spelled out
+  # here rather than delegated, because the decision has to be readable in
+  # the log: a filter that answers yes to everything looks exactly like a
+  # working one from the outside, and the whole suite running against a typo
+  # in a heading is not a failure anything reports.
   changes:
     name: Detect changes
     runs-on: ubuntu-24.04
@@ -49,15 +49,37 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+          fetch-depth: 0
+      - name: List what changed and decide whether any of it is code
         id: filter
-        with:
-          filters: |
-            code:
-              - '**'
-              - '!*.md'
-              - '!**/*.md'
-              - '!docs/**'
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # No base to compare against (a new branch, or a manual run) means
+          # nothing has been established about this tree, so run everything.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base to compare against, treating the change as code"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "${{ github.sha }}")
+          echo "changed files:"
+          printf '%s\n' "$files" | sed 's/^/  /'
+          # Code is anything that is neither a markdown file nor under
+          # docs/. The result is captured and tested for emptiness rather
+          # than read from grep's exit status, which reports the same
+          # absence for "everything was documentation" as for a pattern
+          # that matched nothing because it was wrong.
+          rest=$(printf '%s\n' "$files" | grep -vE '\.md$|^docs/' || true)
+          if [ -n "$rest" ]; then
+            echo "decision: code, because of:"
+            printf '%s\n' "$rest" | sed 's/^/  /'
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "decision: documentation only"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
 
   lint:
     name: Lint
