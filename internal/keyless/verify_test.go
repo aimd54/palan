@@ -314,6 +314,22 @@ func TestAnIdentityMatchingEverythingIsRefused(t *testing.T) {
 		"*@ex*ample.com",
 		// A pattern that names no domain at all.
 		"*@",
+		"*@*.",
+		// A literal tail after a wildcarded organisation. The refusal for
+		// the "@refs/tags/*" form above says to end on a literal domain,
+		// and this is what somebody writes next: the git ref then reads
+		// as a pinned domain while the host is wildcarded away.
+		"*/.github/workflows/release.yml@refs/tags/v1.0.0",
+		"*@refs/heads/main",
+		"*@refs/tags/v1",
+		// A path before the "@" with a real domain after it. The domain
+		// is genuinely pinned, and the pattern still describes a path
+		// rather than an address, so calling it one is a misreading.
+		"*/workflows/release.yml@example.com",
+		// A wildcard before the scheme unanchors the whole pattern, so a
+		// literal host stops meaning anything.
+		"*://forge.example/org/repo/*",
+		"http*://forge.example/org/repo/*",
 	} {
 		if err := (Identity{Subject: subject, Issuer: fixtureIssuer}).Validate(); err == nil {
 			t.Errorf("subject %q was accepted as a policy", subject)
@@ -508,7 +524,7 @@ func TestACertificateNamingItsHolderTwiceIsRefused(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cert := certWithSANs(t, tc.emails, tc.uris)
-			if _, _, err := certIdentity(cert); err == nil {
+			if _, _, _, err := certIdentity(cert); err == nil {
 				t.Fatal("a certificate with an ambiguous holder was read")
 			}
 		})
@@ -516,11 +532,107 @@ func TestACertificateNamingItsHolderTwiceIsRefused(t *testing.T) {
 
 	// The control: one name is read, so the refusals above are about the
 	// count and not about the certificate being unreadable.
-	subject, issuer, err := certIdentity(certWithSANs(t, []string{"one@example.com"}, nil))
+	subject, issuer, kind, err := certIdentity(certWithSANs(t, []string{"one@example.com"}, nil))
 	if err != nil {
 		t.Fatalf("a certificate naming its holder once was refused: %v", err)
 	}
 	if subject != "one@example.com" || issuer != "https://issuer.example" {
 		t.Errorf("read %q via %q, want the certificate's own values", subject, issuer)
+	}
+	if kind != subjectMail {
+		t.Errorf("an email SAN was read as kind %d, want an address", kind)
+	}
+}
+
+// TestNoAcceptedPatternReachesAForeignIdentity is the test the three
+// previous versions of this guard needed and did not have.
+//
+// Each of those versions was checked against a table of patterns somebody
+// thought of, and each passed while admitting a shape nobody had. The
+// property the guard exists to establish is not "these particular patterns
+// are refused": it is that a pattern the guard accepts cannot match an
+// identity under an authority it did not name. That is what this asserts,
+// by holding every accepted pattern against identities an attacker can
+// actually obtain.
+func TestNoAcceptedPatternReachesAForeignIdentity(t *testing.T) {
+	// Identities a stranger can get for themselves. The workflow ones need
+	// only a public repository and a tag; a git ref may contain "@" and
+	// ".", so the last two are creatable by anyone.
+	foreign := []struct {
+		subject string
+		kind    subjectKind
+	}{
+		{"https://github.com/mallory/pwn/.github/workflows/release.yml@refs/tags/v1.0.0", subjectURL},
+		{"https://github.com/mallory/pwn/.github/workflows/release.yml@refs/heads/main", subjectURL},
+		{"https://evil.test/mallory/repo/.github/workflows/ci.yaml@refs/tags/v1", subjectURL},
+		{"https://evil.test/x/://forge.example/org/repo/y", subjectURL},
+		{"https://evil.test/a@b/x.example.com", subjectURL},
+		{"https://evil.test/a/x.yml@refs/tags/v1@example.com", subjectURL},
+		{"mallory@evil.test", subjectMail},
+		{"mallory@evilexample.com", subjectMail},
+		{"mallory@example.com.evil.test", subjectMail},
+	}
+
+	// Patterns an operator would legitimately write, each with the identity
+	// it was written for.
+	accepted := []struct {
+		pattern string
+		mine    string
+		kind    subjectKind
+	}{
+		{"*@example.com", "release@example.com", subjectMail},
+		{"*@*.example.com", "release@ci.example.com", subjectMail},
+		{
+			"https://forge.example/org/repo/.github/workflows/release.yml@refs/tags/*",
+			"https://forge.example/org/repo/.github/workflows/release.yml@refs/tags/v9.9.9",
+			subjectURL,
+		},
+		{"https://gitea/acme/repo/*", "https://gitea/acme/repo/main", subjectURL},
+		{
+			"https://github.com/org/repo/.github/workflows/*",
+			"https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1.0.0",
+			subjectURL,
+		},
+		{"spiffe://prod/ns/ci/sa/builder", "spiffe://prod/ns/ci/sa/builder", subjectExact},
+	}
+
+	const issuer = "https://token.actions.githubusercontent.com"
+	for _, a := range accepted {
+		id := Identity{Subject: a.pattern, Issuer: issuer}
+		if err := id.Validate(); err != nil {
+			t.Errorf("pattern %q was refused: %v", a.pattern, err)
+			continue
+		}
+		// The control. A guard that refused everything would satisfy the
+		// property below and be useless.
+		if !id.matches(a.mine, issuer, a.kind) {
+			t.Errorf("pattern %q does not match the identity it was written for, %q",
+				a.pattern, a.mine)
+		}
+		for _, f := range foreign {
+			if id.matches(f.subject, issuer, f.kind) {
+				t.Errorf("pattern %q reaches foreign identity %q", a.pattern, f.subject)
+			}
+		}
+	}
+}
+
+// TestAPatternOnlyMatchesItsOwnKindOfIdentity: matching is plain text, so
+// an address pattern would otherwise reach a URL that ends the right way,
+// and a git ref may contain both "@" and ".".
+func TestAPatternOnlyMatchesItsOwnKindOfIdentity(t *testing.T) {
+	const issuer = "https://issuer.example"
+	mail := Identity{Subject: "*@example.com", Issuer: issuer}
+
+	if !mail.matches("release@example.com", issuer, subjectMail) {
+		t.Fatal("an address pattern does not match an address")
+	}
+	if mail.matches("https://evil.test/a/x.yml@refs/tags/v1@example.com", issuer, subjectURL) {
+		t.Error("an address pattern matched a URL identity")
+	}
+
+	url := Identity{Subject: "https://forge.example/org/repo/*", Issuer: issuer}
+	if url.matches("nobody@forge.example/org/repo/x", issuer, subjectMail) {
+		t.Error("a URL pattern matched an address identity")
 	}
 }

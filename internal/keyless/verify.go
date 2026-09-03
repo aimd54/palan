@@ -115,11 +115,11 @@ func Verify(bundleJSON []byte, artifact digest.Digest, root *TrustedRoot, allowe
 		return nil, err
 	}
 
-	subject, issuer, err := certIdentity(leaf)
+	subject, issuer, kind, err := certIdentity(leaf)
 	if err != nil {
 		return nil, err
 	}
-	if !anyMatches(allowed, subject, issuer) {
+	if !anyMatches(allowed, subject, issuer, kind) {
 		return nil, fmt.Errorf(
 			"%s (via %s) signed this artifact, and no rule allows that identity; the allowed identities are %s",
 			subject, issuer, describe(allowed))
@@ -225,9 +225,9 @@ func pae(payloadType string, payload []byte) []byte {
 }
 
 // anyMatches reports whether any allowed identity covers this signer.
-func anyMatches(allowed []Identity, subject, issuer string) bool {
+func anyMatches(allowed []Identity, subject, issuer string, kind subjectKind) bool {
 	for _, id := range allowed {
-		if id.matches(subject, issuer) {
+		if id.matches(subject, issuer, kind) {
 			return true
 		}
 	}

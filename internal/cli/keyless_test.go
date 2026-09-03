@@ -76,7 +76,7 @@ func pushBlob(t *testing.T, repo *remote.Repository, desc ocispec.Descriptor, da
 	}
 }
 
-// writeTrustRoot puts a log's pinned material on disk, which is where a
+// writeTrustRootFile puts a log's pinned material on disk, which is where a
 // policy names it.
 func writeTrustRootFile(t *testing.T, l *keylesstest.Log) string {
 	t.Helper()
