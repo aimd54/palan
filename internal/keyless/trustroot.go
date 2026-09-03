@@ -106,11 +106,13 @@ func LoadTrustedRoot(data []byte) (*TrustedRoot, error) {
 		root.authorities = append(root.authorities, a)
 	}
 	for i, tlog := range pb.GetTlogs() {
-		id, key, err := newLogKey(tlog)
+		ids, key, err := newLogKey(tlog)
 		if err != nil {
 			return nil, fmt.Errorf("trusted root transparency log %d: %w", i+1, err)
 		}
-		root.logs[id] = key
+		for _, id := range ids {
+			root.logs[id] = key
+		}
 	}
 
 	// Refused rather than carried: a root with no authority verifies no
@@ -154,27 +156,36 @@ func newCertAuthority(ca *prototrust.CertificateAuthority) (certAuthority, error
 	return out, nil
 }
 
-// newLogKey reads one log's public key and the identifier a bundle uses to
-// name it. The identifier is the SHA-256 of the key's DER encoding, so it
-// is derived here rather than believed: a file whose stated log identifier
-// does not match its own key would otherwise let a bundle select a key by
-// a name nothing checks.
-func newLogKey(tlog *prototrust.TransparencyLogInstance) (string, logKey, error) {
+// newLogKey reads one log's public key and every identifier a bundle may
+// name it by.
+//
+// Two identifiers are registered, because logs do not all name themselves
+// the same way. A log of the original kind is named by the SHA-256 of its
+// key's DER encoding; a tiled log is named by a construction over its
+// origin as well, so its stated identifier does not match that hash and
+// deriving one would refuse a perfectly good file. Both are registered
+// where they differ, so a bundle naming either finds this key.
+//
+// The stated identifier is believed. It comes from the root an operator
+// pinned, which is the one thing in this package trusted outright: a
+// tampered root is not a threat this can defend against, since the key it
+// names would be tampered with too.
+func newLogKey(tlog *prototrust.TransparencyLogInstance) ([]string, logKey, error) {
 	der := tlog.GetPublicKey().GetRawBytes()
 	if len(der) == 0 {
-		return "", logKey{}, fmt.Errorf("names no public key")
+		return nil, logKey{}, fmt.Errorf("names no public key")
 	}
 	public, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
-		return "", logKey{}, fmt.Errorf("parsing the public key: %w", err)
+		return nil, logKey{}, fmt.Errorf("parsing the public key: %w", err)
 	}
-	id := logIDOf(der)
-	if stated := tlog.GetLogId().GetKeyId(); len(stated) > 0 && hex.EncodeToString(stated) != id {
-		return "", logKey{}, fmt.Errorf(
-			"states log id %s but its key hashes to %s",
-			hex.EncodeToString(stated), id)
+	ids := []string{logIDOf(der)}
+	if stated := tlog.GetLogId().GetKeyId(); len(stated) > 0 {
+		if id := hex.EncodeToString(stated); id != ids[0] {
+			ids = append(ids, id)
+		}
 	}
-	return id, logKey{
+	return ids, logKey{
 		public: public,
 		valid:  windowOf(tlog.GetPublicKey().GetValidFor()),
 	}, nil

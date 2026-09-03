@@ -57,29 +57,62 @@ func TestARealTrustedRootLoads(t *testing.T) {
 	}
 }
 
-// TestARootWhoseLogIdDisagreesWithItsKeyIsRefused is the check that keeps a
-// trusted root from letting a bundle select a key by a name nothing
-// verifies.
+// TestARootNamesALogByWhateverItCallsItself covers the two ways a
+// transparency log is named.
 //
-// A bundle names the log it claims to be in, and palan looks the key up by
-// that name. If the file's stated name were believed rather than derived
-// from the key, an edited root could point a well-known log's name at a key
-// somebody else holds, and every signature that log ever recorded would be
-// checkable against the wrong key.
-func TestARootWhoseLogIdDisagreesWithItsKeyIsRefused(t *testing.T) {
-	edited := mutateRoot(t, func(r map[string]any) {
-		tlog := r["tlogs"].([]any)[0].(map[string]any)
-		tlog["logId"] = map[string]any{
-			"keyId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		}
-	})
-
-	_, err := LoadTrustedRoot(edited)
-	if err == nil {
-		t.Fatal("a trusted root whose log id does not match its key loaded")
+// A log of the original kind is named by the SHA-256 of its key. A tiled
+// log names itself by a construction over its origin as well, so its
+// stated identifier is not that hash. Deriving the identifier and refusing
+// anything else made the current public Sigstore root unloadable, and an
+// operator who pins that root could then verify nothing at all.
+//
+// The stated identifier is believed because the root is the operator's own
+// pinned file. A tampered root is not a threat this can defend against:
+// the key it names would be tampered with too.
+func TestARootNamesALogByWhateverItCallsItself(t *testing.T) {
+	stated := "cf1199155bddd051268d1f16ac5c0c75c009f6fb5a63f4177f8e18d7051e3fa0"
+	raw, err := os.ReadFile(filepath.Join("testdata", "trusted-root-with-tiled-log.json"))
+	if err != nil {
+		t.Fatalf("reading the tiled-log root fixture: %v", err)
 	}
-	if !strings.Contains(err.Error(), "hashes to") {
-		t.Errorf("refusal does not name the disagreement: %v", err)
+
+	root, err := LoadTrustedRoot(raw)
+	if err != nil {
+		t.Fatalf("a trusted root carrying a tiled log did not load: %v", err)
+	}
+	if _, ok := root.logs[stated]; !ok {
+		t.Errorf("the root does not name the tiled log %s; it holds %d log id(s)",
+			stated, len(root.logs))
+	}
+	// The other log in the same file names itself the original way, so both
+	// constructions have to work at once.
+	const original = "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d"
+	if _, ok := root.logs[original]; !ok {
+		t.Errorf("the root does not name log %s", original)
+	}
+}
+
+// TestTheCurrentPublicRootVerifiesARealSignature is the check that would
+// have caught the tiled-log refusal before it shipped: material palan did
+// not produce, held against a root captured from the live Sigstore
+// instance rather than from this repository's own history.
+func TestTheCurrentPublicRootVerifiesARealSignature(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "trusted-root-with-tiled-log.json"))
+	if err != nil {
+		t.Fatalf("reading the tiled-log root fixture: %v", err)
+	}
+	root, err := LoadTrustedRoot(raw)
+	if err != nil {
+		t.Fatalf("loading the current public root: %v", err)
+	}
+	bundle, _ := loadFixtures(t)
+
+	got, err := Verify(bundle, fixtureArtifact, root, fixtureIdentity())
+	if err != nil {
+		t.Fatalf("a real signature does not verify against the current public root: %v", err)
+	}
+	if got.Subject != fixtureSubject {
+		t.Errorf("subject = %q, want %q", got.Subject, fixtureSubject)
 	}
 }
 
