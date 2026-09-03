@@ -636,3 +636,49 @@ func TestAPatternOnlyMatchesItsOwnKindOfIdentity(t *testing.T) {
 		t.Error("a URL pattern matched an address identity")
 	}
 }
+
+// TestABundleFormatPalanDoesNotReadIsRefused. Discovery matches the media
+// type by prefix so a later version is found rather than passed over in
+// silence, and the parser tolerates fields it does not know. Together
+// those would let a future bundle be read under today's rules and reach a
+// verdict, which is worse than saying plainly that it cannot be read yet.
+func TestABundleFormatPalanDoesNotReadIsRefused(t *testing.T) {
+	bundle, root := loadFixtures(t)
+
+	for _, tc := range []struct {
+		name, mediaType, want string
+	}{
+		{"a later version", "application/vnd.dev.sigstore.bundle.v0.4+json", "v0.4"},
+		{"an older version", "application/vnd.dev.sigstore.bundle+json;version=0.2", "0.2"},
+		{"none at all", "", "declares no format version"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			edited := mutateBundle(t, bundle, func(b map[string]any) {
+				if tc.mediaType == "" {
+					delete(b, "mediaType")
+					return
+				}
+				b["mediaType"] = tc.mediaType
+			})
+			_, err := Verify(edited, fixtureArtifact, root, fixtureIdentity())
+			if err == nil {
+				t.Fatalf("a bundle declaring %q verified", tc.mediaType)
+			}
+			// The refusal has to name what it could not read, or an
+			// operator has no way to tell an unsupported format from a
+			// broken signature.
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("refusal does not name the format: %v", err)
+			}
+		})
+	}
+}
+
+// TestTheSupportedFormatStillVerifies is the control: the version check
+// must not be satisfied by refusing everything.
+func TestTheSupportedFormatStillVerifies(t *testing.T) {
+	bundle, root := loadFixtures(t)
+	if _, err := Verify(bundle, fixtureArtifact, root, fixtureIdentity()); err != nil {
+		t.Fatalf("the supported format was refused: %v", err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 
@@ -776,4 +778,78 @@ func TestBundleVerifierRefusesForeignContentUnderABundleName(t *testing.T) {
 	if !strings.Contains(err.Error(), "rather than the keyless signature") {
 		t.Errorf("refusal does not say the name resolves elsewhere: %v", err)
 	}
+}
+
+// TestASourceThatCannotAnswerIsNotReadAsUnsigned separates the two
+// answers a source can give about what refers to an artifact.
+//
+// Keyless signatures are found only by asking that question. A source that
+// cannot answer it is not a source saying nothing is attached, and reading
+// it that way is how a signed model comes to look unsigned, and how a copy
+// arrives without the one thing that would verify it later.
+func TestASourceThatCannotAnswerIsNotReadAsUnsigned(t *testing.T) {
+	ctx := context.Background()
+	reg := registrytest.New(t)
+	weights := []byte("weights whose signature cannot be looked up")
+	reg.PutBlob("llm/qwen3", weights)
+	desc := seedModel(t, reg, "llm/qwen3", "v1", []ocispec.Descriptor{localLayer(weights, "model.gguf")})
+
+	// A target that serves content and keeps no record of predecessors,
+	// which is what a source unable to answer looks like from here.
+	_, err := signing.BundleReferrers(ctx, blindTarget{}, desc)
+	if err == nil {
+		t.Fatal("a source that cannot answer reported that nothing is attached")
+	}
+	if !errors.Is(err, signing.ErrReferrersUnavailable) {
+		t.Errorf("error is not recognisable as an unanswerable source: %v", err)
+	}
+
+	// The other shape: a source that keeps predecessors but will not say,
+	// which is what a registry answering 401 or 403 for its referrers
+	// listing looks like from here.
+	_, err = signing.BundleReferrers(ctx, forbiddenTarget{}, desc)
+	if err == nil {
+		t.Fatal("a source that refused to answer reported that nothing is attached")
+	}
+	if !errors.Is(err, signing.ErrReferrersUnavailable) {
+		t.Errorf("a refused listing is not recognisable as unanswerable: %v", err)
+	}
+
+	// And a source that can answer, for a model carrying nothing, still
+	// says plainly that there is nothing rather than that it cannot tell.
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := signing.BundleReferrers(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("a store that can answer reported that it cannot: %v", err)
+	}
+	if len(found) != 0 {
+		t.Errorf("an empty store reported %d keyless signatures", len(found))
+	}
+}
+
+// blindTarget resolves and fetches nothing, and knows no predecessors. It
+// stands for a registry whose referrers API is absent or forbidden.
+type blindTarget struct{}
+
+func (blindTarget) Resolve(context.Context, string) (ocispec.Descriptor, error) {
+	return ocispec.Descriptor{}, errdef.ErrNotFound
+}
+
+func (blindTarget) Fetch(context.Context, ocispec.Descriptor) (io.ReadCloser, error) {
+	return nil, errdef.ErrNotFound
+}
+
+func (blindTarget) Exists(context.Context, ocispec.Descriptor) (bool, error) {
+	return false, nil
+}
+
+// forbiddenTarget keeps predecessors and declines to list them, which is
+// how a registry that hides a referrers listing behind 401 or 403 appears.
+type forbiddenTarget struct{ blindTarget }
+
+func (forbiddenTarget) Predecessors(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+	return nil, errdef.ErrUnsupported
 }

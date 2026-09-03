@@ -27,6 +27,17 @@ const MediaTypeBundlePrefix = "application/vnd.dev.sigstore.bundle"
 // ErrNoBundle marks an artifact carrying no keyless signature.
 var ErrNoBundle = errors.New("no keyless signature bundle found")
 
+// ErrReferrersUnavailable marks a source that cannot say what refers to an
+// artifact, as opposed to one saying that nothing does.
+//
+// The two are worth telling apart. Keyless signatures are found only by
+// asking that question, so a source unable to answer it leaves an artifact
+// looking unsigned when it may be signed, and a copy made from such a
+// source arrives without the one thing that would let it be verified
+// later. Reported rather than treated as an absence, so that the answer to
+// "did the signature travel" is never silently "there was none".
+var ErrReferrersUnavailable = errors.New("cannot list what refers to this artifact")
+
 // BundleTag is the name palan gives a keyless signature inside its own
 // store, derived from the bundle's own digest rather than the artifact's.
 //
@@ -103,17 +114,21 @@ func FetchBundles(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.D
 //
 // Referrers are listed unfiltered and then selected by media type prefix,
 // because asking the registry to filter would name one version of the
-// bundle format and miss every other. A source that cannot answer for
-// predecessors has none to offer, which is not a verdict on the artifact.
+// bundle format and miss every other.
+//
+// A source that cannot answer the question returns ErrReferrersUnavailable
+// rather than an empty list. Answering "none" for a source that does not
+// know is how a signed artifact comes to look unsigned, and how a copy
+// comes to be made without the material that would verify it.
 func BundleReferrers(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 	graph, ok := src.(content.ReadOnlyGraphStorage)
 	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("%w: it keeps no record of predecessors", ErrReferrersUnavailable)
 	}
 	all, err := registry.Referrers(ctx, graph, target, "")
 	if err != nil {
 		if hiddenAsAbsent(err) || errors.Is(err, errdef.ErrUnsupported) {
-			return nil, nil
+			return nil, fmt.Errorf("%w: %w", ErrReferrersUnavailable, err)
 		}
 		return nil, fmt.Errorf("listing referrers of %s: %w", target.Digest, err)
 	}
