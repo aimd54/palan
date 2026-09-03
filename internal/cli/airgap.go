@@ -204,7 +204,6 @@ func bundleVerifier(v *viper.Viper, keyPath string, out io.Writer) func(context.
 			src := verifySource{
 				target:  bundle,
 				sigRef:  signing.SigRef(ref, desc.Digest),
-				attRef:  signing.AttRef(ref, desc.Digest),
 				subject: desc,
 				name:    "bundle",
 			}
