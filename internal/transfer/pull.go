@@ -43,6 +43,12 @@ type Events struct {
 	// two outcomes are indistinguishable, and an artifact whose provenance
 	// was lost to an outage looks exactly like one that never had any.
 	OnAttestation func(stored bool, problem error)
+	// OnBundle reports whether a keyless signature travelled with the
+	// artifact, read the same way as OnSignature. A keyless signature is
+	// the only material a disconnected host can check such a signature
+	// with, so one lost in transit turns a verifiable model into an
+	// unverifiable one, and that has to be said rather than inferred.
+	OnBundle func(stored bool, problem error)
 }
 
 func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int64) {
@@ -50,6 +56,12 @@ func (e Events) blobStart(desc ocispec.Descriptor, resumeOffset int64) func(int6
 		return nil
 	}
 	return e.OnBlobStart(desc, resumeOffset)
+}
+
+func (e Events) bundle(stored bool, problem error) {
+	if e.OnBundle != nil {
+		e.OnBundle(stored, problem)
+	}
 }
 
 func (e Events) blobSkip(desc ocispec.Descriptor) {
@@ -137,6 +149,11 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 	// carried any.
 	attested, attProblem := fetchAttestation(ctx, repo, st, ref, desc.Digest)
 	ev.attestation(attested, attProblem)
+
+	// A keyless signature travels the same way and for the same reason,
+	// independently of whether either of the others exists.
+	bundled, bundleProblem := fetchBundle(ctx, repo, st, ref, desc)
+	ev.bundle(bundled, bundleProblem)
 	return desc, nil
 }
 
@@ -178,6 +195,33 @@ func fetchAttestation(ctx context.Context, repo *remote.Repository, st *store.St
 	}
 	if _, err := oras.Copy(ctx, repo, attTag, st.OCI(), signing.AttRef(ref, d), oras.DefaultCopyOptions); err != nil {
 		return false, fmt.Errorf("copying the attestation for %s: %w", ref, err)
+	}
+	return true, nil
+}
+
+// fetchBundle brings a model's keyless signature into the store alongside
+// it, so it can later be exported and checked with no registry in reach.
+//
+// Unlike a signature or an attestation, a bundle carries no tag of its own:
+// the tools that write one attach it as a referrer and nothing else. It is
+// therefore found by asking the registry what refers to the model, and
+// given palan's own tag on the way in, because the store names what it
+// holds and save and load move content by name.
+//
+// An artifact with no keyless signature is the normal case, not a failure.
+func fetchBundle(ctx context.Context, repo *remote.Repository, st *store.Store, ref registry.Reference, target ocispec.Descriptor) (bool, error) {
+	bundles, err := signing.BundleReferrers(ctx, repo, target)
+	if err != nil {
+		return false, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
+	}
+	if len(bundles) == 0 {
+		return false, nil
+	}
+	// Copied by digest, since the referrer has no tag to copy from.
+	src := bundles[0].Digest.String()
+	dst := signing.BundleRef(ref, target.Digest)
+	if _, err := oras.Copy(ctx, repo, src, st.OCI(), dst, oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("copying the keyless signature for %s: %w", ref, err)
 	}
 	return true, nil
 }

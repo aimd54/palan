@@ -89,6 +89,25 @@ func (c *Client) Copy(ctx context.Context, src, dst registry.Reference, ev Event
 		ev.attestation(false, fmt.Errorf("looking for an attestation on %s: %w", src, err))
 	}
 
+	// A keyless signature is found by asking what refers to the model
+	// rather than by tag, because that is the only place one is written.
+	// It is otherwise carried on the same terms as the two above: a mirror
+	// that silently lost it leaves the far side unable to check a model it
+	// could have checked.
+	switch bundles, err := signing.BundleReferrers(ctx, srcRepo, desc); {
+	case err != nil:
+		ev.bundle(false, fmt.Errorf("looking for a keyless signature on %s: %w", src, err))
+	case len(bundles) == 0:
+		ev.bundle(false, nil) // no keyless signature, nothing more to carry
+	default:
+		from := bundles[0].Digest.String()
+		if _, err := oras.Copy(ctx, srcRepo, from, dstRepo, from, opts); err != nil {
+			ev.bundle(false, fmt.Errorf("copying the keyless signature for %s: %w", src, err))
+		} else {
+			ev.bundle(true, nil)
+		}
+	}
+
 	return desc, nil
 }
 
@@ -131,6 +150,13 @@ func Save(ctx context.Context, st *store.Store, refs []string, w io.Writer) (Sav
 		if attested {
 			report.Attestations++
 		}
+		bundled, err := saveBundle(ctx, st, dst, ref, desc.Digest)
+		if err != nil {
+			return SaveReport{}, err
+		}
+		if bundled {
+			report.Bundles++
+		}
 	}
 	if err := tarDir(tmp, w); err != nil {
 		return SaveReport{}, err
@@ -146,6 +172,10 @@ type SaveReport struct {
 	Signatures int
 	// Attestations is how many carried a source attestation.
 	Attestations int
+	// Bundles is how many carried a keyless signature. It is counted apart
+	// from Signatures because the far side needs different material to
+	// check one: a pinned trusted root rather than a public key.
+	Bundles int
 }
 
 // saveSignature copies a reference's signature into the bundle when the store
@@ -189,6 +219,29 @@ func saveAttestation(ctx context.Context, st *store.Store, dst *oci.Store, ref s
 	}
 	if _, err := oras.Copy(ctx, st.OCI(), attRef, dst, attRef, oras.DefaultCopyOptions); err != nil {
 		return false, fmt.Errorf("exporting the attestation for %s: %w", ref, err)
+	}
+	return true, nil
+}
+
+// saveBundle copies a reference's keyless signature into the bundle when
+// the store has one, the same way saveSignature copies its signature. Most
+// artifacts carry none, so a missing one is reported rather than treated as
+// a failure.
+func saveBundle(ctx context.Context, st *store.Store, dst *oci.Store, ref string, d digest.Digest) (bool, error) {
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		// Not a registry-shaped reference, so no signature can be addressed.
+		return false, nil //nolint:nilerr // exporting the artifact alone is correct here
+	}
+	bundleRef := signing.BundleRef(parsed, d)
+	if _, err := st.Resolve(ctx, bundleRef); err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
+	}
+	if _, err := oras.Copy(ctx, st.OCI(), bundleRef, dst, bundleRef, oras.DefaultCopyOptions); err != nil {
+		return false, fmt.Errorf("exporting the keyless signature for %s: %w", ref, err)
 	}
 	return true, nil
 }
