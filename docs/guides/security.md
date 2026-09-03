@@ -425,31 +425,46 @@ authority matches identities belonging to whoever cares to mint one.
 
 ```yaml
 # Accepted
-*@example.com                                          # any address at that domain
-*@*.example.com                                        # and at its subdomains
-https://forge.example/org/repo/.github/workflows/*     # any workflow in that repository
-https://gitea/acme/repo/*                              # a host needs no dot
-spiffe://prod/ns/ci/sa/builder                         # exact: it can only match itself
+*@example.com                                       # any address at that domain
+*@*.example.com                                     # and at its subdomains
+https://forge.example/org/repo/.github/workflows/*  # any workflow in that repository
+https://gitea/acme/repo/*                           # a host needs no dot
+spiffe://prod/ns/ci/sa/builder                      # exact: it can only match itself
 
 # Refused when the config loads
-*                                                      # everything
-*@*                                                    # any address anywhere
-*/.github/workflows/release.yml@refs/tags/*            # any repository with that file
-https://*.example.com/org/repo/*                        # matching ignores "/", so this
-                                                        # reaches other hosts too
-*@*example.com                                          # extends a domain rather than
-                                                        # anchoring one: evilexample.com
+*                                                   # everything
+*@*                                                 # any address anywhere
+*/.github/workflows/release.yml@refs/tags/*         # any repository with that file
+*/.github/workflows/release.yml@refs/tags/v1.0.0    # and so is the literal version
+*@refs/heads/main                                   # a git ref is not a domain
+https://*.example.com/org/repo/*                    # matching ignores "/", so this
+                                                    # reaches other hosts too
+*://forge.example/org/repo/*                        # a wildcard before the scheme
+                                                    # unanchors the whole pattern
+*@*example.com                                      # extends a domain rather than
+                                                    # anchoring one: evilexample.com
 ```
 
-The third refusal is the one worth reading twice. Anchoring on the workflow
-file and wildcarding the organisation looks like the obvious way to write a
-workflow identity, and it pins nothing: the file name is the signer's to
-choose, and under a provider every repository on a forge shares, any
-repository with a `release.yml` satisfies it. Name the repository and
-wildcard the ref instead.
+The workflow entries are the ones worth reading twice, because they are what
+anyone would write first. Anchoring on the workflow file and wildcarding the
+organisation pins nothing at all: the path is the signer's to choose, and
+under a provider every repository on a forge shares, any repository with a
+`release.yml` satisfies it. Pinning the release tag as well does not help,
+since the tag is equally the signer's to choose. Name the **host and the
+repository**, and wildcard the ref:
+
+```yaml
+subject: https://github.com/org/repo/.github/workflows/release.yml@refs/tags/*
+```
 
 An exact subject, one with no `*` at all, is always accepted: it can only
 match itself.
+
+A pattern is also held to its own shape. An address pattern is compared only
+against an address and a URL pattern only against a URL, because matching is
+plain text and a git ref may contain both `@` and `.`: without that,
+`*@example.com` would reach a workflow identity built from a tag named
+`v1@example.com`.
 
 A certificate naming its holder more than once is refused, since there is
 no reading of "who signed this" that returns two answers.
