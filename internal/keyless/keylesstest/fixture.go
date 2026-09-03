@@ -202,8 +202,13 @@ func (l *Log) sign(t *testing.T, artifact digest.Digest, s Signer) signed {
 // is checked at all rather than whether the log is the pinned one.
 func (l *Log) signWith(t *testing.T, ca *Log, artifact digest.Digest, s Signer) signed {
 	t.Helper()
-	key, cert := ca.Certify(t, s)
+	return l.signPayload(t, ca, statementOver(t, artifact), s)
+}
 
+// statementOver builds the in-toto statement a keyless signature over an
+// artifact wraps.
+func statementOver(t *testing.T, artifact digest.Digest) []byte {
+	t.Helper()
 	payload, err := json.Marshal(map[string]any{
 		"_type":         "https://in-toto.io/Statement/v0.1",
 		"predicateType": "https://cosign.sigstore.dev/attestation/v1",
@@ -216,6 +221,15 @@ func (l *Log) signWith(t *testing.T, ca *Log, artifact digest.Digest, s Signer) 
 	if err != nil {
 		t.Fatalf("encoding the statement: %v", err)
 	}
+	return payload
+}
+
+// signPayload signs arbitrary bytes as a DSSE envelope, so a test can
+// present something that is correctly signed by an allowed identity and is
+// not the kind of document palan reads.
+func (l *Log) signPayload(t *testing.T, ca *Log, payload []byte, s Signer) signed {
+	t.Helper()
+	key, cert := ca.Certify(t, s)
 
 	digestOfPAE := sha256.Sum256(pae("application/vnd.in-toto+json", payload))
 	sig, err := ecdsa.SignASN1(rand.Reader, key, digestOfPAE[:])
@@ -300,6 +314,9 @@ func (l *Log) assemble(t *testing.T, sg signed, logged []byte) []byte {
 				LogId:          &protocommon.LogId{KeyId: id[:]},
 				KindVersion:    &protorekor.KindVersion{Kind: "dsse", Version: "0.0.1"},
 				IntegratedTime: SignedAt.Unix(),
+				InclusionPromise: &protorekor.InclusionPromise{
+					SignedEntryTimestamp: l.entryTimestamp(t, logged, int64(index)),
+				},
 				InclusionProof: &protorekor.InclusionProof{
 					LogIndex:   int64(index),
 					RootHash:   root,
@@ -343,6 +360,32 @@ func (l *Log) checkpoint(t *testing.T, root []byte, size int64) string {
 	return text + "\n— " + Origin + " " + base64.StdEncoding.EncodeToString(line) + "\n"
 }
 
+// entryTimestamp signs what a transparency log signs when it accepts an
+// entry: the entry's bytes, when it was recorded, which log recorded it,
+// and where in that log it sits.
+//
+// The signed bytes are written out by hand rather than encoded from a
+// struct shared with the package under test, so that a misplaced field or
+// a wrong name fails here instead of matching a verifier that made the
+// same mistake. The canonical form sorts the keys, which is why logID
+// precedes logIndex.
+func (l *Log) entryTimestamp(t *testing.T, body []byte, index int64) []byte {
+	t.Helper()
+	id := sha256.Sum256(l.logDER)
+	signed := fmt.Sprintf(
+		`{"body":%q,"integratedTime":%d,"logID":%q,"logIndex":%d}`,
+		base64.StdEncoding.EncodeToString(body),
+		SignedAt.Unix(),
+		hex.EncodeToString(id[:]),
+		index)
+	sum := sha256.Sum256([]byte(signed))
+	sig, err := ecdsa.SignASN1(rand.Reader, l.logKey, sum[:])
+	if err != nil {
+		t.Fatalf("signing the entry timestamp: %v", err)
+	}
+	return sig
+}
+
 // pae is DSSE's pre-authentication encoding, written out here rather than
 // borrowed from the package under test so that a mistake in one is not
 // matched by the same mistake in the other.
@@ -383,4 +426,20 @@ func (l *Log) BundleMisrecordingItsPayload(t *testing.T, artifact digest.Digest,
 		t.Fatalf("re-encoding the log entry: %v", err)
 	}
 	return l.assemble(t, sg, edited)
+}
+
+// BundleOverAnotherDocument returns a bundle correctly signed by an allowed
+// identity over a payload that is not an in-toto statement. Everything
+// about it verifies; it simply is not a statement about an artifact.
+func (l *Log) BundleOverAnotherDocument(t *testing.T, s Signer) []byte {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"_type": "https://example.com/SomethingElse/v1",
+		"note":  "correctly signed, and not a statement about anything",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sg := l.signPayload(t, l, payload, s)
+	return l.assemble(t, sg, sg.body)
 }

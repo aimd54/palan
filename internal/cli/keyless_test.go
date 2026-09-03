@@ -235,11 +235,22 @@ func assertStoreHoldsBundle(t *testing.T, home, ref string) {
 	if err != nil {
 		t.Fatalf("the store does not hold %s: %v", ref, err)
 	}
-	parsed := mustParseRef(t, ref)
-	bundleRef := signing.BundleRef(parsed, desc.Digest)
-	bundleDesc, err := st.Resolve(ctx, bundleRef)
+	// Found the way verification finds it, by asking what refers to the
+	// model, since a bundle is named after itself rather than after what it
+	// signs.
+	attached, err := signing.BundleReferrers(ctx, st.OCI(), desc)
 	if err != nil {
-		t.Fatalf("the store does not hold the keyless signature %s: %v", bundleRef, err)
+		t.Fatalf("listing what refers to %s: %v", ref, err)
+	}
+	if len(attached) == 0 {
+		t.Fatalf("the store holds no keyless signature for %s", ref)
+	}
+	bundleDesc := attached[0]
+	// The transport name has to be there too, or save and load cannot move
+	// it: they address content by name.
+	bundleRef := signing.BundleRef(mustParseRef(t, ref), bundleDesc.Digest)
+	if _, err := st.Resolve(ctx, bundleRef); err != nil {
+		t.Fatalf("the store does not name the keyless signature %s: %v", bundleRef, err)
 	}
 	raw, err := content.FetchAll(ctx, st.OCI(), bundleDesc)
 	if err != nil {
@@ -467,7 +478,11 @@ func untagBundle(t *testing.T, home, ref string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundleRef := signing.BundleRef(mustParseRef(t, ref), desc.Digest)
+	attached, err := signing.BundleReferrers(ctx, st.OCI(), desc)
+	if err != nil || len(attached) == 0 {
+		t.Fatalf("the store holds no keyless signature for %s: %v", ref, err)
+	}
+	bundleRef := signing.BundleRef(mustParseRef(t, ref), attached[0].Digest)
 	if err := st.OCI().Untag(ctx, bundleRef); err != nil {
 		t.Fatalf("untagging %s: %v", bundleRef, err)
 	}
@@ -475,5 +490,154 @@ func untagBundle(t *testing.T, home, ref string) {
 	// exercising the tagged path it means to avoid.
 	if _, err := st.Resolve(ctx, bundleRef); err == nil {
 		t.Fatalf("%s is still tagged, so this test would not reach the referrer path", bundleRef)
+	}
+}
+
+// TestAShadowingBundleDoesNotHideTheRealOne is what "try every one" is for.
+//
+// Anyone who can push to a repository can attach a second keyless signature.
+// If verification stopped at whichever the registry listed first, that
+// person would decide which signature is examined, and a correctly signed
+// model would be refused. Both orders are exercised, since nothing promises
+// which one comes back first.
+func TestAShadowingBundleDoesNotHideTheRealOne(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights whose real signature must still be found")
+	reg.PutBlob("llm/qwen3", weights)
+	desc := seedModel(t, reg, "llm/qwen3", "v1",
+		[]ocispec.Descriptor{localLayer(weights, "model.gguf")})
+	repo := attestTestRepo(t, reg, "llm/qwen3")
+
+	mine := keylesstest.NewLog(t)
+	theirs := keylesstest.NewLog(t)
+	// Signed by an authority and a log this host does not pin, which is
+	// what an attacker can produce without any of the operator's material.
+	attachBundle(t, repo, desc, theirs.Bundle(t, desc.Digest, keylessSigner))
+	attachBundle(t, repo, desc, mine.Bundle(t, desc.Digest, keylessSigner))
+
+	out, err := runVerifyUnderPolicy(t, reg.Host()+"/llm/qwen3:v1", keylessPolicy(
+		reg.Host(), writeTrustRoot(t, mine), keylessSigner.Subject, keylessSigner.Issuer))
+	if err != nil {
+		t.Fatalf("a shadowing signature hid the real one: %v", err)
+	}
+	if !strings.Contains(out, keylessSigner.Subject) {
+		t.Errorf("verify output = %q, want it to name the signer", out)
+	}
+}
+
+// TestEveryBundleTravels is the carriage half of the same concern: a model
+// carrying two signatures must arrive with both, or the far side is left
+// with whichever one the near side happened to pick.
+func TestEveryBundleTravels(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights carrying two keyless signatures")
+	reg.PutBlob("llm/qwen3", weights)
+	desc := seedModel(t, reg, "llm/qwen3", "v1",
+		[]ocispec.Descriptor{localLayer(weights, "model.gguf")})
+	repo := attestTestRepo(t, reg, "llm/qwen3")
+
+	mine := keylesstest.NewLog(t)
+	theirs := keylesstest.NewLog(t)
+	attachBundle(t, repo, desc, theirs.Bundle(t, desc.Digest, keylessSigner))
+	attachBundle(t, repo, desc, mine.Bundle(t, desc.Digest, keylessSigner))
+
+	home := t.TempDir()
+	ref := reg.Host() + "/llm/qwen3:v1"
+	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, mine),
+		keylessSigner.Subject, keylessSigner.Issuer)
+	if err := runPullUnderPolicy(t, home, ref, rules); err != nil {
+		t.Fatalf("pulling under a keyless policy: %v", err)
+	}
+
+	if n := storedBundleCount(t, home, ref); n != 2 {
+		t.Fatalf("the store holds %d keyless signature(s), want both", n)
+	}
+
+	// And out the other side: the transfer bundle has to carry both, or a
+	// host that pins the other root cannot check the model at all.
+	var tar bytes.Buffer
+	saveFromHome(t, home, ref, &tar)
+	reg.Close()
+	far := t.TempDir()
+	if err := runLoadUnderPolicyInHome(t, far, tar.Bytes(), rules); err != nil {
+		t.Fatalf("loading under a keyless policy: %v", err)
+	}
+	if n := storedBundleCount(t, far, ref); n != 2 {
+		t.Errorf("the far store holds %d keyless signature(s), want both", n)
+	}
+}
+
+// storedBundleCount reports how many keyless signatures a store holds for a
+// reference, counted through the referrer relationship that verification
+// itself follows.
+func storedBundleCount(t *testing.T, home, ref string) int {
+	t.Helper()
+	t.Setenv("PALAN_HOME", home)
+	ctx := context.Background()
+	st, err := store.Open(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := st.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatalf("the store does not hold %s: %v", ref, err)
+	}
+	attached, err := signing.BundleReferrers(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatalf("listing what refers to %s: %v", ref, err)
+	}
+	return len(attached)
+}
+
+// TestAnExplicitKeyRulesOutKeyless pins what naming a key on the command
+// line means. It is not "add this key to the policy": it says the artifact
+// is to be checked against that key, so a keyless signature the policy
+// would have accepted must not stand in for it.
+func TestAnExplicitKeyRulesOutKeyless(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights signed only the keyless way")
+	reg.PutBlob("llm/qwen3", weights)
+	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{localLayer(weights, "model.gguf")})
+	priv, _ := attestKeypair(t)
+	pubFile := attestPubKeyFile(t, priv)
+
+	rules := keylessPolicy(reg.Host(), writeTrustRoot(t, l),
+		keylessSigner.Subject, keylessSigner.Issuer)
+	// The same policy without the flag accepts this model, so the refusal
+	// below is the flag's doing and not a broken fixture.
+	if _, err := runVerifyUnderPolicy(t, ref, rules); err != nil {
+		t.Fatalf("the fixture does not verify under its own policy: %v", err)
+	}
+
+	_, err := runVerifyUnderPolicyWithKeyFlag(t, ref, rules, pubFile)
+	if err == nil {
+		t.Fatal("a keyless signature satisfied an explicit --key")
+	}
+	if strings.Contains(err.Error(), keylessSigner.Issuer) {
+		t.Errorf("the keyless identity was tried despite an explicit key: %v", err)
+	}
+}
+
+// TestKeylessVerificationSaysProvenanceWasNotChecked covers the warning
+// that keeps a keyless result from reading like a fully checked one. A
+// source attestation is held against the key that signed the model, and a
+// keyless signature supplies no key, so the layers' origins go unchecked.
+// Silence would look exactly like a model with no origins to check.
+func TestKeylessVerificationSaysProvenanceWasNotChecked(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights fetched from upstream and signed keylessly")
+	reg.PutBlob("llm/qwen3", weights)
+	// A layer recording where it came from is what makes a statement owed.
+	layer := sourceLayer(weights, "Qwen/Qwen3-8B", "model.gguf", "abc123",
+		digest.FromBytes(weights).Encoded())
+	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{layer})
+
+	out, err := runVerifyUnderPolicy(t, ref, keylessPolicy(
+		reg.Host(), writeTrustRoot(t, l), keylessSigner.Subject, keylessSigner.Issuer))
+	if err != nil {
+		t.Fatalf("verifying: %v", err)
+	}
+	if !strings.Contains(out, "provenance left unchecked") {
+		t.Errorf("verify output = %q, want it to say the provenance was not checked", out)
 	}
 }

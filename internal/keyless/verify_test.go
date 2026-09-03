@@ -273,7 +273,7 @@ func TestASubjectPatternAdmitsAMatchingSigner(t *testing.T) {
 	bundle, root := loadFixtures(t)
 
 	got, err := Verify(bundle, fixtureArtifact, root, []Identity{
-		{Subject: "cody@*", Issuer: fixtureIssuer},
+		{Subject: "*@soyland.com", Issuer: fixtureIssuer},
 	})
 	if err != nil {
 		t.Fatalf("verifying under a pattern: %v", err)
@@ -288,7 +288,12 @@ func TestASubjectPatternAdmitsAMatchingSigner(t *testing.T) {
 func TestAnIdentityMatchingEverythingIsRefused(t *testing.T) {
 	bundle, root := loadFixtures(t)
 
-	for _, subject := range []string{"*", "**"} {
+	// The bare wildcards are what somebody tries first. The rest are what
+	// they write next when the first is refused, and they mean the same
+	// thing: no domain is pinned, so a signer chooses their own.
+	for _, subject := range []string{
+		"*", "**", "*@*", "**@**", "*.*", "https://*", "*@*.*",
+	} {
 		_, err := Verify(bundle, fixtureArtifact, root, []Identity{
 			{Subject: subject, Issuer: fixtureIssuer},
 		})
@@ -296,6 +301,34 @@ func TestAnIdentityMatchingEverythingIsRefused(t *testing.T) {
 			t.Errorf("subject %q was accepted as a policy", subject)
 		}
 	}
+}
+
+// TestAPatternPinningADomainIsAccepted is the other side of the guard: the
+// patterns operators legitimately need must still load, or the guard just
+// pushes them towards turning verification off.
+func TestAPatternPinningADomainIsAccepted(t *testing.T) {
+	bundle, root := loadFixtures(t)
+
+	for _, subject := range []string{
+		"*@soyland.com",
+		"cody@soyland.com",
+		"*@*.soyland.com",
+	} {
+		if err := (Identity{Subject: subject, Issuer: fixtureIssuer}).Validate(); err != nil {
+			t.Errorf("subject %q was refused: %v", subject, err)
+		}
+	}
+	// A workflow identity carries a version that moves, and the pattern for
+	// it has to pin the forge rather than the tag.
+	err := (Identity{
+		Subject: "https://forge.example/org/repo/.github/workflows/release.yml@refs/tags/*",
+		Issuer:  "https://token.forge.example",
+	}).Validate()
+	if err != nil {
+		t.Errorf("a workflow pattern was refused: %v", err)
+	}
+	_ = bundle
+	_ = root
 }
 
 // TestNoAllowedIdentityIsRefused: a bundle that verifies says an identity
@@ -332,5 +365,102 @@ func TestASignatureThatDoesNotVerifyIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not verify against its own certificate") {
 		t.Errorf("refusal does not point at the signature: %v", err)
+	}
+}
+
+// TestASignedTimestampIsRequired pins what dates a signature. An inclusion
+// proof shows an entry is in the log and says nothing about when: a
+// checkpoint signs a size and a root, and the entry's bytes carry no date.
+// Only the log's own signature over the timestamp does.
+func TestASignedTimestampIsRequired(t *testing.T) {
+	bundle, root := loadFixtures(t)
+	stripped := mutateBundle(t, bundle, func(b map[string]any) {
+		delete(firstTlogEntry(t, b), "inclusionPromise")
+	})
+
+	_, err := Verify(stripped, fixtureArtifact, root, fixtureIdentity())
+	if err == nil {
+		t.Fatal("a log entry with no signed timestamp verified")
+	}
+	if !strings.Contains(err.Error(), "no signed timestamp") {
+		t.Errorf("refusal does not say what is missing: %v", err)
+	}
+}
+
+// TestAForgedLogTimestampIsRefused is the check that gives certificate
+// expiry any meaning at all.
+//
+// A keyless signing certificate lives about ten minutes and is held against
+// the moment the log recorded the signature. If that moment were taken from
+// the bundle unchecked, whoever wrote the bundle would choose it, and a
+// certificate that can be checked against any moment has no expiry. Each
+// time below is inside the fixture certificate's ten-minute life and is not
+// the time the log actually recorded.
+func TestAForgedLogTimestampIsRefused(t *testing.T) {
+	bundle, root := loadFixtures(t)
+
+	for _, forged := range []int64{1740770292, 1740770591, 1740770890} {
+		edited := mutateBundle(t, bundle, func(b map[string]any) {
+			firstTlogEntry(t, b)["integratedTime"] = forged
+		})
+		got, err := Verify(edited, fixtureArtifact, root, fixtureIdentity())
+		if err == nil {
+			t.Errorf("a log entry redated to %s verified, and reported that date as %s",
+				time.Unix(forged, 0).UTC(), got.IntegratedTime)
+			continue
+		}
+		if !strings.Contains(err.Error(), "did not sign this entry as stated") {
+			t.Errorf("refusal for %d does not point at the log's signature: %v", forged, err)
+		}
+	}
+}
+
+// TestAForgedLogIndexIsRefused covers the number an incident responder
+// follows. It is reported in the result, so an unchecked one would send
+// somebody to look up an entry of the attacker's choosing. It is a
+// different number from the one the inclusion proof uses, so the proof does
+// not cover it.
+func TestAForgedLogIndexIsRefused(t *testing.T) {
+	bundle, root := loadFixtures(t)
+	edited := mutateBundle(t, bundle, func(b map[string]any) {
+		firstTlogEntry(t, b)["logIndex"] = "999999999"
+	})
+
+	got, err := Verify(edited, fixtureArtifact, root, fixtureIdentity())
+	if err == nil {
+		t.Fatalf("a relabelled log index verified, reported as entry %d", got.LogIndex)
+	}
+}
+
+// TestACertificateNamingItsHolderTwiceIsRefused. Only one name can be
+// checked against a policy, so a certificate carrying two lets a signer put
+// an allowed identity where the check looks and their real one beside it.
+// Refusing is the only answer that does not have to choose.
+func TestACertificateNamingItsHolderTwiceIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		emails []string
+		uris   []string
+	}{
+		{"two addresses", []string{"allowed@example.com", "real@evil.example"}, nil},
+		{"an address and a URI", []string{"allowed@example.com"}, []string{"https://evil.example/who"}},
+		{"neither", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := certWithSANs(t, tc.emails, tc.uris)
+			if _, _, err := certIdentity(cert); err == nil {
+				t.Fatal("a certificate with an ambiguous holder was read")
+			}
+		})
+	}
+
+	// The control: one name is read, so the refusals above are about the
+	// count and not about the certificate being unreadable.
+	subject, issuer, err := certIdentity(certWithSANs(t, []string{"one@example.com"}, nil))
+	if err != nil {
+		t.Fatalf("a certificate naming its holder once was refused: %v", err)
+	}
+	if subject != "one@example.com" || issuer != "https://issuer.example" {
+		t.Errorf("read %q via %q, want the certificate's own values", subject, issuer)
 	}
 }

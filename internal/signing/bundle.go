@@ -27,21 +27,29 @@ const MediaTypeBundlePrefix = "application/vnd.dev.sigstore.bundle"
 // ErrNoBundle marks an artifact carrying no keyless signature.
 var ErrNoBundle = errors.New("no keyless signature bundle found")
 
-// BundleTag is where palan keeps a keyless signature in its own store.
+// BundleTag is the name palan gives a keyless signature inside its own
+// store, derived from the bundle's own digest rather than the artifact's.
 //
 // A bundle arrives from a registry as a referrer with no tag of its own,
 // which is how the tools that write one attach it. The local store names
 // everything it holds, and pull, save and load move content by name, so a
-// bundle that stayed nameless would simply not travel. The tag is palan's
-// convention rather than anybody else's; the subject on the manifest is
-// what other tools read, and copying preserves it.
+// bundle that stayed nameless would not travel.
+//
+// The name is derived from the bundle and not from what it signs because an
+// artifact may carry more than one, which is ordinary during a rotation and
+// is also what somebody with push access does to shadow the real one.
+// Naming them after the artifact would give them all the same name, and
+// only one would survive.
+//
+// Nothing is ever discovered by this name. Discovery asks what refers to
+// the artifact, so a tag anybody can create decides nothing.
 func BundleTag(d digest.Digest) string {
 	return strings.Replace(d.String(), ":", "-", 1) + ".sigstore"
 }
 
-// BundleRef returns the fully-qualified reference for a bundle on d, for
-// targets holding more than one repository, the way SigRef does for a
-// signature.
+// BundleRef returns the fully-qualified reference for the bundle whose own
+// digest is d, for targets holding more than one repository, the way SigRef
+// does for a signature.
 func BundleRef(ref registry.Reference, d digest.Digest) string {
 	ref.Reference = BundleTag(d)
 	return ref.String()
@@ -58,31 +66,37 @@ func IsBundleTag(ref string) bool {
 	return strings.HasPrefix(tag, "sha256-") && strings.HasSuffix(tag, ".sigstore")
 }
 
-// FetchBundle returns the keyless signature attached to target, or
+// FetchBundles returns every keyless signature attached to target, or
 // ErrNoBundle when it carries none.
 //
-// The tag is tried first, which is where palan's own store keeps one. Only
-// then are referrers consulted, which is where a bundle written by a
-// keyless signing tool actually lives: such a bundle has no tag at all, so
-// reporting the artifact unsigned would be a wrong answer rather than a
-// missing feature.
-func FetchBundle(ctx context.Context, src oras.ReadOnlyTarget, bundleRef string, target ocispec.Descriptor) ([]byte, error) {
-	desc, err := src.Resolve(ctx, bundleRef)
-	switch {
-	case err == nil:
-		return fetchBundleBlob(ctx, src, desc)
-	case !hiddenAsAbsent(err):
-		return nil, fmt.Errorf("resolving bundle tag: %w", err)
-	}
-
-	bundles, err := BundleReferrers(ctx, src, target)
+// All of them, not the first. An artifact may legitimately carry more than
+// one, and anybody who can push to the repository can attach another, so
+// taking whichever the registry happens to list first would let that person
+// decide which signature is checked. Checking them all means the worst they
+// can do is add one that fails.
+func FetchBundles(ctx context.Context, src oras.ReadOnlyTarget, target ocispec.Descriptor) ([][]byte, error) {
+	descs, err := BundleReferrers(ctx, src, target)
 	if err != nil {
 		return nil, err
 	}
-	if len(bundles) == 0 {
+	if len(descs) == 0 {
 		return nil, fmt.Errorf("%w for %s", ErrNoBundle, target.Digest)
 	}
-	return fetchBundleBlob(ctx, src, bundles[0])
+	out := make([][]byte, 0, len(descs))
+	for _, d := range descs {
+		blob, err := fetchBundleBlob(ctx, src, d)
+		if err != nil {
+			// One unreadable bundle does not make the others unreadable,
+			// and refusing here would let a malformed attachment hide a
+			// good signature.
+			continue
+		}
+		out = append(out, blob)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w for %s that could be read", ErrNoBundle, target.Digest)
+	}
+	return out, nil
 }
 
 // BundleReferrers lists the keyless signatures attached to target.

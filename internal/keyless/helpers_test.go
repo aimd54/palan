@@ -4,8 +4,16 @@
 package keyless
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -79,4 +87,41 @@ func certExpiry(t *testing.T, bundle []byte) time.Time {
 		t.Fatalf("parsing the fixture certificate: %v", err)
 	}
 	return certs.NotAfter
+}
+
+// certWithSANs builds a certificate naming its holder in the given ways,
+// which is the one shape the fixture generator deliberately never produces.
+func certWithSANs(t *testing.T, emails []string, uris []string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := asn1.MarshalWithParams("https://issuer.example", "utf8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:    big.NewInt(1),
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(time.Hour),
+		EmailAddresses:  emails,
+		ExtraExtensions: []pkix.Extension{{Id: oidIssuerV2, Value: issuer}},
+	}
+	for _, raw := range uris {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl.URIs = append(tmpl.URIs, u)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
 }

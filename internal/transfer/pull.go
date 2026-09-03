@@ -152,7 +152,7 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 
 	// A keyless signature travels the same way and for the same reason,
 	// independently of whether either of the others exists.
-	bundled, bundleProblem := fetchBundle(ctx, repo, st, ref, desc)
+	bundled, bundleProblem := fetchBundles(ctx, repo, st, ref, desc)
 	ev.bundle(bundled, bundleProblem)
 	return desc, nil
 }
@@ -209,7 +209,7 @@ func fetchAttestation(ctx context.Context, repo *remote.Repository, st *store.St
 // holds and save and load move content by name.
 //
 // An artifact with no keyless signature is the normal case, not a failure.
-func fetchBundle(ctx context.Context, repo *remote.Repository, st *store.Store, ref registry.Reference, target ocispec.Descriptor) (bool, error) {
+func fetchBundles(ctx context.Context, repo *remote.Repository, st *store.Store, ref registry.Reference, target ocispec.Descriptor) (bool, error) {
 	bundles, err := signing.BundleReferrers(ctx, repo, target)
 	if err != nil {
 		return false, fmt.Errorf("looking for a keyless signature on %s: %w", ref, err)
@@ -217,11 +217,16 @@ func fetchBundle(ctx context.Context, repo *remote.Repository, st *store.Store, 
 	if len(bundles) == 0 {
 		return false, nil
 	}
-	// Copied by digest, since the referrer has no tag to copy from.
-	src := bundles[0].Digest.String()
-	dst := signing.BundleRef(ref, target.Digest)
-	if _, err := oras.Copy(ctx, repo, src, st.OCI(), dst, oras.DefaultCopyOptions); err != nil {
-		return false, fmt.Errorf("copying the keyless signature for %s: %w", ref, err)
+	// All of them. An artifact may carry more than one, and whoever can
+	// push to the repository can add another, so carrying only the first
+	// would let that person decide which signature reaches the far side.
+	for _, b := range bundles {
+		// Copied by digest, since a referrer has no tag to copy from, and
+		// named after itself so that two of them do not collide.
+		if _, err := oras.Copy(ctx, repo, b.Digest.String(), st.OCI(),
+			signing.BundleRef(ref, b.Digest), oras.DefaultCopyOptions); err != nil {
+			return false, fmt.Errorf("copying a keyless signature for %s: %w", ref, err)
+		}
 	}
 	return true, nil
 }

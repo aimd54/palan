@@ -239,10 +239,6 @@ type verifySource struct {
 	// stop at the signature, but every source fills it: a field left empty
 	// by some callers is a field the next caller forgets.
 	attRef string
-	// bundleRef is where a keyless signature would be under palan's own
-	// tag, in the same two forms. A bundle written by a signing tool has no
-	// tag at all, so this is where to look first and not the only place.
-	bundleRef string
 	// subject is the artifact being verified. The whole descriptor is needed,
 	// not just its digest, because a signature may be attached as a referrer
 	// of it rather than under a tag.
@@ -259,12 +255,11 @@ type verifySource struct {
 // which reads downstream as an artifact that carries nothing.
 func remoteSource(target oras.ReadOnlyTarget, desc ocispec.Descriptor, name string) verifySource {
 	return verifySource{
-		target:    target,
-		sigRef:    signing.SigTag(desc.Digest),
-		attRef:    signing.AttTag(desc.Digest),
-		bundleRef: signing.BundleTag(desc.Digest),
-		subject:   desc,
-		name:      name,
+		target:  target,
+		sigRef:  signing.SigTag(desc.Digest),
+		attRef:  signing.AttTag(desc.Digest),
+		subject: desc,
+		name:    name,
 	}
 }
 
@@ -273,12 +268,11 @@ func remoteSource(target oras.ReadOnlyTarget, desc ocispec.Descriptor, name stri
 // repositories and a bare tag would not say which.
 func layoutSource(target oras.ReadOnlyTarget, ref registry.Reference, desc ocispec.Descriptor, name string) verifySource {
 	return verifySource{
-		target:    target,
-		sigRef:    signing.SigRef(ref, desc.Digest),
-		attRef:    signing.AttRef(ref, desc.Digest),
-		bundleRef: signing.BundleRef(ref, desc.Digest),
-		subject:   desc,
-		name:      name,
+		target:  target,
+		sigRef:  signing.SigRef(ref, desc.Digest),
+		attRef:  signing.AttRef(ref, desc.Digest),
+		subject: desc,
+		name:    name,
 	}
 }
 
@@ -301,8 +295,7 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 	switch {
 	case localErr == nil:
 		sigRef := signing.SigRef(ref, local.Digest)
-		held, sigErr := storeHoldsSignature(
-			ctx, st, sigRef, signing.BundleRef(ref, local.Digest), local)
+		held, sigErr := storeHoldsSignature(ctx, st, sigRef, local)
 		switch {
 		case sigErr != nil:
 			return verifySource{}, fmt.Errorf("reading the local store: %w", sigErr)
@@ -340,14 +333,8 @@ func resolveVerifySource(ctx context.Context, st *store.Store, v *viper.Viper, r
 // signed only the keyless way would otherwise be sent to the registry for
 // a signature it is already holding, which on a disconnected host means
 // refusing an artifact it can verify.
-func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef, bundleRef string, subject ocispec.Descriptor) (bool, error) {
+func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef string, subject ocispec.Descriptor) (bool, error) {
 	switch _, err := st.Resolve(ctx, sigRef); {
-	case err == nil:
-		return true, nil
-	case !errors.Is(err, errdef.ErrNotFound):
-		return false, err
-	}
-	switch _, err := st.Resolve(ctx, bundleRef); {
 	case err == nil:
 		return true, nil
 	case !errors.Is(err, errdef.ErrNotFound):
@@ -554,11 +541,28 @@ func verifyKeyless(ctx context.Context, src verifySource, allowed allowedSigners
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", allowed.trustRoot, err)
 	}
-	bundle, err := signing.FetchBundle(ctx, src.target, src.bundleRef, src.subject)
+	bundles, err := signing.FetchBundles(ctx, src.target, src.subject)
 	if err != nil {
 		return nil, err
 	}
-	return keyless.Verify(bundle, src.subject.Digest, root, allowed.identities)
+	// Every one is tried. Anybody who can push to the repository can attach
+	// another, so stopping at the first would let that person decide which
+	// signature is checked, and a good signature would go unexamined
+	// behind a bad one.
+	var lastErr error
+	for _, b := range bundles {
+		result, err := keyless.Verify(b, src.subject.Digest, root, allowed.identities)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+	}
+	if len(bundles) > 1 {
+		return nil, fmt.Errorf(
+			"none of the %d keyless signatures on this artifact verifies; the last said: %w",
+			len(bundles), lastErr)
+	}
+	return nil, lastErr
 }
 
 // describeIdentities names the keyless signers a refusal tried, so the

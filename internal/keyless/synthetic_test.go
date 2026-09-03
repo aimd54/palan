@@ -176,3 +176,22 @@ func TestAnEntryDisagreeingWithItselfIsRefused(t *testing.T) {
 		t.Errorf("refusal does not name the disagreement: %v", err)
 	}
 }
+
+// TestAPayloadThatIsNotAStatementIsRefused. The signature is genuine, the
+// identity is allowed, and the log recorded it. What it signs is some other
+// document, and reading it as a statement about an artifact would turn "an
+// allowed identity signed this JSON" into "an allowed identity vouched for
+// this model".
+func TestAPayloadThatIsNotAStatementIsRefused(t *testing.T) {
+	l := keylesstest.NewLog(t)
+	bundle := l.BundleOverAnotherDocument(t, workflow)
+
+	_, err := keyless.Verify(bundle, artifact, rootOf(t, l),
+		allow(workflow.Subject, workflow.Issuer))
+	if err == nil {
+		t.Fatal("a signature over another kind of document verified")
+	}
+	if !strings.Contains(err.Error(), "in-toto statements") {
+		t.Errorf("refusal does not say what palan reads: %v", err)
+	}
+}

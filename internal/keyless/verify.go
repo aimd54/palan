@@ -19,11 +19,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// MediaTypePrefix is what a Sigstore bundle's media type begins with. It is
-// how a bundle is recognised among the things attached to an artifact,
-// across the versions of the format.
-const MediaTypePrefix = "application/vnd.dev.sigstore.bundle"
-
 // payloadType is the only DSSE payload palan reads: an in-toto statement,
 // which is what a keyless signature over an OCI artifact wraps.
 const payloadType = "application/vnd.in-toto+json"
@@ -174,10 +169,18 @@ func bundleCertificate(pb *protobundle.Bundle) (*x509.Certificate, error) {
 // statement is the part of an in-toto statement palan reads: what the
 // signature is about.
 type statement struct {
+	Type    string `json:"_type"`
 	Subject []struct {
 		Digest map[string]string `json:"digest"`
 	} `json:"subject"`
 }
+
+// statementType is the in-toto statement family palan reads. The predicate
+// inside it is deliberately not examined: a keyless signature over an
+// artifact and an attestation about that artifact are the same envelope
+// shape, and what this package establishes either way is that an allowed
+// identity put its name to these bytes.
+const statementType = "https://in-toto.io/Statement/"
 
 // statementCovers checks that the signed payload is about this artifact.
 //
@@ -188,6 +191,10 @@ func statementCovers(payload []byte, artifact digest.Digest) error {
 	var st statement
 	if err := json.Unmarshal(payload, &st); err != nil {
 		return fmt.Errorf("decoding the signed statement: %w", err)
+	}
+	if !strings.HasPrefix(st.Type, statementType) {
+		return fmt.Errorf(
+			"the signed payload is a %q document, and palan reads in-toto statements", st.Type)
 	}
 	if err := artifact.Validate(); err != nil {
 		return fmt.Errorf("the artifact digest %q is not usable: %w", artifact, err)
