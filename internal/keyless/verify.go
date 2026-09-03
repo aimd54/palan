@@ -23,6 +23,21 @@ import (
 // which is what a keyless signature over an OCI artifact wraps.
 const payloadType = "application/vnd.in-toto+json"
 
+// supportedBundleVersions are the bundle formats this package knows how to
+// read, in the two spellings the media type has had.
+//
+// Discovery matches on a prefix so that a bundle written under a later
+// version is found rather than passed over in silence. Reading one is a
+// different question: the parser tolerates fields it does not know, which
+// is right for a format that gains services over time and wrong for one
+// that changes what an existing field means. A version this package has
+// not been taught is refused by name, so the answer is "palan cannot read
+// this yet" rather than a verdict reached under the wrong rules.
+var supportedBundleVersions = map[string]bool{
+	"application/vnd.dev.sigstore.bundle.v0.3+json":        true,
+	"application/vnd.dev.sigstore.bundle+json;version=0.3": true,
+}
+
 // Result is what a verified bundle turned out to say.
 type Result struct {
 	// Subject and Issuer are the identity the certificate carried, not the
@@ -69,6 +84,13 @@ func Verify(bundleJSON []byte, artifact digest.Digest, root *TrustedRoot, allowe
 	var pb protobundle.Bundle
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(bundleJSON, &pb); err != nil {
 		return nil, fmt.Errorf("parsing the signature bundle: %w", err)
+	}
+	if got := pb.GetMediaType(); !supportedBundleVersions[got] {
+		if got == "" {
+			return nil, fmt.Errorf("the bundle declares no format version")
+		}
+		return nil, fmt.Errorf(
+			"the bundle is in format %q, which palan does not read", got)
 	}
 	leaf, err := bundleCertificate(&pb)
 	if err != nil {

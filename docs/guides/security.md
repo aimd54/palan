@@ -544,11 +544,18 @@ always found that way, by asking what refers to the model, and never by a
 tag: a tag is something anybody with push access can create, and it would
 otherwise decide which signature gets checked.
 
-For the same reason every signature attached to a model is checked, and
-every one travels. An artifact can carry several, which is ordinary during a
-key rotation and is also what somebody with push access does to shadow a
-real one. `pull` brings them all into the store, `save` puts them all in the
-transfer bundle, and `load` imports them:
+For the same reason every signature attached to a model is tried, and every
+one travels. An artifact can carry several, which is ordinary during a key
+rotation and is also what somebody with push access does to shadow a real
+one. `pull` brings them all into the store, `save` puts them all in the
+transfer bundle, and `load` imports them.
+
+A model is accepted when **any one** of its signatures satisfies the policy,
+not when all of them do. Requiring all would mean anyone able to push to the
+repository could attach one broken signature and make the model permanently
+unverifiable for everybody. Trying all of them is what stops that same person
+choosing which signature gets examined; the ones that do not verify are
+ignored rather than held against the model.
 
 ```sh
 palan pull registry.internal/vendor/qwen3:8b-q4
