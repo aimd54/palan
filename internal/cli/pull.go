@@ -116,6 +116,14 @@ any llama-server image.`,
 
 // materialize copies raw layers into dir under their filepath annotations,
 // refusing names that would escape the directory.
+//
+// Every layer is held to the digest its manifest records as it is written.
+// The file that lands here is a copy leaving the content-addressed store,
+// and it is the copy something else goes on to read: an init container
+// writes it into a volume a serving container mounts. A store blob is
+// addressed by its file name and by nothing else, and a transfer skips a
+// blob that is already present, so bytes altered in the store on an earlier
+// day would otherwise be written out under a signature checked today.
 func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, dir string) ([]string, error) {
 	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
 	if err != nil {
@@ -145,7 +153,7 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if err != nil {
 			return nil, err
 		}
-		if err := copyFile(src, dest, 0o644); err != nil {
+		if err := copyFile(src, dest, l, 0o644); err != nil {
 			return nil, err
 		}
 		written = append(written, dest)
@@ -156,19 +164,48 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	return written, nil
 }
 
-func copyFile(src, dest string, mode os.FileMode) error {
+// copyFile writes one blob out of the store to dest, holding the bytes to
+// the digest desc records as they go past.
+//
+// The destination is opened without following a symlink. A name already in
+// the output directory that points somewhere else would otherwise be
+// written through, so a pull into a directory somebody else can prepare
+// would write the model wherever that link aimed.
+func copyFile(src, dest string, desc ocispec.Descriptor, mode os.FileMode) error {
 	in, err := os.Open(src) // #nosec G304 -- digest-derived path inside the store
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) // #nosec G304 -- traversal-checked destination
+	// Checked before the open as well as refused by it: the flag has no
+	// Windows equivalent, and an existing name that is not a regular file
+	// deserves a message naming what it is.
+	if fi, lerr := os.Lstat(dest); lerr == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is a %s, not a regular file", dest, fi.Mode().Type())
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|openNoFollow, mode) // #nosec G304 -- traversal-checked destination
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+	verifier := desc.Digest.Verifier()
+	n, err := io.Copy(io.MultiWriter(out, verifier), io.LimitReader(in, desc.Size+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	return out.Close()
+	if n != desc.Size {
+		return fmt.Errorf("blob %s holds %d bytes in the store, the manifest records %d", desc.Digest, n, desc.Size)
+	}
+	if !verifier.Verified() {
+		// Removed rather than left in place: the caller is about to report
+		// a failure, and a file of the right name holding the wrong bytes
+		// is what the next reader of this directory would pick up.
+		_ = os.Remove(dest)
+		return fmt.Errorf(
+			"blob %s does not hash to the digest the manifest records, so %s was not written",
+			desc.Digest, filepath.Base(dest))
+	}
+	return nil
 }

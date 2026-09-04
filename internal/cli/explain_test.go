@@ -51,6 +51,37 @@ func runPullInto(t *testing.T, home, ref string) {
 	}
 }
 
+// renderedVerdicts reads the text chain back into link name and verdict.
+// Parsed rather than matched as a substring, because the columns are laid
+// out by a tabwriter: their widths depend on which links happen to be
+// present, so a hardcoded gap passes or fails for reasons that have nothing
+// to do with the verdict under test.
+func renderedVerdicts(t *testing.T, out string) map[string]string {
+	t.Helper()
+	verdicts := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		var verdict string
+		switch {
+		case strings.HasPrefix(trimmed, "proven "):
+			verdict = "proven"
+		case strings.HasPrefix(trimmed, "unproven "):
+			verdict = "unproven"
+		default:
+			continue
+		}
+		// A link name can be two words, so it is matched against the names
+		// this package defines rather than split off by position.
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, verdict))
+		for _, name := range []string{linkReference, linkSignature, linkPolicy, linkLog, linkSources, linkContent} {
+			if strings.HasPrefix(rest, name+" ") {
+				verdicts[name] = verdict
+			}
+		}
+	}
+	return verdicts
+}
+
 // linkVerdicts reads the chain out of --json, which is the form a test can
 // assert on without depending on column widths.
 func linkVerdicts(t *testing.T, out string) map[string]link {
@@ -90,15 +121,16 @@ func TestExplainNamesEveryLinkIncludingTheOnesItCannotProve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify --explain: %v", err)
 	}
-	for _, want := range []string{
-		"proven    " + linkReference,
-		"proven    " + linkSignature,
-		"proven    " + linkPolicy,
-		"proven    " + linkSources,
-		"unproven  " + linkContent,
+	rendered := renderedVerdicts(t, out)
+	for name, want := range map[string]string{
+		linkReference: "proven",
+		linkSignature: "proven",
+		linkPolicy:    "proven",
+		linkSources:   "proven",
+		linkContent:   "unproven",
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the chain does not carry %q; it was:\n%s", want, out)
+		if got := rendered[name]; got != want {
+			t.Errorf("the chain reads %q as %q, want %q; it was:\n%s", name, got, want, out)
 		}
 	}
 	if !strings.Contains(out, "huggingface.co/org/repo@abc123") {
