@@ -142,6 +142,20 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 // Ensure materializes the runtime tagged ref from the store and returns the
 // absolute path of its executable entrypoint. Materialization is atomic
 // (temp dir + rename) and idempotent.
+//
+// Files already unpacked are held to the digests the manifest records
+// before the path is handed back. The unpacked copy is a plain file tree
+// outside the content-addressed store, and the entrypoint is executable, so
+// treating its presence as sufficient would mean trusting whatever last
+// wrote to that path. A signature over the artifact says nothing about a
+// file something else replaced afterwards, and this is the one place where
+// the object being replaced is code that runs.
+//
+// A tree that does not match is discarded and unpacked again from the
+// store, whose blobs are the checked ones. That is both the repair for an
+// extraction that went wrong and the answer to one that was tampered with,
+// and it restores the idempotence this function claims: the result depends
+// on what the store holds, not on what is already on disk.
 func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
@@ -164,10 +178,17 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 
 	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName())
 	entry := filepath.Join(destDir, cfg.Entrypoint)
-	if _, err := os.Stat(entry); err == nil {
+	if err := materializedMatches(manifest, destDir); err == nil {
 		return entry, nil
 	}
 
+	// Removed rather than written over. An unpacked tree carrying a file
+	// the manifest does not name is as much of a problem as one whose
+	// files were altered, because the dynamic loader is pointed at this
+	// directory and will load a library that was added to it.
+	if err := os.RemoveAll(destDir); err != nil {
+		return "", err
+	}
 	tmpDir := destDir + ".tmp"
 	if err := os.RemoveAll(tmpDir); err != nil {
 		return "", err
@@ -192,6 +213,63 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 		return "", err
 	}
 	return entry, nil
+}
+
+// materializedMatches reports whether dir holds exactly the files manifest
+// names, with exactly the bytes it records.
+//
+// Both halves matter. A substituted entrypoint is the obvious case; an
+// added file is the quieter one, since palan points the dynamic loader at
+// this directory, so a library dropped beside the binary is loaded by it.
+func materializedMatches(manifest ocispec.Manifest, dir string) error {
+	want := make(map[string]ocispec.Descriptor, len(manifest.Layers))
+	for _, l := range manifest.Layers {
+		name := l.Annotations[ocispec.AnnotationTitle]
+		if name == "" || name != filepath.Base(name) {
+			return fmt.Errorf("runtime layer %s has invalid file name %q", l.Digest, name)
+		}
+		want[name] = l
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) != len(want) {
+		return fmt.Errorf("%s holds %d files, the manifest names %d", dir, len(entries), len(want))
+	}
+	for _, e := range entries {
+		l, ok := want[e.Name()]
+		if !ok {
+			return fmt.Errorf("%s holds %s, which the manifest does not name", dir, e.Name())
+		}
+		if err := fileMatches(filepath.Join(dir, e.Name()), l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fileMatches holds one unpacked file to the digest its layer records.
+// Streamed, and bounded at one byte past the recorded length, so a file
+// that grew is reported as the wrong length rather than read to its end.
+func fileMatches(path string, desc ocispec.Descriptor) error {
+	fh, err := os.Open(path) // #nosec G304 -- path under the store's runtimes dir
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fh.Close() }()
+	verifier := desc.Digest.Verifier()
+	n, err := io.Copy(verifier, io.LimitReader(fh, desc.Size+1))
+	if err != nil {
+		return err
+	}
+	if n != desc.Size {
+		return fmt.Errorf("%s holds %d bytes, the manifest records %d", path, n, desc.Size)
+	}
+	if !verifier.Verified() {
+		return fmt.Errorf("%s does not hash to the digest the manifest records", path)
+	}
+	return nil
 }
 
 // List returns runtime artifacts in the store.

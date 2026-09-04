@@ -4,6 +4,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -335,5 +336,104 @@ func TestSupervisorPointsLoaderAtPackedRuntime(t *testing.T) {
 	got, ok := envValue(srv.cmd.Env, key)
 	if !ok || got != dir {
 		t.Errorf("child %s = %q (present %v), want %q", key, got, ok, dir)
+	}
+}
+
+// packRuntime seeds a runtime artifact holding the fake llama-server plus a
+// companion library, and returns its reference.
+func packRuntime(t *testing.T, st *store.Store) string {
+	t.Helper()
+	lib := filepath.Join(t.TempDir(), "libggml.so")
+	if err := os.WriteFile(lib, []byte("a library the loader picks up"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Name: "llama-server", Build: "b9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+	ref := "registry.example/runtimes/llama-server:b9-cpu"
+	if _, err := Pack(context.Background(), st, []PackFile{
+		{Path: fakellamaBin, Name: "llama-server"},
+		{Path: lib},
+	}, cfg, ref); err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	return ref
+}
+
+// TestEnsureReplacesAnUnpackedEngineThatWasTamperedWith is the gap between
+// verifying an artifact and executing a file. The store's blobs are
+// content-addressed and checked; the unpacked tree is a plain copy that the
+// supervisor execs, so its presence proves nothing about its bytes.
+func TestEnsureReplacesAnUnpackedEngineThatWasTamperedWith(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+
+	entry, err := Ensure(ctx, st, ref)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	genuine, err := os.ReadFile(entry) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("#!/bin/sh\nexit 7\n"), 0o755); err != nil { // #nosec G306 -- deliberately executable
+		t.Fatal(err)
+	}
+
+	again, err := Ensure(ctx, st, ref)
+	if err != nil {
+		t.Fatalf("ensure after tampering: %v", err)
+	}
+	if again != entry {
+		t.Fatalf("ensure moved the entrypoint to %s, want %s", again, entry)
+	}
+	// Positive state: the bytes at the path the supervisor will exec are
+	// the packed ones again, not merely different from the substitute.
+	back, err := os.ReadFile(entry) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(back, genuine) {
+		t.Fatalf("the engine about to be spawned holds %d bytes that are not the packed ones", len(back))
+	}
+	fi, err := os.Stat(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&0o100 == 0 {
+		t.Error("the replaced entrypoint is not executable")
+	}
+}
+
+// TestEnsureReplacesAnUnpackedTreeThatGainedAFile covers the quieter half:
+// palan points the dynamic loader at this directory, so a library added
+// beside the binary is loaded by it without any packed file being touched.
+func TestEnsureReplacesAnUnpackedTreeThatGainedAFile(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+
+	entry, err := Ensure(ctx, st, ref)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	planted := filepath.Join(filepath.Dir(entry), "libevil.so")
+	if err := os.WriteFile(planted, []byte("loaded from the runtime directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Ensure(ctx, st, ref); err != nil {
+		t.Fatalf("ensure after a file was planted: %v", err)
+	}
+	if _, err := os.Stat(planted); !os.IsNotExist(err) {
+		t.Fatalf("the planted library is still in the directory the loader searches (stat: %v)", err)
+	}
+	// The packed files are still there: the repair must not empty the tree.
+	for _, name := range []string{"llama-server", "libggml.so"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(entry), name)); err != nil {
+			t.Errorf("packed file %s is gone after the repair: %v", name, err)
+		}
 	}
 }
