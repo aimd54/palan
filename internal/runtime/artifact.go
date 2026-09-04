@@ -118,6 +118,13 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 	if cfg.Entrypoint == "" || !entryFound {
 		return ocispec.Descriptor{}, fmt.Errorf("entrypoint %q is not among the packed files", cfg.Entrypoint)
 	}
+	// Refused at packing time as well as at unpacking time. Otherwise a
+	// publisher gets a green pack and push, and an artifact every consumer
+	// refuses forever, with the traversal-bearing config already on a
+	// registry for anyone running an older release to fetch.
+	if err := cfg.safePathFields(); err != nil {
+		return ocispec.Descriptor{}, err
+	}
 
 	layers := make([]ocispec.Descriptor, 0, len(files))
 	for _, f := range files {
@@ -214,6 +221,9 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 		return "", fmt.Errorf(
 			"runtime %q names entrypoint %q, which is not one of its files", ref, cfg.Entrypoint)
 	}
+	if err := validateLayers(manifest); err != nil {
+		return "", fmt.Errorf("runtime %q: %w", ref, err)
+	}
 
 	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName())
 	entry := filepath.Join(destDir, cfg.Entrypoint)
@@ -224,18 +234,25 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	// The replacement is built whole before anything is taken away, so a
 	// host whose engine merely failed a check is not left with no engine
 	// at all when the unpack cannot finish.
-	tmpDir := destDir + ".tmp"
-	if err := os.RemoveAll(tmpDir); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destDir), 0o750); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+	// A unique staging directory rather than destDir+".tmp". That name is
+	// itself a legal destination: a runtime whose flavour ends in ".tmp"
+	// resolves to exactly the staging path of another one, so unpacking
+	// either would delete the other's engine. A unique name also stops two
+	// unpacks running at once from writing into the same place.
+	tmpDir, err := os.MkdirTemp(filepath.Dir(destDir), ".unpack-")
+	if err != nil {
 		return "", err
 	}
+	// Removed on every path that does not rename it away, and a no-op once
+	// it has been. MkdirTemp creates at 0700, which the materialized tree
+	// inherits through the rename: it holds an executable and belongs to
+	// the user whose store it is, so nothing else needs to walk into it.
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	for _, l := range manifest.Layers {
 		name := l.Annotations[ocispec.AnnotationTitle]
-		if name == "" || name != filepath.Base(name) {
-			return "", fmt.Errorf("runtime layer %s has invalid file name %q", l.Digest, name)
-		}
 		mode := os.FileMode(0o644)
 		if name == cfg.Entrypoint {
 			mode = 0o755
@@ -257,6 +274,30 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	return entry, nil
 }
 
+// validateLayers refuses a manifest whose layers this cannot safely act on,
+// before anything is read, written or removed.
+//
+// The digest check is not decoration. Building a verifier for an algorithm
+// the binary does not link panics rather than returning an error, so a
+// manifest naming one would take down run, serve and runtime pull with a
+// stack trace instead of a refusal, and every host that already unpacked
+// that build would crash on its next load.
+func validateLayers(manifest ocispec.Manifest) error {
+	for _, l := range manifest.Layers {
+		name := l.Annotations[ocispec.AnnotationTitle]
+		if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+			return fmt.Errorf("layer %s has invalid file name %q", l.Digest, name)
+		}
+		// Validate covers both halves that matter here: a malformed digest
+		// and one naming an algorithm this build does not link. The second
+		// is the dangerous one, because building a verifier for it panics.
+		if err := l.Digest.Validate(); err != nil {
+			return fmt.Errorf("layer %q records a digest palan cannot use (%s): %w", name, l.Digest.Algorithm(), err)
+		}
+	}
+	return nil
+}
+
 // namesLayer reports whether manifest carries a file called name.
 func namesLayer(manifest ocispec.Manifest, name string) bool {
 	for _, l := range manifest.Layers {
@@ -276,11 +317,7 @@ func namesLayer(manifest ocispec.Manifest, name string) bool {
 func materializedMatches(manifest ocispec.Manifest, dir string) error {
 	want := make(map[string]ocispec.Descriptor, len(manifest.Layers))
 	for _, l := range manifest.Layers {
-		name := l.Annotations[ocispec.AnnotationTitle]
-		if name == "" || name != filepath.Base(name) {
-			return fmt.Errorf("runtime layer %s has invalid file name %q", l.Digest, name)
-		}
-		want[name] = l
+		want[l.Annotations[ocispec.AnnotationTitle]] = l
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -316,7 +353,7 @@ func fileMatches(path string, desc ocispec.Descriptor) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s is a %s, not a regular file", path, fi.Mode().Type())
 	}
-	fh, err := os.Open(path) // #nosec G304 -- path under the store's runtimes dir
+	fh, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0) // #nosec G304 -- path under the store's runtimes dir
 	if err != nil {
 		return err
 	}
