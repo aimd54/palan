@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -64,23 +65,27 @@ func substituteTail(t *testing.T, st *store.Store, d ocispec.Descriptor) {
 }
 
 // runRunCmd executes the real run command against home with verification
-// required, pointed at a runtime that does not exist.
-func runRunCmd(t *testing.T, home, ref, pubFile string, rehash bool) error {
+// required, returning what it wrote to stderr alongside the error.
+func runRunCmd(t *testing.T, home, ref, pubFile, runtimeRef string, rehash bool) (string, error) {
 	t.Helper()
 	t.Setenv("PALAN_HOME", home)
 	v := viper.New()
 	v.Set(keyRegistryPlainHTTP, true)
 	v.Set(keyVerifyRequired, true)
 	v.Set(keyVerifyKey, pubFile)
-	v.Set(keyRuntimeRef, bogusRuntimeRef)
+	if runtimeRef != "" {
+		v.Set(keyRuntimeRef, runtimeRef)
+	}
 	if rehash {
 		v.Set(keyVerifyRehash, true)
 	}
 	cmd := newRunCmd(v)
+	var errOut bytes.Buffer
 	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd.SetErr(&errOut)
 	cmd.SetArgs([]string{ref})
-	return cmd.Execute()
+	err := cmd.Execute()
+	return errOut.String(), err
 }
 
 // TestRunRefusesAResidentCopyTheSignatureDoesNotCover is the hole a gate
@@ -106,7 +111,7 @@ func TestRunRefusesAResidentCopyTheSignatureDoesNotCover(t *testing.T) {
 		t.Fatalf("signing the moved tag: %v", err)
 	}
 
-	err := runRunCmd(t, home, ref, pubFile, false)
+	_, err := runRunCmd(t, home, ref, pubFile, bogusRuntimeRef, false)
 	if err == nil {
 		t.Fatal("run loaded a resident copy on the strength of a signature over a different artifact")
 	}
@@ -149,12 +154,12 @@ func TestRunLoadsSubstitutedWeightsUntilRehashIsAskedFor(t *testing.T) {
 
 	// The manifest is untouched, so the signature verifies and run gets all
 	// the way to the runtime it cannot find.
-	err = runRunCmd(t, home, ref, pubFile, false)
+	_, err = runRunCmd(t, home, ref, pubFile, bogusRuntimeRef, false)
 	if err == nil || !strings.Contains(err.Error(), bogusRuntimeRef) {
 		t.Fatalf("the signature must still admit substituted weights, or this test is not about the gap: %v", err)
 	}
 
-	err = runRunCmd(t, home, ref, pubFile, true)
+	_, err = runRunCmd(t, home, ref, pubFile, bogusRuntimeRef, true)
 	if err == nil {
 		t.Fatal("re-hashing accepted substituted weights")
 	}
