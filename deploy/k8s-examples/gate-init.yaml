@@ -1,0 +1,123 @@
+# Copyright The palan Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The gate pattern (see docs/guides/kubernetes.md): the init container
+# verifies before it writes, so a model that fails the trust policy never
+# reaches the volume the serving container mounts, and the serving container
+# never starts. Kubernetes runs init containers to completion in order, so a
+# non-zero exit here holds the pod in Init:Error instead of moving on.
+#
+# The serving container is vLLM, which reads safetensors. palan distributes
+# and verifies those weights and does not serve them (ADR-0012), so the
+# division is deliberate: palan decides whether the bytes are allowed on the
+# host, and whatever is already running inference reads them.
+#
+# Swap the image and the model reference for a llama.cpp server and a GGUF
+# artifact and nothing else about this manifest changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: palan-trust-policy
+data:
+  # Which identities may sign which references. A reference no rule matches
+  # is refused rather than falling back to an unchecked pull.
+  config.yaml: |
+    verify:
+      required: true
+      policy:
+        - pattern: registry.internal/llm/*
+          keys:
+            - /etc/palan/keys/cosign.pub
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen3-8b-gated
+  labels:
+    app.kubernetes.io/name: qwen3-8b-gated
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qwen3-8b-gated
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qwen3-8b-gated
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: verify-and-pull
+          # Published by this repo's release pipeline; digest-pin in GitOps.
+          image: ghcr.io/aimd54/palan:latest
+          args:
+            - pull
+            - registry.internal/llm/qwen3:8b-instruct
+            - --output=/models
+            - --config=/etc/palan/config.yaml
+          env:
+            - name: PALAN_HOME
+              value: /work
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: work
+              mountPath: /work
+            - name: trust-policy
+              mountPath: /etc/palan/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: verify-key
+              mountPath: /etc/palan/keys
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.8.5
+          args:
+            - --model=/models
+            - --served-model-name=qwen3-8b
+            - --host=0.0.0.0
+            - --port=8000
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "4", memory: 24Gi, nvidia.com/gpu: "1" }
+            limits: { memory: 32Gi, nvidia.com/gpu: "1" }
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 40Gi
+        - name: work
+          emptyDir: {}
+        - name: trust-policy
+          configMap:
+            name: palan-trust-policy
+        - name: verify-key
+          secret:
+            # kubectl create secret generic palan-verify-key --from-file=cosign.pub
+            secretName: palan-verify-key
