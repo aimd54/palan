@@ -1,6 +1,6 @@
 # Roadmap
 
-Status of palan's build-out milestones as of August 2026.
+Status of palan's build-out milestones as of September 2026.
 
 Two scopes run at different widths, and the distinction decides where most
 items below belong. **Distribution** covers packing, transfer, signing,
@@ -23,7 +23,7 @@ and refuses anything else, for the reasons in
 | M9 | Pack attestation (upstream files bound to layers, carried as a referrer) | ☑ shipped (ADR-0014); the statement survives a registry-to-bundle-to-store round trip and verifies offline, and cosign reads what palan writes |
 | M10 | Trust policy (which identities may sign which references) | ☑ shipped; enforced at the same four points as `verify.required`, each checked to leave the store or the served spec untouched on a refusal, with a companion rule set naming the key a source must be signed with at import |
 | M11 | Keyless verification from carried material (no network, no log) | ☑ shipped (ADR-0015); a signature carrying its certificate and inclusion proof verifies against a pinned root with the registry gone, and is refused once that proof is stripped |
-| M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☐ planned |
+| M12 | Verification surface (`verify --explain`, gate patterns, load-time re-hash) | ☑ shipped (ADR-0016); the chain prints its own gaps, the weights are re-read on request, the copy that loads is held to the copy that verified, and the engine goes through the same gate as the weights |
 | M13 | 1.0 (verification on by default, stable policy format) | ☐ planned |
 
 M8 through M13 build out one property end to end: that the bytes a host
@@ -35,12 +35,13 @@ portable, stating in a signed form which upstream file each layer holds so
 the claim survives leaving the machine that packed it; M10 puts a policy
 above the single key, naming which identities may sign which references
 rather than trusting one key for everything a registry holds, and names
-per source the publisher key an import must be held against. What remains
-is the carried material that lets verification hold with no network, and
-the surfaces that show and enforce the result, described under
-[Planned milestones](#planned-milestones). Work that waits on infrastructure
-rather than on code sits outside that sequence, under
-[Ecosystem validations](#ecosystem-validations).
+per source the publisher key an import must be held against; M11 makes
+verification hold with no network at all, from material the artifact
+carries; and M12 shows the result as a chain that names its own gaps and
+enforces it at the last moment before the bytes are read. What remains is
+1.0, described under [Planned milestones](#planned-milestones). Work that
+waits on infrastructure rather than on code sits outside that sequence,
+under [Ecosystem validations](#ecosystem-validations).
 
 ## Validated outside CI
 
@@ -110,26 +111,9 @@ a Kubernetes cluster, and a GPU host:
 
 ## Planned milestones
 
-In dependency order. Each lands the way the shipped ones did: with tests
-that were seen to fail before the change, and validations recorded above
-once they run against real infrastructure.
-
-### M12: the chain, shown and enforced
-
-- `verify --explain`, plain text and `--json`: origin, attestation,
-  signature identity, and every hop it can prove, so "prove what is on this
-  host" becomes one command's output. For an artifact palan did not produce
-  it says plainly which links it cannot prove.
-- The gate pattern, documented and measured: an init container that refuses
-  on the policy so the serving container never starts, with example
-  manifests for a plain Deployment whose runtime reads safetensors, and for
-  KServe. A refusal must leave the shared volume empty and must be prompt
-  rather than a hang.
-- An opt-in re-hash of weight blobs at load, closing the gap ADR-0008
-  deferred: a substituted blob behind an intact manifest refuses. Opt-in,
-  because it re-reads gigabytes.
-- The runtime channel gains the same gate, so an engine build is checked the
-  way a model is when it is installed or spawned.
+One left. It lands the way the shipped ones did: with tests that were seen
+to fail before the change, and validations recorded above once they run
+against real infrastructure.
 
 ### M13: 1.0
 
