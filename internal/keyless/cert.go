@@ -120,7 +120,7 @@ func classifySubject(pattern string) (subjectKind, error) {
 		// stranger with a free account and a workflow satisfies it. The
 		// first path segment is where a forge puts the account, so it has
 		// to be named too.
-		if err := pinsAnAccount(path); err != nil {
+		if err := pinsAnAccount(pattern[:i], host, path); err != nil {
 			return 0, err
 		}
 		return subjectURL, nil
@@ -161,14 +161,23 @@ func classifySubject(pattern string) (subjectKind, error) {
 // decides whether a host is an authority. Requiring the segment either way
 // costs a private deployment the ability to write "anyone on my forge",
 // which is a policy that has to be spelled out rather than assumed.
-func pinsAnAccount(path string) error {
+func pinsAnAccount(scheme, host, path string) error {
 	segment := path
 	if i := strings.Index(path, "/"); i >= 0 {
 		segment = path[:i]
 	}
-	if segment == "" || strings.Contains(segment, "*") {
+	// The example is built from the pattern's own scheme and host, so a
+	// SPIFFE identity is not told to go and write a URL.
+	example := fmt.Sprintf("%s://%s/<account>/*", scheme, host)
+	switch {
+	case segment == "":
 		return fmt.Errorf(
-			"names a host but no account under it, and one provider serves every account on a shared forge, so this matches identities belonging to strangers; name the account too, as in \"https://forge.example/org/repo/*\"")
+			"names %q and nothing under it, and one provider serves every account on a shared host, so this matches identities belonging to strangers; name the account too, as in %q",
+			host, example)
+	case strings.Contains(segment, "*"):
+		return fmt.Errorf(
+			"wildcards the account %q under %q, which is the part a signer does not choose for themselves; name it literally, as in %q",
+			segment, host, example)
 	}
 	return nil
 }

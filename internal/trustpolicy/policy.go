@@ -112,16 +112,6 @@ func (p *Policy) RuleFor(repoRef string) (Rule, bool) {
 	return Rule{}, false
 }
 
-// KeyFilesFor returns the keys allowed to sign repoRef, and whether any
-// rule matched.
-func (p *Policy) KeyFilesFor(repoRef string) ([]string, bool) {
-	r, ok := p.RuleFor(repoRef)
-	if !ok {
-		return nil, false
-	}
-	return r.KeyFiles, true
-}
-
 // Patterns returns each rule's pattern in order, so a refusal can tell an
 // operator what the policy actually contains.
 func (p *Policy) Patterns() []string {

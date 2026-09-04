@@ -417,11 +417,13 @@ characters, which is what makes a workflow identity usable: it carries the
 git ref that built it, so it changes with every release and an exact name
 would have to be edited each time.
 
-A subject pattern must name, without a wildcard, the part of an identity
-its holder cannot choose. In an address that is the domain after the last
-`@`; in a URL it is the host. The local part of an address and the path of
-a workflow are the signer's to pick, so a pattern that wildcards the
-authority matches identities belonging to whoever cares to mint one.
+A subject pattern must name, without a wildcard, the part of an identity its
+holder cannot choose. In an address that is the domain after the last `@`;
+in a URL it is the host **and the first path segment under it**, since one
+OpenID provider serves every account on a shared host. The rest, the local
+part of an address and the path of a workflow, is the signer's to pick, so
+a pattern that wildcards the authority matches identities belonging to
+whoever cares to mint one.
 
 ```yaml
 # Accepted
@@ -470,6 +472,30 @@ subject: https://github.com/org/repo/.github/workflows/release.yml@refs/tags/*
 
 An exact subject, one with no `*` at all, is always accepted: it can only
 match itself.
+
+### What these rules do not know
+
+Both rules are positional, and the position is a good guess rather than a
+fact palan can check.
+
+A domain is required to carry two labels, which is not the same as being a
+domain somebody registered. `*@*.example.com` is right and `*@*.com` is
+refused, but `*@*.co.uk` and `*@*.github.io` are **accepted** and each
+admits every address under a suffix thousands of parties share. palan
+carries no public-suffix list, so if the domain you are anchoring on is
+itself shared, name it in full.
+
+The first path segment is the account on GitHub, GitLab, Gitea and the
+forges that work that way. It is not on every issuer: one whose subject
+claim reads `https://idp.example/users/alice` puts the account in the
+second segment, so `https://idp.example/users/*` is accepted and reaches
+every user of that provider. Look at an identity your provider actually
+issues before deciding where to stop wildcarding.
+
+A SPIFFE trust domain is an authority in its own right, but the rule does
+not know that either: `spiffe://prod/*` is refused and
+`spiffe://prod/ns/*` is accepted. That is a stricter answer than SPIFFE
+needs rather than a wrong one.
 
 A pattern is also held to its own shape. An address pattern is compared only
 against an address and a URL pattern only against a URL, because matching is

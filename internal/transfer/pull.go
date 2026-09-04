@@ -199,7 +199,7 @@ func fetchAttestation(ctx context.Context, repo *remote.Repository, st *store.St
 	return true, nil
 }
 
-// fetchBundle brings a model's keyless signature into the store alongside
+// fetchBundles brings a model's keyless signatures into the store alongside
 // it, so it can later be exported and checked with no registry in reach.
 //
 // Unlike a signature or an attestation, a bundle carries no tag of its own:

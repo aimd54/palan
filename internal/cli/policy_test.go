@@ -60,9 +60,9 @@ func TestAConfiguredPolicyDecodesItsRulesInOrder(t *testing.T) {
 	if p == nil {
 		t.Fatal("verify.policy was set and produced no policy")
 	}
-	keys, ok := p.KeyFilesFor("registry.example/llm/qwen3")
-	if !ok || len(keys) != 1 || keys[0] != "/keys/team.pub" {
-		t.Fatalf("KeyFilesFor = %v (matched %v), want the first rule's key", keys, ok)
+	rule, ok := p.RuleFor("registry.example/llm/qwen3")
+	if !ok || len(rule.KeyFiles) != 1 || rule.KeyFiles[0] != "/keys/team.pub" {
+		t.Fatalf("RuleFor keys = %v (matched %v), want the first rule's key", rule.KeyFiles, ok)
 	}
 }
 
