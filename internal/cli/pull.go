@@ -133,6 +133,7 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		return nil, err
 	}
 	var written []string
+	seen := make(map[string]bool, len(manifest.Layers))
 	// A model can be many files, and a failure on the fourth leaves three
 	// already on disk. The directory is what something else reads, so a
 	// refusal has to take back what it wrote rather than leave a partial
@@ -149,6 +150,15 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	for _, l := range manifest.Layers {
 		name := l.Annotations[modelspec.AnnotationFilepath]
 		if name == "" {
+			// A layer with no file name has nowhere to go. Skipping a
+			// small one is right, since not every layer is a file the
+			// serving process reads; skipping the weights is not, because
+			// the command would report success over a directory holding
+			// everything except the model.
+			if modelspec.KindOf(l.MediaType) == modelspec.LayerKindWeight {
+				return nil, fmt.Errorf(
+					"weight layer %s records no file name, so it cannot be written out and the model would be incomplete", l.Digest)
+			}
 			continue
 		}
 		if !modelspec.IsRaw(l.MediaType) {
@@ -158,8 +168,12 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("layer file name %q escapes the output directory", name)
 		}
+		if seen[clean] {
+			return nil, fmt.Errorf("two layers both claim the file name %q, so one would overwrite the other", clean)
+		}
+		seen[clean] = true
 		dest := filepath.Join(dir, clean)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		if err := makeDirsUnder(dir, clean); err != nil {
 			return nil, err
 		}
 		src, err := st.BlobPath(l.Digest)
@@ -182,13 +196,46 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	return written, nil
 }
 
+// makeDirsUnder creates the directory chain rel needs beneath root,
+// refusing to walk through anything that is not a real directory.
+//
+// The property is that the write lands inside root, and guarding only the
+// last component does not establish it. A layer file name may be nested,
+// path joining cleans it so the result looks contained, and MkdirAll
+// follows a symlinked intermediate without complaint: with a link at
+// "sub", writing "sub/model.gguf" puts the weights wherever that link
+// aims, and truncates whatever was already there.
+//
+// Each component is therefore created here rather than by MkdirAll, and one
+// that already exists has to be a directory in its own right. Lstat does
+// not follow, so a symlink fails the test whatever it points at.
+func makeDirsUnder(root, rel string) error {
+	cur := root
+	for _, part := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		switch {
+		case os.IsNotExist(err):
+			if err := os.Mkdir(cur, 0o750); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		case !fi.IsDir():
+			return fmt.Errorf("%s is a %s, not a directory, so writing beneath it would leave %s", cur, fi.Mode().Type(), root)
+		}
+	}
+	return nil
+}
+
 // copyFile writes one blob out of the store to dest, holding the bytes to
 // the digest desc records as they go past.
 //
-// The destination is opened without following a symlink. A name already in
-// the output directory that points somewhere else would otherwise be
-// written through, so a pull into a directory somebody else can prepare
-// would write the model wherever that link aimed.
+// The destination is opened without following a symlink, which covers the
+// final name; makeDirsUnder covers everything above it.
 func copyFile(src, dest string, desc ocispec.Descriptor, mode os.FileMode) error {
 	in, err := os.Open(src) // #nosec G304 -- digest-derived path inside the store
 	if err != nil {
