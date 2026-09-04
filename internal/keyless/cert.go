@@ -102,9 +102,10 @@ func classifySubject(pattern string) (subjectKind, error) {
 				"wildcards the scheme, which leaves the host unanchored: it would match any URL merely containing %q",
 				pattern[i:])
 		}
-		host := pattern[i+len("://"):]
-		if j := strings.Index(host, "/"); j >= 0 {
-			host = host[:j]
+		rest := pattern[i+len("://"):]
+		host, path := rest, ""
+		if j := strings.Index(rest, "/"); j >= 0 {
+			host, path = rest[:j], rest[j+1:]
 		}
 		// A host is never relaxed, because matching does not treat "/" as
 		// a boundary: "https://*.example.com/org/*" would also reach
@@ -112,6 +113,15 @@ func classifySubject(pattern string) (subjectKind, error) {
 		if host == "" || strings.Contains(host, "*") {
 			return 0, fmt.Errorf(
 				"wildcards the host, so it matches identities at any host; name the host literally, as in \"https://forge.example/org/repo/*\"")
+		}
+		// The host alone is not an authority when the provider is shared.
+		// One OpenID provider serves every account on a public forge, so
+		// "https://github.com/*" names a company, not a signer: any
+		// stranger with a free account and a workflow satisfies it. The
+		// first path segment is where a forge puts the account, so it has
+		// to be named too.
+		if err := pinsAnAccount(path); err != nil {
+			return 0, err
 		}
 		return subjectURL, nil
 	}
@@ -123,6 +133,12 @@ func classifySubject(pattern string) (subjectKind, error) {
 		// pinned domain while the host is wildcarded away. Requiring both
 		// halves to be free of "/" is what keeps a path from being taken
 		// for an address.
+		//
+		// Holding a pattern to its own kind at match time now covers the
+		// same ground, so this is defence in depth rather than the load
+		// bearing check it was before that existed. It stays because
+		// calling a path an address is a misreading whatever else
+		// catches it, and because the refusal it produces says so.
 		if strings.Contains(pattern[:j], "/") {
 			return 0, fmt.Errorf(
 				"looks like a path rather than an address: everything before the last %q is the part a signer chooses, so this pins nothing; name the host, as in \"https://forge.example/org/repo/*\"",
@@ -136,6 +152,25 @@ func classifySubject(pattern string) (subjectKind, error) {
 
 	return 0, fmt.Errorf(
 		"is neither an address nor a URL, so there is no authority in it to pin; write it as \"*@example.com\" or \"https://forge.example/...\"")
+}
+
+// pinsAnAccount checks the first path segment of a URL pattern, which is
+// where a forge puts the account a workload belongs to.
+//
+// palan cannot tell a shared forge from a private one, and the difference
+// decides whether a host is an authority. Requiring the segment either way
+// costs a private deployment the ability to write "anyone on my forge",
+// which is a policy that has to be spelled out rather than assumed.
+func pinsAnAccount(path string) error {
+	segment := path
+	if i := strings.Index(path, "/"); i >= 0 {
+		segment = path[:i]
+	}
+	if segment == "" || strings.Contains(segment, "*") {
+		return fmt.Errorf(
+			"names a host but no account under it, and one provider serves every account on a shared forge, so this matches identities belonging to strangers; name the account too, as in \"https://forge.example/org/repo/*\"")
+	}
+	return nil
 }
 
 // pinsAMailDomain checks the domain of an address pattern. A wildcard
@@ -155,6 +190,16 @@ func pinsAMailDomain(domain string) error {
 		if !strings.HasPrefix(tail, ".") || len(tail) < 2 {
 			return fmt.Errorf(
 				"wildcards the domain, so it matches an address at any domain; end it on a literal domain, as in \"*@example.com\"")
+		}
+		// Two labels, so that the literal part is a domain somebody
+		// registered rather than a suffix everybody shares: "*@*.com"
+		// names every address on the internet that ends in .com. Two is a
+		// heuristic, not a public-suffix list, so "*@*.co.uk" still
+		// passes; naming a registrable domain is the operator's job.
+		if !strings.Contains(tail[1:], ".") {
+			return fmt.Errorf(
+				"ends on %q, which is a suffix shared by every domain under it rather than a domain somebody holds",
+				tail[1:])
 		}
 	}
 	return nil

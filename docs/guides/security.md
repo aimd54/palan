@@ -443,6 +443,10 @@ https://*.example.com/org/repo/*                    # matching ignores "/", so t
                                                     # unanchors the whole pattern
 *@*example.com                                      # extends a domain rather than
                                                     # anchoring one: evilexample.com
+https://github.com/*                                # a forge is not a publisher: one
+                                                    # provider serves every account
+*@*.com                                             # a suffix everybody shares is
+                                                    # not a domain anybody holds
 ```
 
 The workflow entries are the ones worth reading twice, because they are what
@@ -450,8 +454,15 @@ anyone would write first. Anchoring on the workflow file and wildcarding the
 organisation pins nothing at all: the path is the signer's to choose, and
 under a provider every repository on a forge shares, any repository with a
 `release.yml` satisfies it. Pinning the release tag as well does not help,
-since the tag is equally the signer's to choose. Name the **host and the
-repository**, and wildcard the ref:
+since the tag is equally the signer's to choose.
+
+Naming only the host does not help either, which is why `https://github.com/*`
+is refused. One OpenID provider serves every account on a public forge, so the
+host names a company rather than a signer, and a stranger with a free account
+satisfies it. A URL pattern has to name the host **and** the first path
+segment, which is where a forge puts the account.
+
+Name the **host and the repository**, and wildcard the ref:
 
 ```yaml
 subject: https://github.com/org/repo/.github/workflows/release.yml@refs/tags/*
