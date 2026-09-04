@@ -702,3 +702,153 @@ func mustResolve(t *testing.T, st *store.Store, ref string) ocispec.Descriptor {
 	}
 	return desc
 }
+
+// TestEnsureRefusesADigestItCannotCompute: building a verifier for an
+// algorithm the binary does not link panics rather than returning an error,
+// so a manifest naming one would take down run, serve and runtime pull with
+// a stack trace instead of a refusal.
+func TestEnsureRefusesADigestItCannotCompute(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+
+	// A second artifact sharing the materialization directory, so the
+	// tree the first one unpacked is already there to be compared against.
+	hostile := "registry.example/runtimes/llama-server:b9-cpu-alt"
+	seedHostileRuntime(t, st, Config{
+		Name: "llama-server", Build: "b9", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": []byte("an engine digested with an algorithm palan does not link")}, hostile)
+	if _, err := Ensure(ctx, st, ref); err != nil {
+		t.Fatalf("unpacking the genuine runtime: %v", err)
+	}
+	retagWithDigestAlgorithm(t, st, hostile, "md5:900150983cd24fb0d6963f7d28e17f72")
+
+	// The refusal is the assertion: reaching this line at all means no
+	// panic, and the message has to name the algorithm rather than blame
+	// the file on disk.
+	_, err := Ensure(ctx, st, hostile)
+	if err == nil {
+		t.Fatal("a manifest digested with an unavailable algorithm was accepted")
+	}
+	// Asserted on the refusal's own words. The reference must not carry the
+	// algorithm's name either, or this passes on the wrapper rather than on
+	// the check.
+	if !strings.Contains(err.Error(), "cannot use") {
+		t.Errorf("the refusal does not read as one about the digest: %v", err)
+	}
+	if !strings.Contains(err.Error(), "md5") {
+		t.Errorf("the refusal does not name the algorithm: %v", err)
+	}
+	if !strings.Contains(err.Error(), "llama-server") {
+		t.Errorf("the refusal does not name the layer: %v", err)
+	}
+}
+
+// retagWithDigestAlgorithm rewrites ref's manifest so its layers carry the
+// given digest string, which is what a hostile or malformed registry would
+// serve.
+func retagWithDigestAlgorithm(t *testing.T, st *store.Store, ref, layerDigest string) {
+	t.Helper()
+	ctx := context.Background()
+	manifest, err := store.FetchManifest(ctx, st.OCI(), mustResolve(t, st, ref))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range manifest.Layers {
+		manifest.Layers[i].Digest = digest.Digest(layerDigest)
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.FromBytes(raw),
+		Size:      int64(len(raw)),
+	}
+	if err := st.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil && !isAlreadyExists(err) {
+		t.Fatal(err)
+	}
+	if err := st.Tag(ctx, desc, ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEnsureKeepsRuntimesWhoseFlavourLooksLikeAStagingDirectory: a flavour
+// ending in the staging suffix used to resolve to exactly another
+// runtime's staging path, so unpacking either deleted the other's engine.
+func TestEnsureKeepsRuntimesWhoseFlavourLooksLikeAStagingDirectory(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	engine := []byte("an engine")
+	plain := "registry.example/runtimes/llama-server:b1-cpu"
+	colliding := "registry.example/runtimes/llama-server:b1-cpu-tmp"
+	seedHostileRuntime(t, st, Config{
+		Name: "llama-server", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": engine}, plain)
+	seedHostileRuntime(t, st, Config{
+		Name: "llama-server", Build: "b1", Flavor: "cpu.tmp",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": engine}, colliding)
+
+	first, err := Ensure(ctx, st, colliding)
+	if err != nil {
+		t.Fatalf("unpacking the runtime whose flavour ends in the staging suffix: %v", err)
+	}
+	if _, err := Ensure(ctx, st, plain); err != nil {
+		t.Fatalf("unpacking the plain runtime: %v", err)
+	}
+	// Positive state: the first engine is still where it was put.
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("unpacking one runtime deleted another's engine: %v", err)
+	}
+}
+
+func TestEnsureRefusesAConfigNamingTheStoreRoot(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := "registry.example/runtimes/dots:1"
+	seedHostileRuntime(t, st, Config{
+		Name: "..", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": []byte("an engine unpacked a level too high")}, ref)
+
+	if _, err := Ensure(ctx, st, ref); err == nil {
+		t.Fatal(`a config naming ".." was accepted, so its directory and its removal sit above the runtimes tree`)
+	} else if !strings.Contains(err.Error(), "single path component") {
+		t.Errorf("the refusal does not say what is wrong with the config: %v", err)
+	}
+}
+
+func TestEnsureRefusesALayerNamedDotDot(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := "registry.example/runtimes/dotlayer:1"
+	seedHostileRuntime(t, st, Config{
+		Name: "llama-server", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": []byte("an engine"), "..": []byte("a layer naming a directory")}, ref)
+
+	if _, err := Ensure(ctx, st, ref); err == nil {
+		t.Fatal("a layer named \"..\" was accepted")
+	} else if !strings.Contains(err.Error(), "invalid file name") {
+		t.Errorf("the refusal comes from somewhere other than the name check: %v", err)
+	}
+}
+
+func TestPackRefusesAConfigThatCannotBeUnpacked(t *testing.T) {
+	st := openTestStore(t)
+	cfg := Config{
+		Name: "../../evil", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}
+	_, err := Pack(context.Background(), st, []PackFile{{Path: fakellamaBin, Name: "llama-server"}}, cfg, "r.example/x:y")
+	if err == nil {
+		t.Fatal("pack published a config every consumer will refuse")
+	}
+	if !strings.Contains(err.Error(), "single path component") {
+		t.Errorf("the refusal does not say what is wrong with the config: %v", err)
+	}
+}
