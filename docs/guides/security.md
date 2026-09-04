@@ -289,6 +289,19 @@ verify:
         - /etc/palan/models.pub
 ```
 
+Verifying the artifact is not the same as checking the file that runs. palan
+unpacks a runtime into a plain directory under the store and executes it from
+there, so its presence says nothing about its bytes, and the dynamic loader is
+pointed at that directory. Before the engine is spawned, every file in it is
+held to the digest the manifest records, and a directory that has been altered
+or has gained a file is discarded and unpacked again from the store. This part
+needs no flag: it is the engine, and it is the object that runs.
+
+`serve` checks the engine once, when it starts, while it re-checks each model
+on every load and after every eviction. A long-running `serve` will not notice
+an engine that changes underneath it, though the check above means the change
+would have to survive the next unpack.
+
 With no `runtime.ref` configured, `llama-server` comes from `PATH`. That build
 arrived by some other route and there is nothing here to hold it to, so `run`
 and `serve` say so on stderr rather than passing over it in silence.

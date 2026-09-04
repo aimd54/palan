@@ -244,8 +244,9 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 	}
 	// Held before loadModelInfo, which parses the artifact's own bytes: a
 	// copy that is not the one that verified must be refused rather than
-	// read.
-	if b.gate != nil {
+	// read. Re-reading the blobs is asked for on its own as well, so this
+	// runs for it too rather than only behind a signature check.
+	if b.gate != nil || b.rehash {
 		if err := checkLoadedContent(ctx, b.st, ref, desc, verified, b.rehash); err != nil {
 			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
 		}

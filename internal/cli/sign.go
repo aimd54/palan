@@ -233,7 +233,7 @@ provenance reported as unchecked rather than checked.`,
 				return err
 			}
 			rh := rehashOutcome{}
-			if doRehash {
+			if rehashRequested(v, doRehash) {
 				rh.report, err = rehashStore(ctx, st, ref, src.subject)
 				if err != nil {
 					return err
@@ -476,12 +476,19 @@ func verifyGate(
 // And a signature covers a manifest, which names blobs by digest and says
 // nothing about a file replaced on disk afterwards.
 //
-// The digest comparison always runs; re-reading the blobs is asked for,
-// because it re-reads whole weight files on every load.
+// The digest comparison always runs where a signature was checked;
+// re-reading the blobs is asked for, because it re-reads whole weight files
+// on every load.
+//
+// A zero verified descriptor means no signature was checked at all, which
+// happens when re-reading is asked for on its own. There is then nothing to
+// compare against, and the blobs are still read back: the two questions are
+// separate, and answering neither because only one was configured is how a
+// requested check turns into silence.
 func checkLoadedContent(
 	ctx context.Context, st *store.Store, ref string, local, verified ocispec.Descriptor, doRehash bool,
 ) error {
-	if local.Digest != verified.Digest {
+	if verified.Digest != "" && local.Digest != verified.Digest {
 		return fmt.Errorf(
 			"%s is %s on this host and %s where its signature was checked, "+
 				"so what would be loaded is not what verified",

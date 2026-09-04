@@ -222,4 +222,149 @@ func TestServeRefusesSubstitutedWeightsAsUnverifiedRatherThanMissing(t *testing.
 	if !strings.Contains(err.Error(), layer.Digest.String()) {
 		t.Fatalf("the refusal does not name the blob that changed: %v", err)
 	}
+
+	// Re-reading asked for on its own, with no signature check beside it.
+	// serve reaches this through a different branch from run's, so it gets
+	// its own assertion rather than inheriting run's.
+	rehashOnly := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(), rehash: true}
+	if _, _, err := rehashOnly.Spec(ctx, ref); err == nil {
+		t.Fatal("re-reading on its own loaded substituted weights")
+	} else if !strings.Contains(err.Error(), layer.Digest.String()) {
+		t.Fatalf("the refusal does not name the blob that changed: %v", err)
+	}
+}
+
+// runRunUnverified runs the real run command with no signature check
+// configured at all, so a re-read asked for on its own is the only thing
+// standing between the store and the runtime.
+func runRunUnverified(t *testing.T, home, ref string, rehash bool) (string, error) {
+	t.Helper()
+	t.Setenv("PALAN_HOME", home)
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	v.Set(keyRuntimeRef, bogusRuntimeRef)
+	if rehash {
+		v.Set(keyVerifyRehash, true)
+	}
+	cmd := newRunCmd(v)
+	var errOut bytes.Buffer
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{ref})
+	err := cmd.Execute()
+	return errOut.String(), err
+}
+
+// TestRehashRunsWhenAskedForOnItsOwn: re-reading the blobs and checking a
+// signature are separate questions, and a host may reasonably ask for the
+// first without configuring the second. Answering neither because only one
+// was configured is how a requested check becomes silence: the command
+// would exit 0 having read nothing and said nothing.
+func TestRehashRunsWhenAskedForOnItsOwn(t *testing.T) {
+	reg := registrytest.New(t)
+	home := t.TempDir()
+	ref, layer := seedGGUF(t, reg, "llm/qwen3", "v1", []byte("the weights a publisher released"))
+	runPullInto(t, home, ref)
+
+	st, err := store.Open(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	substituteTail(t, st, layer)
+
+	// Nothing configured: run reaches the runtime it cannot find, which is
+	// what makes the other half of this test meaningful.
+	_, err = runRunUnverified(t, home, ref, false)
+	if err == nil || !strings.Contains(err.Error(), bogusRuntimeRef) {
+		t.Fatalf("with nothing configured run should have reached runtime resolution: %v", err)
+	}
+
+	_, err = runRunUnverified(t, home, ref, true)
+	if err == nil {
+		t.Fatal("verify.rehash on its own read nothing back")
+	}
+	if !strings.Contains(err.Error(), layer.Digest.String()) {
+		t.Fatalf("the refusal does not name the blob that changed: %v", err)
+	}
+	if strings.Contains(err.Error(), bogusRuntimeRef) {
+		t.Fatalf("run reached runtime resolution over a substituted blob: %v", err)
+	}
+}
+
+// residentCopyDiffersFromSignedTag leaves the store holding an artifact
+// whose weight layer is not a GGUF, under a tag the registry now serves a
+// signed GGUF for. Reading the resident copy's bytes fails, so the error
+// says which check ran first.
+func residentCopyDiffersFromSignedTag(t *testing.T) (home, ref, pubFile string) {
+	t.Helper()
+	reg := registrytest.New(t)
+	home = t.TempDir()
+	ref = reg.Host() + "/llm/qwen3:v1"
+
+	notAModel := []byte("bytes that are not a gguf file at all")
+	reg.PutBlob("llm/qwen3", notAModel)
+	seedModel(t, reg, "llm/qwen3", "v1", []ocispec.Descriptor{localLayer(notAModel, "model.gguf")})
+	runPullInto(t, home, ref)
+
+	seedGGUF(t, reg, "llm/qwen3", "v1", []byte("the weights the tag points at now"))
+	priv, privKey := attestKeypair(t)
+	pubFile = attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the moved tag: %v", err)
+	}
+	return home, ref, pubFile
+}
+
+// TestTheResidentCopyIsCheckedBeforeItsBytesAreParsed pins an ordering the
+// code comments call the point rather than a detail. Deciding whether an
+// artifact is servable means reading its weight header, so a check placed
+// after that reports a parse failure over content that should never have
+// been opened, and the operator is sent after the wrong problem.
+func TestTheResidentCopyIsCheckedBeforeItsBytesAreParsed(t *testing.T) {
+	home, ref, pubFile := residentCopyDiffersFromSignedTag(t)
+
+	_, err := runRunCmd(t, home, ref, pubFile, bogusRuntimeRef, false)
+	if err == nil {
+		t.Fatal("run loaded a resident copy the signature does not cover")
+	}
+	if !strings.Contains(err.Error(), "not what verified") {
+		t.Fatalf("the refusal is not the content check: %v", err)
+	}
+	// "magic" is requireGGUF's word for a weight header it could not read.
+	// Seeing it here means the artifact's own bytes were parsed first.
+	if strings.Contains(err.Error(), "magic") {
+		t.Fatalf("the resident copy was parsed before it was checked: %v", err)
+	}
+}
+
+// TestServeRefusesAResidentCopyTheSignatureDoesNotCover is the same
+// ordering and the same refusal through the backend the router calls, where
+// the answer has to be 403 rather than 404.
+func TestServeRefusesAResidentCopyTheSignatureDoesNotCover(t *testing.T) {
+	home, ref, pubFile := residentCopyDiffersFromSignedTag(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	v.Set(keyVerifyRequired, true)
+	v.Set(keyVerifyKey, pubFile)
+
+	b := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gate: verifyGate(v, st, false, "")}
+	if _, _, err := b.Spec(ctx, ref); err == nil {
+		t.Fatal("the backend loaded a resident copy the signature does not cover")
+	} else {
+		if !errors.Is(err, router.ErrUnverified) {
+			t.Fatalf("a resident copy that is not the verified one must read as refused, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "not what verified") {
+			t.Fatalf("the refusal is not the content check: %v", err)
+		}
+		if strings.Contains(err.Error(), "magic") {
+			t.Fatalf("the resident copy was parsed before it was checked: %v", err)
+		}
+	}
 }

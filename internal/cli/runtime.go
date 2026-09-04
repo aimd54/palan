@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"oras.land/oras-go/v2/errdef"
 
 	"github.com/aimd54/palan/internal/refname"
 	palanruntime "github.com/aimd54/palan/internal/runtime"
@@ -133,13 +135,19 @@ func checkRuntime(
 	gate func(context.Context, string) (ocispec.Descriptor, error),
 	ref string, rehash bool,
 ) (string, error) {
-	if gate == nil {
+	if gate == nil && !rehash {
 		return ref, nil
 	}
 	if ref == "" {
-		fmt.Fprintln(w, "Verification is required and no runtime artifact is configured, "+
-			"so llama-server is taken from PATH and palan cannot say where that build came from. "+
-			"Set runtime.ref to a signed runtime artifact to bring it under the same policy.")
+		// The notice belongs to verification rather than to re-reading: a
+		// host that only asked for its blobs to be read back was never
+		// told anything about where its engine came from, so there is no
+		// claim here for silence to undercut.
+		if gate != nil {
+			fmt.Fprintln(w, "Verification is required and no runtime artifact is configured, "+
+				"so llama-server is taken from PATH and palan cannot say where that build came from. "+
+				"Set runtime.ref to a signed runtime artifact to bring it under the same policy.")
+		}
 		return ref, nil
 	}
 	parsed, err := refname.Parse(ref, v.GetString(keyRegistryDefault))
@@ -151,12 +159,20 @@ func checkRuntime(
 	// simply has not pulled the runtime is told that rather than sent to
 	// the registry to verify something it does not hold.
 	local, err := st.Resolve(ctx, name)
-	if err != nil {
+	switch {
+	case errors.Is(err, errdef.ErrNotFound):
 		return "", fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", name, err)
+	case err != nil:
+		// A store that cannot answer is a different problem from one that
+		// answered "no", and sending an operator to `runtime pull` for a
+		// permission or corruption failure sends them to the wrong repair.
+		return "", fmt.Errorf("reading the runtime %q from the local store: %w", name, err)
 	}
-	verified, err := gate(ctx, name)
-	if err != nil {
-		return "", err
+	var verified ocispec.Descriptor
+	if gate != nil {
+		if verified, err = gate(ctx, name); err != nil {
+			return "", err
+		}
 	}
 	if err := checkLoadedContent(ctx, st, name, local, verified, rehash); err != nil {
 		return "", err
