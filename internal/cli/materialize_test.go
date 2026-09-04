@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/viper"
 
 	"github.com/aimd54/palan/internal/registrytest"
@@ -136,5 +138,63 @@ func TestMaterializeRefusesToWriteThroughASymlink(t *testing.T) {
 	}
 	if string(body) != "a file outside the output directory" {
 		t.Fatalf("the file the link aimed at was overwritten, it now holds %q", body)
+	}
+}
+
+// TestMaterializeTakesBackWhatItWroteWhenALaterLayerFails: a model can be
+// many files, and the directory is what something else reads. Files left
+// from a refused pull are a partial model that looks like a whole one to
+// whatever mounts the volume next.
+func TestMaterializeTakesBackWhatItWroteWhenALaterLayerFails(t *testing.T) {
+	reg := registrytest.New(t)
+	home := t.TempDir()
+
+	first := []byte("shard one of the weights")
+	second := []byte("shard two of the weights")
+	reg.PutBlob("llm/sharded", first)
+	reg.PutBlob("llm/sharded", second)
+	seedModel(t, reg, "llm/sharded", "v1", []ocispec.Descriptor{
+		localLayer(first, "model-00001-of-00002.safetensors"),
+		localLayer(second, "model-00002-of-00002.safetensors"),
+	})
+	ref := reg.Host() + "/llm/sharded:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+	runPullInto(t, home, ref)
+
+	// Only the second shard is substituted, so the first is written and
+	// then has to be taken back.
+	st, err := store.Open(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := st.BlobPath(digest.FromBytes(second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("shard two an attacker wrote"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if _, err := runPullOutput(t, home, ref, pubKey, dir); err == nil {
+		t.Fatal("a substituted shard was written into the output directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("the refusal left a partial model behind: %v", names)
 	}
 }

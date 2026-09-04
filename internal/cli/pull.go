@@ -133,6 +133,19 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		return nil, err
 	}
 	var written []string
+	// A model can be many files, and a failure on the fourth leaves three
+	// already on disk. The directory is what something else reads, so a
+	// refusal has to take back what it wrote rather than leave a partial
+	// model that looks like a whole one.
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		for _, p := range written {
+			_ = os.Remove(p)
+		}
+	}()
 	for _, l := range manifest.Layers {
 		name := l.Annotations[modelspec.AnnotationFilepath]
 		if name == "" {
@@ -153,14 +166,19 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if err != nil {
 			return nil, err
 		}
+		// Recorded before the write, so the cleanup below covers the file
+		// that failed as well as the ones that succeeded. A failure can
+		// leave a partial or wrong-length file, and it is the same problem
+		// as a completed one holding the wrong bytes.
+		written = append(written, dest)
 		if err := copyFile(src, dest, l, 0o644); err != nil {
 			return nil, err
 		}
-		written = append(written, dest)
 	}
 	if len(written) == 0 {
 		return nil, fmt.Errorf("nothing to materialize: no raw layers with filepath annotations (car-profile images are mounted, not materialized)")
 	}
+	complete = true
 	return written, nil
 }
 
@@ -199,10 +217,6 @@ func copyFile(src, dest string, desc ocispec.Descriptor, mode os.FileMode) error
 		return fmt.Errorf("blob %s holds %d bytes in the store, the manifest records %d", desc.Digest, n, desc.Size)
 	}
 	if !verifier.Verified() {
-		// Removed rather than left in place: the caller is about to report
-		// a failure, and a file of the right name holding the wrong bytes
-		// is what the next reader of this directory would pick up.
-		_ = os.Remove(dest)
 		return fmt.Errorf(
 			"blob %s does not hash to the digest the manifest records, so %s was not written",
 			desc.Digest, filepath.Base(dest))
