@@ -852,3 +852,71 @@ func TestPackRefusesAConfigThatCannotBeUnpacked(t *testing.T) {
 		t.Errorf("the refusal does not say what is wrong with the config: %v", err)
 	}
 }
+
+func TestEnsureRefusesTwoLayersClaimingOneFileName(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := "registry.example/runtimes/clash:1"
+	// seedHostileRuntime keys its files by name, so the manifest is built
+	// here to carry the same title twice.
+	seedHostileRuntime(t, st, Config{
+		Name: "llama-server", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}, map[string][]byte{"llama-server": []byte("the engine")}, ref)
+	duplicateFirstLayer(t, st, ref)
+
+	if _, err := Ensure(ctx, st, ref); err == nil {
+		t.Fatal("two layers claiming one file name were unpacked, so one silently replaced the other")
+	} else if !strings.Contains(err.Error(), "llama-server") {
+		t.Errorf("the refusal does not name the file both layers claim: %v", err)
+	}
+}
+
+// duplicateFirstLayer re-tags ref with a manifest carrying its first layer
+// twice, which is what a registry could serve and Pack will not produce.
+func duplicateFirstLayer(t *testing.T, st *store.Store, ref string) {
+	t.Helper()
+	ctx := context.Background()
+	manifest, err := store.FetchManifest(ctx, st.OCI(), mustResolve(t, st, ref))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Layers = append(manifest.Layers, manifest.Layers[0])
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.FromBytes(raw),
+		Size:      int64(len(raw)),
+	}
+	if err := st.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil && !isAlreadyExists(err) {
+		t.Fatal(err)
+	}
+	if err := st.Tag(ctx, desc, ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPackRefusesTwoFilesWithOneName(t *testing.T) {
+	st := openTestStore(t)
+	other := filepath.Join(t.TempDir(), "llama-server")
+	if err := os.WriteFile(other, []byte("a different build of the same name"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Name: "llama-server", Build: "b1", Flavor: "cpu",
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
+	}
+	_, err := Pack(context.Background(), st, []PackFile{
+		{Path: fakellamaBin, Name: "llama-server"},
+		{Path: other, Name: "llama-server"},
+	}, cfg, "r.example/x:y")
+	if err == nil {
+		t.Fatal("pack published an artifact whose two files claim one name")
+	}
+	if !strings.Contains(err.Error(), "llama-server") {
+		t.Errorf("the refusal does not name the file: %v", err)
+	}
+}
