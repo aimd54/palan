@@ -281,3 +281,56 @@ func TestRehashRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag(t *test
 		t.Errorf("the refusal does not say the blobs here are not the verified ones: %v", err)
 	}
 }
+
+// TestExplainNamesWhatDatesAKeylessSignature: a Fulcio certificate lives
+// minutes, so the log entry is what supplies a moment to hold it to. A chain
+// that reported the signer without saying what dated it would leave the
+// reader with no way to look the signature up.
+//
+// The same fixture covers the gap on the other side. A source attestation is
+// checked against the key that signed the model, and a keyless signature
+// supplies an identity instead, so these layers name an upstream that
+// nothing here vouches for. That has to read as unproven rather than as
+// silence.
+func TestExplainNamesWhatDatesAKeylessSignature(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights signed without a key")
+	reg.PutBlob("llm/qwen3", weights)
+	layer := sourceLayer(weights, "huggingface.co/org/repo", "model.gguf", "abc123", strings.Repeat("11", 32))
+	ref, l := seedKeylessModel(t, reg, []ocispec.Descriptor{layer})
+	root := writeTrustRootFile(t, l)
+
+	t.Setenv("PALAN_HOME", t.TempDir())
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	v.Set(keyVerifyPolicy, keylessPolicy(reg.Host(), root, keylessSigner.Subject, keylessSigner.Issuer))
+	cmd := newVerifyCmd(v)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{ref, "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("verifying a keyless signature: %v", err)
+	}
+
+	links := linkVerdicts(t, out.String())
+	log, ok := links[linkLog]
+	if !ok {
+		t.Fatalf("the chain has no transparency log link; it was:\n%s", out.String())
+	}
+	if !strings.Contains(log.Detail, "entry ") {
+		t.Errorf("the log link does not locate the entry: %+v", log)
+	}
+	if !strings.Contains(log.Detail, root) {
+		t.Errorf("the log link does not name the root its proof was rebuilt against: %+v", log)
+	}
+	if !strings.Contains(links[linkSignature].Detail, keylessSigner.Subject) {
+		t.Errorf("the signature link does not name who signed: %+v", links[linkSignature])
+	}
+	if links[linkSources].Proven {
+		t.Errorf("provenance reads proven beside a keyless signature, which supplies no key to check it with: %+v", links[linkSources])
+	}
+	if !strings.Contains(links[linkSources].Detail, "upstream source") {
+		t.Errorf("the provenance link does not say what was left unchecked: %+v", links[linkSources])
+	}
+}
