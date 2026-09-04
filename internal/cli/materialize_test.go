@@ -198,3 +198,171 @@ func TestMaterializeTakesBackWhatItWroteWhenALaterLayerFails(t *testing.T) {
 		t.Fatalf("the refusal left a partial model behind: %v", names)
 	}
 }
+
+// seedNestedModel puts a signed model on reg whose layer claims a nested
+// file name. palan's own pack flattens names, but materialize supports
+// nested ones deliberately, for ModelPack artifacts built elsewhere.
+func seedNestedModel(t *testing.T, reg *registrytest.Registry, name string, body []byte) (ref, pubKey string) {
+	t.Helper()
+	reg.PutBlob("llm/nested", body)
+	seedModel(t, reg, "llm/nested", "v1", []ocispec.Descriptor{localLayer(body, name)})
+	priv, privKey := attestKeypair(t)
+	pubKey = attestPubKeyFile(t, priv)
+	ref = reg.Host() + "/llm/nested:v1"
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+	return ref, pubKey
+}
+
+// TestMaterializeRefusesToWriteThroughASymlinkedDirectory: guarding the
+// last path component does not establish that the write lands inside the
+// output directory. Path joining cleans a nested name so the result looks
+// contained, while an intermediate component can still be a link pointing
+// anywhere, and creating the chain follows it.
+func TestMaterializeRefusesToWriteThroughASymlinkedDirectory(t *testing.T) {
+	reg := registrytest.New(t)
+	ref, pubKey := seedNestedModel(t, reg, "sub/model.gguf", []byte("weights that must stay inside the volume"))
+
+	outer := t.TempDir()
+	outside := filepath.Join(outer, "outside")
+	if err := os.MkdirAll(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(outer, "models")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("pull wrote through a symlinked directory in the output directory")
+	}
+	// Positive state: nothing landed on the far side of the link.
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the write escaped the output directory: %v", entries[0].Name())
+	}
+}
+
+// TestMaterializeDoesNotOverwriteAFileTheLinkAimsAt is the sharper half:
+// the escape overwrites rather than merely creating, so an existing file
+// outside the output directory is replaced with attacker-chosen bytes that
+// carry a signature the policy accepts.
+func TestMaterializeDoesNotOverwriteAFileTheLinkAimsAt(t *testing.T) {
+	reg := registrytest.New(t)
+	ref, pubKey := seedNestedModel(t, reg, "sub/keep.txt", []byte("bytes chosen by whoever built the artifact"))
+
+	outer := t.TempDir()
+	victimDir := filepath.Join(outer, "victim")
+	if err := os.MkdirAll(victimDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(victimDir, "keep.txt")
+	const original = "a file that has nothing to do with this pull"
+	if err := os.WriteFile(victim, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(outer, "models")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victimDir, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("pull wrote through a symlinked directory")
+	}
+	body, err := os.ReadFile(victim) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != original {
+		t.Fatalf("a file outside the output directory was overwritten, it now holds %q", body)
+	}
+}
+
+// TestMaterializeWritesANestedNameWhenNothingIsLinked keeps the refusals
+// above honest: nested names are supported, so the guard must refuse the
+// link rather than the nesting.
+func TestMaterializeWritesANestedNameWhenNothingIsLinked(t *testing.T) {
+	reg := registrytest.New(t)
+	body := []byte("weights under a nested name")
+	ref, pubKey := seedNestedModel(t, reg, "sub/model.gguf", body)
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err != nil {
+		t.Fatalf("a nested layer name that escapes nothing must materialize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sub", "model.gguf")) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatalf("the nested file was not written: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("the nested file holds %q", got)
+	}
+}
+
+func TestMaterializeRefusesTwoLayersClaimingOneFileName(t *testing.T) {
+	reg := registrytest.New(t)
+	first := []byte("the layer that would be written first")
+	second := []byte("the layer that would overwrite it")
+	reg.PutBlob("llm/clash", first)
+	reg.PutBlob("llm/clash", second)
+	seedModel(t, reg, "llm/clash", "v1", []ocispec.Descriptor{
+		localLayer(first, "model.gguf"),
+		localLayer(second, "model.gguf"),
+	})
+	ref := reg.Host() + "/llm/clash:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("two layers claiming one name were materialized, so one silently replaced the other")
+	} else if !strings.Contains(err.Error(), "model.gguf") {
+		t.Errorf("the refusal does not name the file both layers claim: %v", err)
+	}
+}
+
+// TestMaterializeRefusesAWeightLayerWithNoFileName: a layer with no file
+// name has nowhere to go, and skipping it quietly is right for a small one
+// and wrong for the weights. The command would otherwise report success
+// over a directory holding everything except the model.
+func TestMaterializeRefusesAWeightLayerWithNoFileName(t *testing.T) {
+	reg := registrytest.New(t)
+	weights := []byte("weights whose layer records no file name")
+	extra := []byte("a small file beside them")
+	reg.PutBlob("llm/nameless", weights)
+	reg.PutBlob("llm/nameless", extra)
+	nameless := localLayer(weights, "model.gguf")
+	nameless.Annotations = nil
+	seedModel(t, reg, "llm/nameless", "v1", []ocispec.Descriptor{nameless, localLayer(extra, "tokenizer.json")})
+	ref := reg.Host() + "/llm/nameless:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("a model whose weight layer has no file name was reported as materialized")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the refusal left %d file(s) behind, so a serving container would find a partial model", len(entries))
+	}
+}
