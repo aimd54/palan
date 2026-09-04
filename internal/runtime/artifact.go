@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -58,6 +59,34 @@ type Config struct {
 
 // dirName is the materialization directory for a runtime version.
 func (c Config) dirName() string { return c.Build + "-" + c.Flavor }
+
+// safePathFields refuses a config whose name, build, flavor or entrypoint
+// would turn into anything but a single directory or file component.
+//
+// These four are read out of the artifact's own config blob, which is
+// written by whoever published it, and they are joined into a path that
+// Ensure then removes and rewrites. Left unchecked, a name of "../.." is an
+// unlink of a directory the publisher chose. filepath.Join cleans the
+// traversal into a real path rather than refusing it, so the refusal has to
+// happen here.
+func (c Config) safePathFields() error {
+	for _, f := range []struct{ kind, value string }{
+		{"name", c.Name},
+		{"build", c.Build},
+		{"flavor", c.Flavor},
+		{"entrypoint", c.Entrypoint},
+	} {
+		if f.value == "" {
+			return fmt.Errorf("the runtime config names an empty %s", f.kind)
+		}
+		if f.value != filepath.Base(f.value) || f.value == "." || f.value == ".." ||
+			strings.ContainsRune(f.value, '/') || strings.ContainsRune(f.value, filepath.Separator) {
+			return fmt.Errorf(
+				"the runtime config's %s %q is not a single path component", f.kind, f.value)
+		}
+	}
+	return nil
+}
 
 // PackFile is one file of a runtime artifact.
 type PackFile struct {
@@ -175,6 +204,16 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	if cfg.OS != runtime.GOOS || cfg.Arch != runtime.GOARCH {
 		return "", fmt.Errorf("runtime %q targets %s/%s, this host is %s/%s", ref, cfg.OS, cfg.Arch, runtime.GOOS, runtime.GOARCH)
 	}
+	if err := cfg.safePathFields(); err != nil {
+		return "", fmt.Errorf("runtime %q: %w", ref, err)
+	}
+	// The entrypoint is the path handed back to be executed, so it has to
+	// be one of the files this artifact actually carries rather than any
+	// name its config happens to state.
+	if !namesLayer(manifest, cfg.Entrypoint) {
+		return "", fmt.Errorf(
+			"runtime %q names entrypoint %q, which is not one of its files", ref, cfg.Entrypoint)
+	}
 
 	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName())
 	entry := filepath.Join(destDir, cfg.Entrypoint)
@@ -182,13 +221,9 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 		return entry, nil
 	}
 
-	// Removed rather than written over. An unpacked tree carrying a file
-	// the manifest does not name is as much of a problem as one whose
-	// files were altered, because the dynamic loader is pointed at this
-	// directory and will load a library that was added to it.
-	if err := os.RemoveAll(destDir); err != nil {
-		return "", err
-	}
+	// The replacement is built whole before anything is taken away, so a
+	// host whose engine merely failed a check is not left with no engine
+	// at all when the unpack cannot finish.
 	tmpDir := destDir + ".tmp"
 	if err := os.RemoveAll(tmpDir); err != nil {
 		return "", err
@@ -205,14 +240,31 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 		if name == cfg.Entrypoint {
 			mode = 0o755
 		}
-		if err := copyBlob(st, l.Digest, filepath.Join(tmpDir, name), mode); err != nil {
+		if err := copyBlob(st, l, filepath.Join(tmpDir, name), mode); err != nil {
 			return "", err
 		}
+	}
+	// Removed rather than written over. An unpacked tree carrying a file
+	// the manifest does not name is as much of a problem as one whose
+	// files were altered, because the dynamic loader is pointed at this
+	// directory and will load a library that was added to it.
+	if err := os.RemoveAll(destDir); err != nil {
+		return "", err
 	}
 	if err := os.Rename(tmpDir, destDir); err != nil {
 		return "", err
 	}
 	return entry, nil
+}
+
+// namesLayer reports whether manifest carries a file called name.
+func namesLayer(manifest ocispec.Manifest, name string) bool {
+	for _, l := range manifest.Layers {
+		if l.Annotations[ocispec.AnnotationTitle] == name {
+			return true
+		}
+	}
+	return false
 }
 
 // materializedMatches reports whether dir holds exactly the files manifest
@@ -253,6 +305,17 @@ func materializedMatches(manifest ocispec.Manifest, dir string) error {
 // Streamed, and bounded at one byte past the recorded length, so a file
 // that grew is reported as the wrong length rather than read to its end.
 func fileMatches(path string, desc ocispec.Descriptor) error {
+	// Lstat rather than Stat, and before the open. A symlink pointing at a
+	// file that holds the right bytes passes a check that follows it, and
+	// is still a symlink afterwards, so whoever owns the target decides
+	// what runs from then on without palan ever looking again.
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is a %s, not a regular file", path, fi.Mode().Type())
+	}
 	fh, err := os.Open(path) // #nosec G304 -- path under the store's runtimes dir
 	if err != nil {
 		return err
@@ -310,8 +373,16 @@ func fileDescriptor(f PackFile) (ocispec.Descriptor, error) {
 	}, nil
 }
 
-func copyBlob(st *store.Store, d digest.Digest, dest string, mode os.FileMode) error {
-	src, err := st.BlobPath(d)
+// copyBlob writes one layer out of the store, holding the bytes to the
+// digest the manifest records as they go past.
+//
+// A store blob is content-addressed by its file name and by nothing else:
+// reading one back is a plain file open, so a blob rewritten in place is
+// handed over without complaint. Verifying here is what makes the unpacked
+// tree trustworthy on the path that creates it, and not only on the path
+// that finds it already present.
+func copyBlob(st *store.Store, desc ocispec.Descriptor, dest string, mode os.FileMode) error {
+	src, err := st.BlobPath(desc.Digest)
 	if err != nil {
 		return err
 	}
@@ -324,11 +395,23 @@ func copyBlob(st *store.Store, d digest.Digest, dest string, mode os.FileMode) e
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+	verifier := desc.Digest.Verifier()
+	n, err := io.Copy(io.MultiWriter(out, verifier), io.LimitReader(in, desc.Size+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	return out.Close()
+	if n != desc.Size {
+		return fmt.Errorf("blob %s holds %d bytes in the store, the manifest records %d", desc.Digest, n, desc.Size)
+	}
+	if !verifier.Verified() {
+		return fmt.Errorf(
+			"blob %s does not hash to the digest the manifest records, so the store's copy of %s is not what was signed",
+			desc.Digest, filepath.Base(dest))
+	}
+	return nil
 }
 
 func isAlreadyExists(err error) bool { return errors.Is(err, errdef.ErrAlreadyExists) }
