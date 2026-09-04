@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/viper"
 
@@ -312,14 +313,38 @@ func residentCopyDiffersFromSignedTag(t *testing.T) (home, ref, pubFile string) 
 	if err := runSign(t, ref, privKey); err != nil {
 		t.Fatalf("signing the moved tag: %v", err)
 	}
+
+	// The resident weight blob is taken away entirely. Deciding whether an
+	// artifact is servable means opening that file, so anything that reads
+	// it fails loudly and by name. Without this the test would only pin
+	// which error surfaced, and a check that ran after the read but still
+	// returned its own error first would satisfy it.
+	st, err := store.Open(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := st.BlobPath(digest.FromBytes(notAModel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(blob); err != nil {
+		t.Fatal(err)
+	}
 	return home, ref, pubFile
 }
 
 // TestTheResidentCopyIsCheckedBeforeItsBytesAreParsed pins an ordering the
 // code comments call the point rather than a detail. Deciding whether an
 // artifact is servable means reading its weight header, so a check placed
-// after that reports a parse failure over content that should never have
+// after that reports a read failure over content that should never have
 // been opened, and the operator is sent after the wrong problem.
+//
+// What this pins is that the content check decides the outcome, which is
+// what an operator sees. It cannot observe the read itself, so an ordering
+// that read the bytes and then discarded the result in favour of the
+// check's error would satisfy it. That is not a shape anybody writes; the
+// one that gets written is the plain reordering, where the read runs first
+// and its error returns, and this does catch that.
 func TestTheResidentCopyIsCheckedBeforeItsBytesAreParsed(t *testing.T) {
 	home, ref, pubFile := residentCopyDiffersFromSignedTag(t)
 
@@ -330,10 +355,11 @@ func TestTheResidentCopyIsCheckedBeforeItsBytesAreParsed(t *testing.T) {
 	if !strings.Contains(err.Error(), "not what verified") {
 		t.Fatalf("the refusal is not the content check: %v", err)
 	}
-	// "magic" is requireGGUF's word for a weight header it could not read.
-	// Seeing it here means the artifact's own bytes were parsed first.
-	if strings.Contains(err.Error(), "magic") {
-		t.Fatalf("the resident copy was parsed before it was checked: %v", err)
+	// The resident weight blob is not on disk at all, so any attempt to
+	// read it names the file. Either word here means the artifact's own
+	// bytes were reached for before the check refused them.
+	if strings.Contains(err.Error(), "magic") || strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("the resident copy was read before it was checked: %v", err)
 	}
 }
 
@@ -363,8 +389,8 @@ func TestServeRefusesAResidentCopyTheSignatureDoesNotCover(t *testing.T) {
 		if !strings.Contains(err.Error(), "not what verified") {
 			t.Fatalf("the refusal is not the content check: %v", err)
 		}
-		if strings.Contains(err.Error(), "magic") {
-			t.Fatalf("the resident copy was parsed before it was checked: %v", err)
+		if strings.Contains(err.Error(), "magic") || strings.Contains(err.Error(), "no such file") {
+			t.Fatalf("the resident copy was read before it was checked: %v", err)
 		}
 	}
 }

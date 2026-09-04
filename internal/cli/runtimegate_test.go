@@ -74,8 +74,12 @@ func TestRunAcceptsASignedRuntimeBuild(t *testing.T) {
 	if err == nil {
 		t.Fatal("the fixture is not a real engine, so run cannot have started it")
 	}
-	if strings.Contains(err.Error(), "FAILED") {
-		t.Fatalf("a signed runtime was refused: %v", err)
+	// Asserted on what the error is rather than on what it is not: run has
+	// to get past verification and fail unpacking a model-shaped artifact
+	// that was never a runtime. A differently worded refusal would satisfy
+	// a check for the absence of "FAILED".
+	if !strings.Contains(err.Error(), "not a runtime artifact") {
+		t.Fatalf("run did not reach unpacking, so the signed runtime was refused somewhere earlier: %v", err)
 	}
 }
 
