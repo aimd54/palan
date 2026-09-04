@@ -434,29 +434,72 @@ func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef string, su
 }
 
 // verifyGate returns a check that refuses a model whose signature does not
-// verify, or nil when neither the flag nor verify.required asks for one.
+// verify, or nil when neither the flag nor verify.required asks for one. It
+// returns the artifact the signature covered, which is not always the one
+// this host holds, so a caller about to load something has to compare.
 //
 // run and serve share it so that a model is checked at the moment it is about
 // to be served, not only when it entered the store. Source selection is left
 // to resolveVerifySource, which reads the store when it holds the signature
 // and the registry otherwise, so an air-gapped host needs no network and a
 // model signed after a local pack still verifies.
-func verifyGate(v *viper.Viper, st *store.Store, doVerify bool, keyPath string) func(context.Context, string) error {
+func verifyGate(
+	v *viper.Viper, st *store.Store, doVerify bool, keyPath string,
+) func(context.Context, string) (ocispec.Descriptor, error) {
 	if !doVerify && !v.GetBool(keyVerifyRequired) {
 		return nil
 	}
-	return func(ctx context.Context, raw string) error {
+	return func(ctx context.Context, raw string) (ocispec.Descriptor, error) {
 		ref, err := refname.Parse(raw, v.GetString(keyRegistryDefault))
 		if err != nil {
-			return err
+			return ocispec.Descriptor{}, err
 		}
 		src, err := resolveVerifySource(ctx, st, v, ref)
 		if err != nil {
-			return err
+			return ocispec.Descriptor{}, err
 		}
-		_, err = verifyDigest(ctx, v, keyPath, src, ref)
-		return err
+		if _, err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+			return ocispec.Descriptor{}, err
+		}
+		return src.subject, nil
 	}
+}
+
+// checkLoadedContent holds the copy this host is about to load against the
+// artifact whose signature was just checked, and, when asked, reads that
+// copy's blobs back.
+//
+// Two questions are still open once a signature verifies, and neither is
+// answered by the signature. The store may hold the model without holding
+// its signature, in which case the gate read the registry, so a tag that
+// moved leaves this host serving one artifact while vouching for another.
+// And a signature covers a manifest, which names blobs by digest and says
+// nothing about a file replaced on disk afterwards.
+//
+// The digest comparison always runs; re-reading the blobs is asked for,
+// because it re-reads whole weight files on every load.
+func checkLoadedContent(
+	ctx context.Context, st *store.Store, ref string, local, verified ocispec.Descriptor, doRehash bool,
+) error {
+	if local.Digest != verified.Digest {
+		return fmt.Errorf(
+			"%s is %s on this host and %s where its signature was checked, "+
+				"so what would be loaded is not what verified",
+			ref, local.Digest, verified.Digest)
+	}
+	if !doRehash {
+		return nil
+	}
+	if _, err := store.Rehash(ctx, st.OCI(), local); err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
+	return nil
+}
+
+// rehashRequested reports whether the blobs are to be read back at load,
+// from the flag or from the standing configuration.
+func rehashRequested(v *viper.Viper, doRehash bool) bool {
+	return doRehash || v.GetBool(keyVerifyRehash)
 }
 
 // namedVerifier is one identity a policy allows, carried with the name it was

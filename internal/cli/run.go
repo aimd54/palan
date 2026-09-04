@@ -40,6 +40,7 @@ func newRunCmd(v *viper.Viper) *cobra.Command {
 		web        bool
 		doVerify   bool
 		verifyKey  string
+		doRehash   bool
 	)
 
 	cmd := &cobra.Command{
@@ -77,13 +78,25 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			// the model is absent, resolveVerifySource answers from the
 			// registry, so an unsigned model is refused without downloading
 			// it first.
-			if gate := verifyGate(v, st, doVerify, verifyKey); gate != nil {
-				if err := gate(ctx, ref.String()); err != nil {
+			var verified ocispec.Descriptor
+			gate := verifyGate(v, st, doVerify, verifyKey)
+			if gate != nil {
+				if verified, err = gate(ctx, ref.String()); err != nil {
 					return err
 				}
 			}
 
-			model, err := ensureModel(ctx, cmd, v, st, ref.String())
+			// Once the copy to be loaded is on disk, hold it to the
+			// artifact that verified, before anything reads it. The gate
+			// may have answered from the registry, and a fetch reuses
+			// whatever blobs are already here.
+			var check func(context.Context, ocispec.Descriptor) error
+			if gate != nil {
+				check = func(ctx context.Context, local ocispec.Descriptor) error {
+					return checkLoadedContent(ctx, st, ref.String(), local, verified, rehashRequested(v, doRehash))
+				}
+			}
+			model, err := ensureModel(ctx, cmd, v, st, ref.String(), check)
 			if err != nil {
 				return err
 			}
@@ -142,6 +155,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 	cmd.Flags().BoolVar(&web, "web", false, "expose llama-server's web UI instead of the terminal chat")
 	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature before fetching or running the model")
 	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
+	cmd.Flags().BoolVar(&doRehash, "rehash", false, "read the model's blobs back at load and hold each to the digest the manifest records")
 	return cmd
 }
 
@@ -153,7 +167,15 @@ type modelInfo struct {
 
 // ensureModel resolves ref locally, pulling it first when absent, and
 // returns the weight blob path plus pack-time serve defaults.
-func ensureModel(ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string) (*modelInfo, error) {
+// check, when set, is run once the artifact is resident and before
+// anything reads it. That ordering is the point rather than a detail:
+// loadModelInfo parses the artifact's own bytes to decide whether it can be
+// served, so a check placed after it would report a parse failure over
+// content that should never have been opened.
+func ensureModel(
+	ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string,
+	check func(context.Context, ocispec.Descriptor) error,
+) (*modelInfo, error) {
 	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s not in local store; pulling...\n", ref)
@@ -174,6 +196,11 @@ func ensureModel(ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *st
 		pr.close(err)
 		unlock()
 		if err != nil {
+			return nil, err
+		}
+	}
+	if check != nil {
+		if err := check(ctx, desc); err != nil {
 			return nil, err
 		}
 	}
