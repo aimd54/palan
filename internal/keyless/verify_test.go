@@ -682,3 +682,186 @@ func TestTheSupportedFormatStillVerifies(t *testing.T) {
 		t.Fatalf("the supported format was refused: %v", err)
 	}
 }
+
+// TestNoPatternTheGuardAcceptsReachesAnotherAuthority generates the side
+// of the property that kept going wrong.
+//
+// The test above holds a handful of hand-written patterns against a
+// hand-written corpus of hostile identities. That is the adversary's side
+// generated and the operator's side enumerated, and every defect this
+// guard has had was on the enumerated side: a shape nobody thought to
+// list. So this one enumerates nothing. It builds every short string over
+// the characters that give an identity its structure, keeps the ones the
+// guard accepts, and for each asks the only question that matters: swap
+// the authority out of an identity this pattern matches, and does it still
+// match?
+func TestNoPatternTheGuardAcceptsReachesAnotherAuthority(t *testing.T) {
+	const issuer = "https://issuer.example"
+	// Built from tokens rather than characters, so that the space reaches
+	// the shapes that need length. A URL pattern with a wildcarded scheme
+	// and a named account is nine characters ("*://a/a/*"), which a walk
+	// over single characters would have to go nine deep to produce, and
+	// that space is too large to cross with identities.
+	tokens := []string{"a", "*", ".", "/", "@", "://"}
+
+	var accepted, exercised int
+	var walk func(pattern string, depth int)
+	walk = func(pattern string, depth int) {
+		if pattern != "" && strings.Contains(pattern, "*") {
+			if kind, err := classifySubject(pattern); err == nil {
+				accepted++
+				if checkAuthorityHolds(t, pattern, kind, issuer) {
+					exercised++
+				}
+			}
+		}
+		if depth == 0 {
+			return
+		}
+		for _, tok := range tokens {
+			walk(pattern+tok, depth-1)
+		}
+	}
+	walk("", 7)
+
+	if accepted < 100 {
+		t.Fatalf("only %d patterns were accepted, so this proves little", accepted)
+	}
+	if exercised < 100 {
+		t.Fatalf("only %d accepted patterns matched anything, so the swap was rarely tested", exercised)
+	}
+	t.Logf("%d patterns accepted, %d of them matched an identity and had its authority swapped",
+		accepted, exercised)
+}
+
+// checkAuthorityHolds builds an identity the pattern matches, replaces the
+// authority in it, and requires the pattern to stop matching. It reports
+// whether the pattern matched anything at all, so the caller can tell a
+// guard that is holding from one that accepts only patterns matching
+// nothing.
+func checkAuthorityHolds(t *testing.T, pattern string, kind subjectKind, issuer string) bool {
+	t.Helper()
+	id := Identity{Subject: pattern, Issuer: issuer}
+	// "z" is in no pattern, so filling wildcards with it cannot introduce
+	// a "/", "@" or ":" that changes the identity's structure.
+	mine := strings.ReplaceAll(pattern, "*", "z")
+	if !id.matches(mine, issuer, kind) {
+		return false
+	}
+	if theirs, ok := swapAuthority(mine, kind); ok {
+		if id.matches(theirs, issuer, kind) {
+			t.Errorf("pattern %q matches %q, whose authority it never named", pattern, theirs)
+		}
+	}
+
+	// A URL's authority is at its start, so nothing may come before it.
+	// Swapping the host is not enough to find this: the attack is an
+	// identity that begins somewhere else and carries the pattern's
+	// literal run further along, which is what an unanchored pattern
+	// matches.
+	if kind == subjectURL {
+		for _, before := range []string{"q://evil.test/", "evil.test/", "x"} {
+			if id.matches(before+mine, issuer, subjectURL) {
+				t.Errorf("pattern %q matches %q, which begins at another authority",
+					pattern, before+mine)
+			}
+		}
+	}
+
+	// And a pattern must not reach the other kind of identity at all. The
+	// safety argument for an address rests on an address having no path,
+	// and the argument for a URL rests on its host being anchored;
+	// neither survives being applied to the other.
+	other := subjectMail
+	if kind == subjectMail {
+		other = subjectURL
+	}
+	if id.matches(mine, issuer, other) {
+		t.Errorf("pattern %q reaches %q read as the other kind of identity", pattern, mine)
+	}
+	return true
+}
+
+// swapAuthority replaces the part of an identity its holder cannot choose:
+// the host of a URL, the domain of an address.
+func swapAuthority(identity string, kind subjectKind) (string, bool) {
+	const foreign = "evil.test"
+	switch kind {
+	case subjectURL:
+		i := strings.Index(identity, "://")
+		if i < 0 {
+			return "", false
+		}
+		rest := identity[i+len("://"):]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			return identity[:i+len("://")] + foreign + rest[j:], true
+		}
+		return identity[:i+len("://")] + foreign, true
+	case subjectMail:
+		i := strings.LastIndex(identity, "@")
+		if i < 0 {
+			return "", false
+		}
+		return identity[:i+1] + foreign, true
+	}
+	return "", false
+}
+
+// TestAForgeIsNotAPublisher covers the shape the guide already warned
+// about and the code did not enforce.
+//
+// One OpenID provider serves every account on a public forge, so naming
+// the host names a company rather than a signer. A stranger with a free
+// account, a public repository, a workflow file and a tag obtains an
+// identity that satisfies a host-only pattern.
+func TestAForgeIsNotAPublisher(t *testing.T) {
+	const issuer = "https://token.actions.githubusercontent.com"
+	stranger := "https://github.com/mallory/pwn/.github/workflows/release.yml@refs/tags/v1.0.0"
+
+	for _, pattern := range []string{
+		"https://github.com/*",
+		"https://github.com/*/repo/.github/workflows/release.yml@refs/tags/*",
+		"https://gitlab.com/*/*/.gitlab-ci.yml@*",
+	} {
+		id := Identity{Subject: pattern, Issuer: issuer}
+		if err := id.Validate(); err == nil {
+			t.Errorf("pattern %q, which names no account, was accepted", pattern)
+			if id.matches(stranger, issuer, subjectURL) {
+				t.Errorf("  and it reaches %q", stranger)
+			}
+		}
+	}
+
+	// The control: naming the account is what the guide asks for, and it
+	// must still work.
+	ours := Identity{
+		Subject: "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/*",
+		Issuer:  issuer,
+	}
+	if err := ours.Validate(); err != nil {
+		t.Fatalf("a pattern naming host and account was refused: %v", err)
+	}
+	if ours.matches(stranger, issuer, subjectURL) {
+		t.Error("a pattern naming another account reached the stranger")
+	}
+	mine := "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v2.0.0"
+	if !ours.matches(mine, issuer, subjectURL) {
+		t.Errorf("the pattern does not match its own identity %q", mine)
+	}
+}
+
+// TestADomainEverybodySharesIsNotADomain: "*@*.com" names every address on
+// the internet that ends in .com.
+func TestADomainEverybodySharesIsNotADomain(t *testing.T) {
+	for _, pattern := range []string{"*@*.com", "*@*.a", "*@*.test"} {
+		if err := (Identity{Subject: pattern, Issuer: "https://issuer.example"}).Validate(); err == nil {
+			t.Errorf("pattern %q, which names only a shared suffix, was accepted", pattern)
+		}
+	}
+	// Two labels is the line, so a registrable domain still works.
+	for _, pattern := range []string{"*@*.example.com", "*@example.com"} {
+		if err := (Identity{Subject: pattern, Issuer: "https://issuer.example"}).Validate(); err != nil {
+			t.Errorf("pattern %q was refused: %v", pattern, err)
+		}
+	}
+}

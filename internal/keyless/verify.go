@@ -158,10 +158,18 @@ func Verify(bundleJSON []byte, artifact digest.Digest, root *TrustedRoot, allowe
 	}, nil
 }
 
-// bundleCertificate reads the signing certificate. Both shapes the format
-// allows are read: one certificate on its own, or a chain whose first
-// entry is the signer. Anything else, including a bundle that names a bare
-// public key, has no identity to hold to a policy.
+// bundleCertificate reads the signing certificate.
+//
+// A v0.3 bundle carries the certificate on its own; the chain shape
+// belongs to the earlier versions this package refuses, so that branch is
+// reached only by a bundle declaring v0.3 and carrying a chain anyway. It
+// is read rather than refused because the leaf still has to chain to a
+// pinned authority and match the log entry, so nothing is gained by
+// turning a well-formed signature away over how it packed its
+// certificate.
+//
+// A bundle naming a bare public key has no identity to hold to a policy,
+// and is refused.
 func bundleCertificate(pb *protobundle.Bundle) (*x509.Certificate, error) {
 	material := pb.GetVerificationMaterial()
 	if material == nil {

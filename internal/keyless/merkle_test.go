@@ -149,3 +149,25 @@ func TestAProofHashOfTheWrongSizeIsRefused(t *testing.T) {
 		t.Error("a proof carrying a half-length hash was accepted")
 	}
 }
+
+// TestAnEntryOutsideTheTreeIsRefusedEvenWithAWellSizedProof isolates the
+// range check from the length check.
+//
+// The cases above are all refused because a bogus index makes the required
+// proof length disagree with the proof supplied, so they would pass with
+// the range check deleted entirely. Entry 8 of a tree of 8 needs four
+// hashes by the same arithmetic that a real entry 8 of a tree of 16 would,
+// so handing it four leaves nothing but the range check standing.
+func TestAnEntryOutsideTheTreeIsRefusedEvenWithAWellSizedProof(t *testing.T) {
+	leaves := referenceLeaves(16)
+	// The proof a real entry 8 would carry, which is the right length for
+	// the entry-8-of-8 arithmetic too.
+	wellSized := referencePath(leaves, 8)
+	if len(wellSized) != 4 {
+		t.Fatalf("entry 8 of 16 needs %d hashes, so this test no longer isolates the range check", len(wellSized))
+	}
+
+	if _, err := rootFromInclusionProof(8, 8, leaves[8], wellSized); err == nil {
+		t.Error("entry 8 of a tree of 8 was accepted with a proof of the right length")
+	}
+}
