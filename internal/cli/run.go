@@ -119,6 +119,13 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
+			// The engine is held to the same policy as the weights it is
+			// about to read.
+			runtimeRef, err = checkRuntime(
+				ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehashRequested(v, doRehash))
+			if err != nil {
+				return err
+			}
 			if spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef); err != nil {
 				return err
 			}

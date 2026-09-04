@@ -80,8 +80,16 @@ to no offload will serve from CPU on a GPU host.`,
 			}
 
 			// Resolve the runtime once: every model uses the same binary.
+			// It is held to the same policy as the weights it will read,
+			// and by the same gate the models go through.
+			gate := verifyGate(v, st, doVerify, verifyKey)
+			rehash := rehashRequested(v, doRehash)
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
+			}
+			runtimeRef, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
+			if err != nil {
+				return err
 			}
 			bin, err := palanruntime.Resolve(ctx, st, runtimeRef)
 			if err != nil {
@@ -119,8 +127,8 @@ to no offload will serve from CPU on a GPU host.`,
 					bin:    bin,
 					refs:   refs,
 					logDir: filepath.Join(st.Root(), "state", "logs"),
-					gate:   verifyGate(v, st, doVerify, verifyKey),
-					rehash: rehashRequested(v, doRehash),
+					gate:   gate,
+					rehash: rehash,
 				},
 				MemoryBudget: budget,
 				IdleTimeout:  idle,
