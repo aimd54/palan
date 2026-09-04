@@ -293,9 +293,11 @@ Verifying the artifact is not the same as checking the file that runs. palan
 unpacks a runtime into a plain directory under the store and executes it from
 there, so its presence says nothing about its bytes, and the dynamic loader is
 pointed at that directory. Before the engine is spawned, every file in it is
-held to the digest the manifest records, and a directory that has been altered
-or has gained a file is discarded and unpacked again from the store. This part
-needs no flag: it is the engine, and it is the object that runs.
+held to the digest the manifest records, and a directory that has been altered,
+has gained a file, or has had one replaced by a symlink is discarded and
+unpacked again. The unpack itself checks each blob as it copies, so the
+replacement is trustworthy as well as the tree it replaces. This part needs no
+flag: it is the engine, and it is the object that runs.
 
 `serve` checks the engine once, when it starts, while it re-checks each model
 on every load and after every eviction. A long-running `serve` will not notice
@@ -311,6 +313,16 @@ and `serve` say so on stderr rather than passing over it in silence.
 A signature covers a manifest, and a manifest names its blobs by digest.
 Nothing in that chain opens a weight file, so a blob replaced on disk after
 import leaves a signature that still verifies over content that changed.
+
+Anything palan copies out of the store is checked as it is written, which
+covers unpacking an engine and materialising a model with `pull --output`. A
+file that has left the store is addressed by its name alone, and it is what
+something else goes on to read, so leaving the store is the last moment
+anything can check it. Writing out also stays inside the directory it was
+given: a layer may name a nested file, and the write is resolved beneath the
+output directory, so a link at any point along the way cannot send the model
+somewhere else. What remains is the store's own blobs, read in place by
+whatever loads the model.
 
 `--rehash`, or `verify.rehash: true` in the config, reads those blobs back and
 holds each to the digest the manifest records:
