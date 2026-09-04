@@ -363,8 +363,6 @@ func TestTheAuthorityGuardIsConsulted(t *testing.T) {
 // patterns operators legitimately need must still load, or the guard just
 // pushes them towards turning verification off.
 func TestAPatternPinningADomainIsAccepted(t *testing.T) {
-	bundle, root := loadFixtures(t)
-
 	for _, subject := range []string{
 		"*@soyland.com",
 		"cody@soyland.com",
@@ -398,8 +396,6 @@ func TestAPatternPinningADomainIsAccepted(t *testing.T) {
 	if err != nil {
 		t.Errorf("a workflow pattern was refused: %v", err)
 	}
-	_ = bundle
-	_ = root
 }
 
 // TestNoAllowedIdentityIsRefused: a bundle that verifies says an identity
@@ -754,6 +750,17 @@ func checkAuthorityHolds(t *testing.T, pattern string, kind subjectKind, issuer 
 		}
 	}
 
+	// The account under a host is as much the authority as the host is,
+	// since one provider serves every account on a shared one. Swapping
+	// the host alone does not reach this: a pattern that names the host
+	// and wildcards the account still refuses a swapped host, and still
+	// admits every stranger under the original.
+	if kind == subjectURL {
+		if theirs, ok := swapAccount(mine); ok && id.matches(theirs, issuer, subjectURL) {
+			t.Errorf("pattern %q matches %q, whose account it never named", pattern, theirs)
+		}
+	}
+
 	// A URL's authority is at its start, so nothing may come before it.
 	// Swapping the host is not enough to find this: the attack is an
 	// identity that begins somewhere else and carries the pattern's
@@ -780,6 +787,26 @@ func checkAuthorityHolds(t *testing.T, pattern string, kind subjectKind, issuer 
 		t.Errorf("pattern %q reaches %q read as the other kind of identity", pattern, mine)
 	}
 	return true
+}
+
+// swapAccount replaces the first path segment of a URL identity, which is
+// the account a workload belongs to on every forge that has them.
+func swapAccount(identity string) (string, bool) {
+	i := strings.Index(identity, "://")
+	if i < 0 {
+		return "", false
+	}
+	rest := identity[i+len("://"):]
+	j := strings.Index(rest, "/")
+	if j < 0 {
+		return "", false
+	}
+	host, path := rest[:j], rest[j+1:]
+	tail := ""
+	if k := strings.Index(path, "/"); k >= 0 {
+		tail = path[k:]
+	}
+	return identity[:i+len("://")] + host + "/mallory" + tail, true
 }
 
 // swapAuthority replaces the part of an identity its holder cannot choose:

@@ -163,9 +163,12 @@ though it carries no tag.
 
 A keyless signature names its signer instead of naming a key. Where a policy
 rule lists identities, verify reads the signature bundle that travels with
-the model, holds its certificate against the trusted root the rule pins, and
-requires the transparency log entry to carry an inclusion proof that the same
-root's log key has signed. All of that material travels with the artifact, so
+the model and holds it against the trusted root the rule pins. The
+transparency log entry must carry an inclusion proof reaching a log root
+that root's key has signed, and a timestamp that same key signed, since a
+keyless certificate lives minutes and is checked against the moment the log
+recorded the signature rather than the present. An entry carrying no signed
+timestamp is refused. All of that material travels with the artifact, so
 this too needs no network. The signer is reported, since it is the one thing
 the result establishes that the configuration did not already state.
 
