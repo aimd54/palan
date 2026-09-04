@@ -1,0 +1,84 @@
+# Copyright The palan Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The gate pattern under KServe, for a cluster already running it. The
+# predictor carries the same init container as gate-init.yaml: palan verifies
+# and writes into an emptyDir, and the serving container reads from there,
+# rather than KServe's own storage initializer fetching the model.
+#
+# This costs KServe's storageUri handling and buys the trust policy: a model
+# no rule admits is refused before any byte reaches the volume, and the
+# predictor never starts.
+#
+# Needs raw deployment mode and the palan-trust-policy ConfigMap and
+# palan-verify-key Secret from gate-init.yaml. Like kserve.yaml, this has not
+# been run against a cluster; see the README.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen3-8b-gated
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    initContainers:
+      - name: verify-and-pull
+        image: ghcr.io/aimd54/palan:latest
+        args:
+          - pull
+          - registry.internal/llm/qwen3:8b-instruct
+          - --output=/models
+          - --config=/etc/palan/config.yaml
+        env:
+          - name: PALAN_HOME
+            value: /work
+        volumeMounts:
+          - name: models
+            mountPath: /models
+          - name: work
+            mountPath: /work
+          - name: trust-policy
+            mountPath: /etc/palan/config.yaml
+            subPath: config.yaml
+            readOnly: true
+          - name: verify-key
+            mountPath: /etc/palan/keys
+            readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { memory: 512Mi }
+    containers:
+      - name: kserve-container
+        image: vllm/vllm-openai:v0.8.5
+        args:
+          - --model=/models
+          - --served-model-name=qwen3-8b
+          - --host=0.0.0.0
+          - --port=8080
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        volumeMounts:
+          - name: models
+            mountPath: /models
+            readOnly: true
+        resources:
+          requests: { cpu: "4", memory: 24Gi, nvidia.com/gpu: "1" }
+          limits: { memory: 32Gi, nvidia.com/gpu: "1" }
+    volumes:
+      - name: models
+        emptyDir:
+          sizeLimit: 40Gi
+      - name: work
+        emptyDir: {}
+      - name: trust-policy
+        configMap:
+          name: palan-trust-policy
+      - name: verify-key
+        secret:
+          secretName: palan-verify-key

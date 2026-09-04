@@ -37,6 +37,7 @@ palan serve [REF...] [flags]
       --idle-timeout duration   unload models idle longer than this (default 10m0s)
       --keep-loaded strings     refs never unloaded or evicted
       --memory-budget string    memory budget for loaded models, e.g. 9GiB (default: auto-detect)
+      --rehash                  read each model's blobs back at load and hold them to the digests its manifest records
       --runtime string          runtime artifact reference (default: runtime.ref config, then PATH)
       --verify                  require a valid signature before loading any model
       --verify-key string       public key for --verify (default: verify.key from the config)

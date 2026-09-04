@@ -2,6 +2,15 @@
 
 Pull a runtime artifact and materialize its executable
 
+### Synopsis
+
+Pull fetches a runtime artifact and unpacks its executable ready to run.
+
+A runtime is an engine that will read the weights, so it is signed and
+verified the way a model is. With --verify, or with verify.required set in
+the config, the signature is checked on the registry before anything is
+downloaded, and the trust policy decides who may sign it.
+
 ```
 palan runtime pull REF [flags]
 ```
@@ -11,12 +20,17 @@ palan runtime pull REF [flags]
 ```
   # Fetch a llama-server build and unpack it ready to run
   palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12
+
+  # Refuse the build unless it carries a valid signature
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12 --verify
 ```
 
 ### Options
 
 ```
-  -h, --help   help for pull
+  -h, --help                help for pull
+      --verify              require a valid signature on the runtime before downloading it
+      --verify-key string   public key for --verify (default: verify.key from the config)
 ```
 
 ### Options inherited from parent commands

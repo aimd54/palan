@@ -30,6 +30,7 @@ palan run REF [flags]
   -h, --help                help for run
       --ngl int             GPU layer count override
   -p, --prompt string       answer this prompt once and exit
+      --rehash              read the model's blobs back at load and hold each to the digest the manifest records
       --runtime string      runtime artifact reference (default: runtime.ref config, then PATH)
       --verify              require a valid signature before fetching or running the model
       --verify-key string   public key for --verify (default: verify.key from the config)

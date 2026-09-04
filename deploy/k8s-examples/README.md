@@ -7,15 +7,50 @@ for the overview. Pick the first one that fits your cluster:
 | Pattern | Works on | Profile served | Pros | Cons |
 |---|---|---|---|---|
 | [Init-container puller](init-puller.yaml) | any Kubernetes | artifact | works everywhere today; palan handles auth/resume/verification | model copied into an emptyDir per pod |
+| [Gated init container](gate-init.yaml) | any Kubernetes | artifact | the trust policy decides whether the pod starts at all | same copy per pod; needs a key and a policy in the cluster |
 | [Image volume](image-volume.yaml) | K8s ≥ 1.36 (GA), containerd ≥ 2.1 | car (`...-car` tag) | kubelet-managed caching and dedup per node; no init container; digest-pinnable in GitOps | needs a recent runtime; car profile only |
 | [KServe modelcar](kserve.yaml) | KServe ≥ 0.12 | car | full serving platform (scaling, canary) | brings all of KServe; **not yet exercised**, see below |
 
 ## Rules of thumb
 
 - Starting out or on an older cluster → init-container puller.
+- Anything whose weights must be signed by a named identity → gated init
+  container, which is the same pattern with the policy switched on.
 - K3s/containerd new enough and models change rarely → image volumes;
   pin `@sha256:` digests in your GitOps repo.
 - Already running KServe for other models → modelcars, with the caveat below.
+
+## Refusing before the serving container starts
+
+[`gate-init.yaml`](gate-init.yaml) is the init-container puller with a trust
+policy mounted, and [`gate-kserve.yaml`](gate-kserve.yaml) puts the same init
+container inside a KServe predictor. The init container verifies before it
+writes, so a model no rule admits never reaches the volume the serving
+container mounts, and Kubernetes never moves on to that container.
+
+The property this rests on is that a refusal writes nothing and comes back.
+Both halves are held to account by `TestGateRefusalLeavesTheSharedVolumeEmpty`
+in this repo's e2e suite, which runs the real binary against a real registry
+and checks the output directory rather than the exit status: a pull that
+refused after writing a partial file and one that refused before writing
+anything both exit non-zero, and only the directory says which happened. The
+same test verifies under a policy that admits the signature, because an empty
+directory proves nothing when the command never works either way.
+
+That test holds stdin open and never writes to it. A command that decides to
+ask for something blocks forever, and a pod that hangs with nothing on its
+logs is a worse failure than one that exits: it looks like a slow pull.
+Against a local registry the refusal returns in tens of milliseconds.
+
+What an operator sees: the pod sits in `Init:Error` and the init container's
+logs name the policy. The serving container has no status, because it was
+never started.
+
+Two things the manifests need from the cluster, and neither is created here:
+a `palan-verify-key` Secret holding the public key, and the
+`palan-trust-policy` ConfigMap that `gate-init.yaml` defines. Point the policy
+at whichever identities you actually publish under; the pattern in the file
+matches nothing real.
 
 ## What the KServe manifest has and has not been through
 
@@ -23,12 +58,17 @@ The init-container puller and the image volume have both been run end to end
 against real clusters, on two containerd builds, including with a GPU attached
 to the serving container. Those rows describe measured behaviour.
 
-`kserve.yaml` has not. It uses the same car-profile artifact the image-volume
-path uses, and KServe's modelcar support reads an `oci://` reference the same
-way, so there is no known reason it would fail. That is a different statement
-from having watched it work, and no cluster here has run KServe. Treat it as a
-starting point rather than a tested recipe, and check the mount holds the
-weights rather than trusting that the pod reached `Running`.
+`kserve.yaml` and `gate-kserve.yaml` have not. `kserve.yaml` uses the same
+car-profile artifact the image-volume path uses, and KServe's modelcar support
+reads an `oci://` reference the same way, so there is no known reason it would
+fail. That is a different statement from having watched it work, and no cluster
+here has run KServe. Treat both as a starting point rather than a tested recipe,
+and check the mount holds the weights rather than trusting that the pod reached
+`Running`.
+
+`gate-init.yaml` has not been applied to a cluster either. What has been
+measured is the behaviour it depends on, in the e2e suite described above:
+the refusal itself, not the manifest around it.
 
 ## Why image volumes need the car profile
 
