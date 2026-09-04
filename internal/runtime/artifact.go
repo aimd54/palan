@@ -125,6 +125,12 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 	if err := cfg.safePathFields(); err != nil {
 		return ocispec.Descriptor{}, err
 	}
+	for i := 1; i < len(files); i++ {
+		if files[i].Name == files[i-1].Name {
+			return ocispec.Descriptor{}, fmt.Errorf(
+				"two files are both named %q, so one would overwrite the other", files[i].Name)
+		}
+	}
 
 	layers := make([]ocispec.Descriptor, 0, len(files))
 	for _, f := range files {
@@ -283,11 +289,21 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 // stack trace instead of a refusal, and every host that already unpacked
 // that build would crash on its next load.
 func validateLayers(manifest ocispec.Manifest) error {
+	seen := make(map[string]bool, len(manifest.Layers))
 	for _, l := range manifest.Layers {
 		name := l.Annotations[ocispec.AnnotationTitle]
 		if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 			return fmt.Errorf("layer %s has invalid file name %q", l.Digest, name)
 		}
+		// Two layers claiming one name unpack to one file, so the tree
+		// holds the bytes of whichever was written last while the check
+		// that follows compares against whichever the map kept. Both
+		// happen to be the last one today, which is agreement by accident
+		// rather than a property.
+		if seen[name] {
+			return fmt.Errorf("two layers both claim the file name %q, so one would overwrite the other", name)
+		}
+		seen[name] = true
 		// Validate covers both halves that matter here: a malformed digest
 		// and one naming an algorithm this build does not link. The second
 		// is the dangerous one, because building a verifier for it panics.
