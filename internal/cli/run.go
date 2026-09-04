@@ -90,10 +90,16 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			// artifact that verified, before anything reads it. The gate
 			// may have answered from the registry, and a fetch reuses
 			// whatever blobs are already here.
+			//
+			// Asked for on its own, re-reading the blobs runs with no
+			// signature check beside it. Tying it to the gate would make
+			// --rehash exit 0 having read nothing on a host that had not
+			// also configured verification.
+			rehash := rehashRequested(v, doRehash)
 			var check func(context.Context, ocispec.Descriptor) error
-			if gate != nil {
+			if gate != nil || rehash {
 				check = func(ctx context.Context, local ocispec.Descriptor) error {
-					return checkLoadedContent(ctx, st, ref.String(), local, verified, rehashRequested(v, doRehash))
+					return checkLoadedContent(ctx, st, ref.String(), local, verified, rehash)
 				}
 			}
 			model, err := ensureModel(ctx, cmd, v, st, ref.String(), check)
@@ -121,8 +127,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			}
 			// The engine is held to the same policy as the weights it is
 			// about to read.
-			runtimeRef, err = checkRuntime(
-				ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehashRequested(v, doRehash))
+			runtimeRef, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
 			if err != nil {
 				return err
 			}

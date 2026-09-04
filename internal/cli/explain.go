@@ -73,13 +73,7 @@ func explain(ref, dgst string, src verifySource, by verifiedBy, att attestationR
 		},
 		signatureLink(by),
 	)
-	if by.admitted != "" {
-		e.Links = append(e.Links, link{
-			Name:   linkPolicy,
-			Proven: true,
-			Detail: "this signer is allowed to sign it by " + by.admitted,
-		})
-	}
+	e.Links = append(e.Links, policyLink(by))
 	if by.keyless != nil {
 		e.Links = append(e.Links, logLink(by))
 	}
@@ -102,6 +96,30 @@ func signatureLink(by verifiedBy) link {
 		Name:   linkSignature,
 		Proven: true,
 		Detail: "a signature over this digest verifies under the configured key",
+	}
+}
+
+// policyLink says what permitted this signer, which is not the same
+// question as who signed.
+//
+// Printed unproven rather than omitted when nothing recorded an answer.
+// Every path that accepts a signature fills this in today, so the unproven
+// form is unreachable; it exists because a path added later that forgets to
+// would otherwise drop the link, and a chain that lost one still reads as
+// complete. That is the failure this whole file is written to prevent, and
+// it should not be possible here of all places.
+func policyLink(by verifiedBy) link {
+	if by.admitted == "" {
+		return link{
+			Name:   linkPolicy,
+			Proven: false,
+			Detail: "nothing recorded what allowed this signer to sign it",
+		}
+	}
+	return link{
+		Name:   linkPolicy,
+		Proven: true,
+		Detail: "this signer is allowed to sign it by " + by.admitted,
 	}
 }
 

@@ -334,3 +334,34 @@ func TestExplainNamesWhatDatesAKeylessSignature(t *testing.T) {
 		t.Errorf("the provenance link does not say what was left unchecked: %+v", links[linkSources])
 	}
 }
+
+// TestVerifyReadsTheBlobsBackWhenTheConfigAsksRatherThanTheFlag: the guide
+// offers verify.rehash and the flag as the same instruction, so a host that
+// sets the config and audits with verify --explain must not be told the
+// content link is unproven.
+func TestVerifyReadsTheBlobsBackWhenTheConfigAsksRatherThanTheFlag(t *testing.T) {
+	reg := registrytest.New(t)
+	home := t.TempDir()
+	ref, pubKey, _ := signedUpstreamModel(t, reg, []byte("weights"))
+	runPullInto(t, home, ref)
+
+	t.Setenv("PALAN_HOME", home)
+	v := viper.New()
+	v.Set(keyRegistryPlainHTTP, true)
+	v.Set(keyVerifyRehash, true)
+	cmd := newVerifyCmd(v)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{ref, "--key", pubKey, "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("verify under verify.rehash: %v", err)
+	}
+	links := linkVerdicts(t, out.String())
+	if !links[linkContent].Proven {
+		t.Fatalf("verify.rehash in the config left the content link unproven: %+v", links[linkContent])
+	}
+	if !strings.Contains(links[linkContent].Detail, "3 blobs") {
+		t.Errorf("the content link does not say what was read: %+v", links[linkContent])
+	}
+}
