@@ -86,7 +86,14 @@ func (e Events) attestation(stored bool, problem error) {
 // the fully-qualified reference. Large leaf blobs download concurrently with
 // cross-restart resume; manifests, config, and tagging go through oras.Copy,
 // which skips everything already present.
-func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Reference, ev Events) (ocispec.Descriptor, error) {
+// expected, when set, is the artifact the caller has already decided to
+// accept. A tag is mutable and a registry answers each request on its own,
+// so resolving it here a second time can return something other than what
+// the caller checked. Naming the digest turns that into a refusal instead
+// of a substitution.
+func (c *Client) Pull(
+	ctx context.Context, st *store.Store, ref registry.Reference, expected digest.Digest, ev Events,
+) (ocispec.Descriptor, error) {
 	repo, err := c.Repository(ref)
 	if err != nil {
 		return ocispec.Descriptor{}, err
@@ -95,6 +102,11 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 	root, err := repo.Resolve(ctx, ref.Reference)
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("resolving %s: %w", ref, err)
+	}
+	if expected != "" && root.Digest != expected {
+		return ocispec.Descriptor{}, fmt.Errorf(
+			"%s resolved to %s, but %s is the artifact that was checked; the tag moved or the registry answered differently",
+			ref, root.Digest, expected)
 	}
 
 	leaves, err := collectLeafBlobs(ctx, repo, root)
@@ -129,7 +141,10 @@ func (c *Client) Pull(ctx context.Context, st *store.Store, ref registry.Referen
 	copyOpts := oras.CopyOptions{
 		CopyGraphOptions: oras.CopyGraphOptions{Concurrency: c.concurrency()},
 	}
-	desc, err := oras.Copy(ctx, repo, ref.Reference, st.OCI(), ref.String(), copyOpts)
+	// Copied by digest rather than by tag: the reference has been resolved
+	// once above, and asking the registry to resolve it again is another
+	// chance for the answer to differ.
+	desc, err := oras.Copy(ctx, repo, root.Digest.String(), st.OCI(), ref.String(), copyOpts)
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("copying %s into local store: %w", ref, err)
 	}

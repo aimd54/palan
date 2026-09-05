@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"text/tabwriter"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -58,6 +59,9 @@ downloaded, and the trust policy decides who may sign it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// The engine a signature was checked against, empty when no
+			// check was asked for.
+			var verified digest.Digest
 			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
 			if err != nil {
 				return err
@@ -91,10 +95,14 @@ downloaded, and the trust policy decides who may sign it.`,
 				if _, rerr = verifyDigest(ctx, v, verifyKey, remoteSource(repo, desc, "registry"), ref); rerr != nil {
 					return rerr
 				}
+				// Carried into the fetch, so the engine that arrives is the
+				// engine that was checked rather than whatever the tag
+				// answers with on the second ask.
+				verified = desc.Digest
 				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)
 			}
 			pr := newProgress(v.GetBool("quiet"))
-			_, err = client.Pull(ctx, st, ref, pr.events())
+			pulled, err := client.Pull(ctx, st, ref, verified, pr.events())
 			pr.close(err)
 			if err != nil {
 				return err
@@ -103,7 +111,7 @@ downloaded, and the trust policy decides who may sign it.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Runtime ready: %s\n", entry)
+			fmt.Fprintf(cmd.OutOrStdout(), "Runtime ready: %s\nDigest: %s\n", entry, pulled.Digest)
 			fmt.Fprintf(cmd.OutOrStdout(), "Set runtime.ref: %q in the config to use it by default.\n", ref.String())
 			return nil
 		},

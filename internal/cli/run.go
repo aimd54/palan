@@ -204,7 +204,7 @@ func ensureModel(
 			return nil, lerr
 		}
 		pr := newProgress(v.GetBool("quiet"))
-		desc, err = client.Pull(ctx, st, parsed, pr.events())
+		desc, err = client.Pull(ctx, st, parsed, "", pr.events())
 		pr.close(err)
 		unlock()
 		if err != nil {

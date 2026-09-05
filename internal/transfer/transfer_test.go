@@ -132,7 +132,7 @@ func TestPullRoundTrip(t *testing.T) {
 	c := newTestClient(t)
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 
-	got, err := c.Pull(context.Background(), st, ref, Events{})
+	got, err := c.Pull(context.Background(), st, ref, "", Events{})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestPullRoundTrip(t *testing.T) {
 	// Second pull: weights must not be re-downloaded.
 	before := reg.CountRequests("GET", wDesc.Digest.String())
 	var skips atomic.Int32
-	_, err = c.Pull(context.Background(), st, ref, Events{
+	_, err = c.Pull(context.Background(), st, ref, "", Events{
 		OnBlobSkip: func(ocispec.Descriptor) { skips.Add(1) },
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func TestPullResumesAfterConnectionDrop(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 
 	var resumedFrom atomic.Int64
-	_, err := c.Pull(context.Background(), st, ref, Events{
+	_, err := c.Pull(context.Background(), st, ref, "", Events{
 		OnBlobStart: func(d ocispec.Descriptor, offset int64) func(int64) {
 			if offset > 0 {
 				resumedFrom.Store(offset)
@@ -228,7 +228,7 @@ func TestPullResumesAcrossProcessRestart(t *testing.T) {
 	// First pull cancels itself after ~512 KiB.
 	ctx, cancel := context.WithCancel(context.Background())
 	var seen atomic.Int64
-	_, err := c.Pull(ctx, st, ref, Events{
+	_, err := c.Pull(ctx, st, ref, "", Events{
 		OnBlobStart: func(d ocispec.Descriptor, offset int64) func(int64) {
 			return func(n int64) {
 				if seen.Add(n) > 512*1024 {
@@ -248,7 +248,7 @@ func TestPullResumesAcrossProcessRestart(t *testing.T) {
 	}
 
 	// Fresh pull (simulating a new process) must resume, not restart.
-	if _, err := c.Pull(context.Background(), st, ref, Events{}); err != nil {
+	if _, err := c.Pull(context.Background(), st, ref, "", Events{}); err != nil {
 		t.Fatalf("resumed pull: %v", err)
 	}
 	if len(reg.RangeRequests(wDesc.Digest)) == 0 {
@@ -282,7 +282,7 @@ func TestPullRestartsWhenRangeIgnored(t *testing.T) {
 
 	c := newTestClient(t)
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
-	if _, err := c.Pull(context.Background(), st, ref, Events{}); err != nil {
+	if _, err := c.Pull(context.Background(), st, ref, "", Events{}); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
 	p, _ := st.BlobPath(wDesc.Digest)
@@ -304,7 +304,7 @@ func TestPullRejectsCorruptBlob(t *testing.T) {
 	c := newTestClient(t)
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 
-	_, err := c.Pull(context.Background(), st, ref, Events{})
+	_, err := c.Pull(context.Background(), st, ref, "", Events{})
 	if err == nil {
 		t.Fatal("corrupt blob must fail the pull")
 	}

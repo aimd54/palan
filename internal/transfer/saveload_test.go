@@ -236,7 +236,7 @@ func TestPullCarriesTheAttestationBesideTheSignature(t *testing.T) {
 	}
 
 	st := openTestStore(t)
-	if _, err := c.Pull(ctx, st, ref, Events{}); err != nil {
+	if _, err := c.Pull(ctx, st, ref, "", Events{}); err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
 	if !storeHas(t, st, signing.SigRef(ref, mDesc.Digest)) {
@@ -291,7 +291,7 @@ func TestPullStoresTheSignature(t *testing.T) {
 	st := openTestStore(t)
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	var reported bool
-	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
+	if _, err := newTestClient(t).Pull(ctx, st, ref, "", Events{
 		OnSignature: func(stored bool, _ error) { reported = stored },
 	}); err != nil {
 		t.Fatalf("pull: %v", err)
@@ -312,7 +312,7 @@ func TestPullWithoutSignatureIsNotAnError(t *testing.T) {
 	st := openTestStore(t)
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	reported := true
-	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
+	if _, err := newTestClient(t).Pull(ctx, st, ref, "", Events{
 		OnSignature: func(stored bool, _ error) { reported = stored },
 	}); err != nil {
 		t.Fatalf("pulling an unsigned model must succeed: %v", err)
@@ -447,7 +447,7 @@ func TestPullSurvivesRegistryThatHidesMissingTags(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	var stored bool
 	var problem error
-	desc, err := newTestClient(t).Pull(ctx, st, ref, Events{
+	desc, err := newTestClient(t).Pull(ctx, st, ref, "", Events{
 		OnSignature: func(s bool, p error) { stored, problem = s, p },
 	})
 	if err != nil {
@@ -641,7 +641,7 @@ func TestPullReportsARefusedAttestationLookup(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	var stored bool
 	var problem error
-	desc, err := newTestClient(t).Pull(ctx, st, ref, Events{
+	desc, err := newTestClient(t).Pull(ctx, st, ref, "", Events{
 		OnAttestation: func(s bool, p error) { stored, problem = s, p },
 	})
 	if err != nil {
@@ -675,7 +675,7 @@ func TestPullReportsAStoredAttestation(t *testing.T) {
 	ref := mustParse(t, reg.Host()+"/llm/tiny:q4")
 	var stored bool
 	var problem error
-	if _, err := newTestClient(t).Pull(ctx, st, ref, Events{
+	if _, err := newTestClient(t).Pull(ctx, st, ref, "", Events{
 		OnAttestation: func(s bool, p error) { stored, problem = s, p },
 	}); err != nil {
 		t.Fatalf("pull: %v", err)
