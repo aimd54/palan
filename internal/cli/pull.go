@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -45,6 +46,9 @@ any llama-server image.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// The artifact a signature was checked against, empty when no
+			// check was asked for.
+			var verified digest.Digest
 			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
 			if err != nil {
 				return err
@@ -84,11 +88,16 @@ any llama-server image.`,
 				if _, err := verifyDigest(ctx, v, verifyKey, src, ref); err != nil {
 					return err
 				}
+				// Carried into the fetch. Without it the tag is resolved
+				// again below, and a registry that answers differently the
+				// second time has one artifact checked and another
+				// downloaded, materialized and served.
+				verified = desc.Digest
 				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)
 			}
 
 			pr := newProgress(v.GetBool("quiet"))
-			desc, err := client.Pull(ctx, st, ref, pr.events())
+			desc, err := client.Pull(ctx, st, ref, verified, pr.events())
 			pr.close(err)
 			if err != nil {
 				return err
@@ -145,6 +154,7 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	defer func() { _ = root.Close() }()
 
 	var written []string
+	var madeDirs []string
 	seen := make(map[string]bool, len(manifest.Layers))
 	// A model can be many files, and a failure on the fourth leaves three
 	// already on disk. The directory is what something else reads, so a
@@ -157,6 +167,11 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		}
 		for _, p := range written {
 			_ = root.Remove(p)
+		}
+		// Deepest first, so a nested chain comes apart. Directories the
+		// refusal did not create are not in this list and stay.
+		for i := len(madeDirs) - 1; i >= 0; i-- {
+			_ = root.Remove(madeDirs[i])
 		}
 	}()
 	for _, l := range manifest.Layers {
@@ -180,11 +195,22 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("layer file name %q escapes the output directory", name)
 		}
-		if seen[clean] {
-			return nil, fmt.Errorf("two layers both claim the file name %q, so one would overwrite the other", clean)
+		// Compared case-insensitively as well as exactly. macOS is a
+		// release target and its default filesystem folds case, so two
+		// layers named "Model.gguf" and "model.gguf" are one file there:
+		// the second write opens the first one's inode and the earlier
+		// layer's bytes are gone with nothing reported.
+		fold := strings.ToLower(clean)
+		if seen[fold] {
+			return nil, fmt.Errorf("two layers claim the file name %q, so one would overwrite the other", clean)
 		}
-		seen[clean] = true
+		seen[fold] = true
 		if parent := filepath.Dir(clean); parent != "." {
+			// Recorded before creation, and only the components that were
+			// missing, so a refusal leaves the directory as it found it.
+			// The gate pattern is sold on a refusal writing nothing, and a
+			// directory left behind is something.
+			madeDirs = append(madeDirs, missingDirs(root, parent)...)
 			if err := root.MkdirAll(parent, 0o750); err != nil {
 				return nil, err
 			}
@@ -215,6 +241,23 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	return full, nil
 }
 
+// missingDirs reports the components of rel that do not yet exist beneath
+// root, outermost first, so a caller can take back exactly what it created.
+func missingDirs(root *os.Root, rel string) []string {
+	var missing []string
+	cur := ""
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		if _, err := root.Lstat(cur); err != nil {
+			missing = append(missing, cur)
+		}
+	}
+	return missing
+}
+
 // copyFile writes one blob out of the store to name beneath root, holding
 // the bytes to the digest desc records as they go past.
 func copyFile(src string, root *os.Root, name string, desc ocispec.Descriptor, mode os.FileMode) error {
@@ -224,10 +267,15 @@ func copyFile(src string, root *os.Root, name string, desc ocispec.Descriptor, m
 	}
 	defer func() { _ = in.Close() }()
 	// The root refuses a name resolving outside the output directory,
-	// including through a link at any component. O_NOFOLLOW on top of it
-	// refuses one resolving inside it too, so a name prepared in the
-	// directory cannot quietly redirect the write to another file there.
-	out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|openNoFollow, mode)
+	// including through a link at any component, and it resolves the path
+	// itself, so a caller's O_NOFOLLOW is subsumed and does nothing. A link
+	// that stays inside the directory is therefore followed, and the write
+	// lands on whatever it names. Refused here instead: the file this
+	// writes has to be the file the layer named.
+	if fi, lerr := root.Lstat(name); lerr == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is a %s in the output directory, not a regular file", name, fi.Mode().Type())
+	}
+	out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}

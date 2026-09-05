@@ -366,3 +366,111 @@ func TestMaterializeRefusesAWeightLayerWithNoFileName(t *testing.T) {
 		t.Fatalf("the refusal left %d file(s) behind, so a serving container would find a partial model", len(entries))
 	}
 }
+
+// TestMaterializeRefusesALinkThatStaysInsideTheOutputDirectory: the root
+// refuses a name resolving outside the directory, and resolves the path
+// itself, so a caller's O_NOFOLLOW does nothing. A link that stays inside
+// is followed, and the write lands on whatever it names.
+func TestMaterializeRefusesALinkThatStaysInsideTheOutputDirectory(t *testing.T) {
+	reg := registrytest.New(t)
+	ref, pubKey, _ := signedUpstreamModel(t, reg, []byte("weights that belong in model.gguf"))
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const other = "somewhere-else.bin"
+	target := filepath.Join(dir, other)
+	if err := os.WriteFile(target, []byte("a file already in the directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(dir, "model.gguf")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("the write followed a link inside the output directory")
+	}
+	body, err := os.ReadFile(target) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "a file already in the directory" {
+		t.Fatalf("the write landed on the file the link named, which now holds %q", body)
+	}
+}
+
+// TestMaterializeTakesBackDirectoriesItCreated: the gate pattern is sold on
+// a refusal writing nothing into the volume a serving container mounts, and
+// a directory left behind is something.
+func TestMaterializeTakesBackDirectoriesItCreated(t *testing.T) {
+	reg := registrytest.New(t)
+	body := []byte("weights under a nested name")
+	ref, pubKey := seedNestedModel(t, reg, "sub/deeper/model.gguf", body)
+
+	home := t.TempDir()
+	runPullInto(t, home, ref)
+	st, err := store.Open(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := st.BlobPath(digest.FromBytes(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("weights an attacker put there!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if _, err := runPullOutput(t, home, ref, pubKey, dir); err == nil {
+		t.Fatal("a substituted blob was materialized")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the refusal left %s behind in the output directory", entries[0].Name())
+	}
+}
+
+// TestMaterializeKeepsADirectoryItDidNotCreate is the other half: the
+// rollback must take back what this run made and nothing else.
+func TestMaterializeKeepsADirectoryItDidNotCreate(t *testing.T) {
+	reg := registrytest.New(t)
+	body := []byte("weights under a nested name")
+	ref, pubKey := seedNestedModel(t, reg, "sub/model.gguf", body)
+
+	home := t.TempDir()
+	runPullInto(t, home, ref)
+	st, err := store.Open(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := st.BlobPath(digest.FromBytes(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("weights an attacker put there!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	// The operator's own directory, present before the pull ran.
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPullOutput(t, home, ref, pubKey, dir); err == nil {
+		t.Fatal("a substituted blob was materialized")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub")); err != nil {
+		t.Fatalf("the rollback removed a directory it did not create: %v", err)
+	}
+}
