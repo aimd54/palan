@@ -35,6 +35,7 @@ const (
 	keyVerifyKey      = "verify.key"
 	keyVerifyPolicy   = "verify.policy"
 	keyVerifySources  = "verify.sources"
+	keyVerifyRehash   = "verify.rehash"
 )
 
 func newSignCmd(v *viper.Viper) *cobra.Command {
@@ -143,12 +144,23 @@ says so rather than leaving the absence unremarked.`,
 }
 
 func newVerifyCmd(v *viper.Viper) *cobra.Command {
-	var keyPath string
+	var (
+		keyPath   string
+		doExplain bool
+		asJSON    bool
+		doRehash  bool
+	)
 	cmd := &cobra.Command{
 		Use:   "verify REF --key FILE",
 		Short: "Verify a model's signature against a public key",
 		Example: `  # Verify against a registry, or from the local store when it holds the signature
-  palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub`,
+  palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
+
+  # Every link in the chain, including the ones this host cannot prove
+  palan verify registry.internal/llm/qwen3:8b-q4 --explain
+
+  # Read the weight blobs back and hold them to the digests the manifest records
+  palan verify registry.internal/llm/qwen3:8b-q4 --explain --rehash`,
 		Long: `Verify checks a model's signature against a public key, or against the
 keyless identities a trust policy names.
 
@@ -171,6 +183,18 @@ recorded the signature rather than the present. An entry carrying no signed
 timestamp is refused. All of that material travels with the artifact, so
 this too needs no network. The signer is reported, since it is the one thing
 the result establishes that the configuration did not already state.
+
+With --explain, the output is the whole chain rather than a verdict: which
+reference resolved to which digest, who signed it, what allowed them to,
+where the files came from, and whether the bytes on this host were read
+back. Every step says whether this host proved it. The steps it could not
+prove are printed too, since a chain shown with its gaps removed reads as a
+chain with no gaps. --json prints the same chain for a program.
+
+Signature verification reads a manifest, and a manifest names its blobs by
+digest, so it says nothing about a weight file replaced on disk afterwards.
+--rehash reads those blobs back and holds each to the digest the manifest
+records. It is off by default because it re-reads whole weight files.
 
 Where sign also wrote a statement of the model's sources, verify checks it
 against the same key and against the model's own layers, and names what the
@@ -208,6 +232,21 @@ provenance reported as unchecked rather than checked.`,
 			if err != nil {
 				return err
 			}
+			rh := rehashOutcome{}
+			if rehashRequested(v, doRehash) {
+				rh.report, err = rehashStore(ctx, st, ref, src.subject)
+				if err != nil {
+					return err
+				}
+				rh.ran = true
+			}
+			if doExplain || asJSON {
+				e := explain(ref.String(), src.subject.Digest.String(), src, verifier, report, rh)
+				if asJSON {
+					return renderExplanationJSON(cmd.OutOrStdout(), e)
+				}
+				return renderExplanation(cmd.OutOrStdout(), e)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Verified %s@%s\n  source: %s\n", ref, src.subject.Digest, src.name)
 			// Who signed is only worth a line when the answer was not
 			// already given on the command line or in the config: a
@@ -219,6 +258,10 @@ provenance reported as unchecked rather than checked.`,
 			for _, p := range report.provenance {
 				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
 			}
+			if rh.ran {
+				fmt.Fprintf(cmd.OutOrStdout(), "  content: %d blobs re-read (%s), every digest matches\n",
+					rh.report.Blobs, humanBytes(rh.report.Bytes))
+			}
 			// On the same stream as the result it qualifies: a reader who
 			// sees "Verified" and not this line would take the artifact's
 			// provenance to have been checked.
@@ -229,7 +272,42 @@ provenance reported as unchecked rather than checked.`,
 		},
 	}
 	cmd.Flags().StringVar(&keyPath, "key", "", "public key file (cosign.pub; default: verify.key from the config)")
+	cmd.Flags().BoolVar(&doExplain, "explain", false, "print every link in the chain, including the ones this host cannot prove")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the chain as JSON")
+	cmd.Flags().BoolVar(&doRehash, "rehash", false, "read the artifact's blobs back and hold each to the digest the manifest records")
 	return cmd
+}
+
+// rehashStore re-reads the blobs this host holds for ref and holds each
+// against the digest the manifest records.
+//
+// The store is read rather than the verification source, which may be the
+// registry: the question is what is on this host, and hashing the
+// registry's copy would download the whole artifact to prove something
+// about bytes that are somewhere else.
+//
+// A store holding a different digest under the same reference is refused
+// rather than re-hashed. Its blobs would hash correctly against their own
+// manifest and prove nothing about the artifact whose signature was just
+// checked, which is the one answer that would read as a pass while
+// establishing nothing.
+func rehashStore(
+	ctx context.Context, st *store.Store, ref registry.Reference, subject ocispec.Descriptor,
+) (store.RehashReport, error) {
+	local, err := st.Resolve(ctx, ref.String())
+	switch {
+	case errors.Is(err, errdef.ErrNotFound):
+		return store.RehashReport{}, fmt.Errorf(
+			"%s is not in the local store, so there are no blobs here to read back", ref)
+	case err != nil:
+		return store.RehashReport{}, fmt.Errorf("reading the local store: %w", err)
+	case local.Digest != subject.Digest:
+		return store.RehashReport{}, fmt.Errorf(
+			"%s is %s in the local store and %s where its signature was checked, "+
+				"so the blobs on this host are not the ones that verified",
+			ref, local.Digest, subject.Digest)
+	}
+	return store.Rehash(ctx, st.OCI(), local)
 }
 
 // verifySource is where an artifact and its signature are read from.
@@ -356,29 +434,79 @@ func storeHoldsSignature(ctx context.Context, st *store.Store, sigRef string, su
 }
 
 // verifyGate returns a check that refuses a model whose signature does not
-// verify, or nil when neither the flag nor verify.required asks for one.
+// verify, or nil when neither the flag nor verify.required asks for one. It
+// returns the artifact the signature covered, which is not always the one
+// this host holds, so a caller about to load something has to compare.
 //
 // run and serve share it so that a model is checked at the moment it is about
 // to be served, not only when it entered the store. Source selection is left
 // to resolveVerifySource, which reads the store when it holds the signature
 // and the registry otherwise, so an air-gapped host needs no network and a
 // model signed after a local pack still verifies.
-func verifyGate(v *viper.Viper, st *store.Store, doVerify bool, keyPath string) func(context.Context, string) error {
+func verifyGate(
+	v *viper.Viper, st *store.Store, doVerify bool, keyPath string,
+) func(context.Context, string) (ocispec.Descriptor, error) {
 	if !doVerify && !v.GetBool(keyVerifyRequired) {
 		return nil
 	}
-	return func(ctx context.Context, raw string) error {
+	return func(ctx context.Context, raw string) (ocispec.Descriptor, error) {
 		ref, err := refname.Parse(raw, v.GetString(keyRegistryDefault))
 		if err != nil {
-			return err
+			return ocispec.Descriptor{}, err
 		}
 		src, err := resolveVerifySource(ctx, st, v, ref)
 		if err != nil {
-			return err
+			return ocispec.Descriptor{}, err
 		}
-		_, err = verifyDigest(ctx, v, keyPath, src, ref)
-		return err
+		if _, err := verifyDigest(ctx, v, keyPath, src, ref); err != nil {
+			return ocispec.Descriptor{}, err
+		}
+		return src.subject, nil
 	}
+}
+
+// checkLoadedContent holds the copy this host is about to load against the
+// artifact whose signature was just checked, and, when asked, reads that
+// copy's blobs back.
+//
+// Two questions are still open once a signature verifies, and neither is
+// answered by the signature. The store may hold the model without holding
+// its signature, in which case the gate read the registry, so a tag that
+// moved leaves this host serving one artifact while vouching for another.
+// And a signature covers a manifest, which names blobs by digest and says
+// nothing about a file replaced on disk afterwards.
+//
+// The digest comparison always runs where a signature was checked;
+// re-reading the blobs is asked for, because it re-reads whole weight files
+// on every load.
+//
+// A zero verified descriptor means no signature was checked at all, which
+// happens when re-reading is asked for on its own. There is then nothing to
+// compare against, and the blobs are still read back: the two questions are
+// separate, and answering neither because only one was configured is how a
+// requested check turns into silence.
+func checkLoadedContent(
+	ctx context.Context, st *store.Store, ref string, local, verified ocispec.Descriptor, doRehash bool,
+) error {
+	if verified.Digest != "" && local.Digest != verified.Digest {
+		return fmt.Errorf(
+			"%s is %s on this host and %s where its signature was checked, "+
+				"so what would be loaded is not what verified",
+			ref, local.Digest, verified.Digest)
+	}
+	if !doRehash {
+		return nil
+	}
+	if _, err := store.Rehash(ctx, st.OCI(), local); err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
+	return nil
+}
+
+// rehashRequested reports whether the blobs are to be read back at load,
+// from the flag or from the standing configuration.
+func rehashRequested(v *viper.Viper, doRehash bool) bool {
+	return doRehash || v.GetBool(keyVerifyRehash)
 }
 
 // namedVerifier is one identity a policy allows, carried with the name it was
@@ -399,6 +527,11 @@ type allowedSigners struct {
 	// only if a keyless signature is actually tried, so a rule naming keys
 	// as well keeps working on a host where the root file is absent.
 	trustRoot string
+	// admitted names the configured entry these signers came from: a policy
+	// rule's pattern, or the key file a flag or the config named. A result
+	// says who signed, which is not the same question as who was permitted
+	// to, and an operator auditing a host needs the second one too.
+	admitted string
 }
 
 // resolveVerifiers returns the identities allowed to sign ref.
@@ -418,7 +551,10 @@ func resolveVerifiers(
 		if err != nil {
 			return allowedSigners{}, err
 		}
-		return allowedSigners{verifiers: []namedVerifier{nv}}, nil
+		return allowedSigners{
+			verifiers: []namedVerifier{nv},
+			admitted:  "--key " + keyPath,
+		}, nil
 	}
 
 	policy, err := loadPolicy(v)
@@ -436,7 +572,10 @@ func resolveVerifiers(
 		if err != nil {
 			return allowedSigners{}, err
 		}
-		return allowedSigners{verifiers: []namedVerifier{nv}}, nil
+		return allowedSigners{
+			verifiers: []namedVerifier{nv},
+			admitted:  keyVerifyKey + " " + configured,
+		}, nil
 	}
 
 	repoRef := ref.Registry + "/" + ref.Repository
@@ -450,6 +589,7 @@ func resolveVerifiers(
 	out := allowedSigners{
 		identities: rule.Identities,
 		trustRoot:  rule.TrustRoot,
+		admitted:   keyVerifyPolicy + " rule " + rule.Pattern,
 	}
 	for _, f := range rule.KeyFiles {
 		nv, err := loadNamedVerifier(f)
@@ -476,9 +616,10 @@ func loadNamedVerifier(keyPath string) (namedVerifier, error) {
 	return namedVerifier{name: keyPath, verifier: verifier}, nil
 }
 
-// verifiedBy is the identity that accepted an artifact's signature.
+// verifiedBy is the identity that accepted an artifact's signature, and
+// what permitted that identity to sign it.
 //
-// Exactly one of its fields is set. The distinction is not cosmetic:
+// Exactly one of key and keyless is set. The distinction is not cosmetic:
 // anything else about the artifact that must be held to the same identity
 // needs the verifier, and a keyless signature supplies no such verifier, so
 // a caller has to notice rather than carry a nil one.
@@ -487,6 +628,11 @@ type verifiedBy struct {
 	key signature.Verifier
 	// keyless is who a keyless signature turned out to name.
 	keyless *keyless.Result
+	// admitted names the configured entry that allowed this signer.
+	admitted string
+	// trustRoot is the file a keyless identity was held against, and is
+	// empty for a key-based signature, which is checked against no root.
+	trustRoot string
 }
 
 // verifyDigest runs signature verification against an already-resolved
@@ -512,7 +658,7 @@ func verifyDigest(
 		err := signing.Verify(
 			ctx, src.target, src.sigRef, repoRef, src.subject, nv.verifier)
 		if err == nil {
-			return verifiedBy{key: nv.verifier}, nil
+			return verifiedBy{key: nv.verifier, admitted: allowed.admitted}, nil
 		}
 		lastErr = err
 		tried = append(tried, nv.name)
@@ -520,7 +666,11 @@ func verifyDigest(
 	if len(allowed.identities) > 0 {
 		result, err := verifyKeyless(ctx, src, allowed)
 		if err == nil {
-			return verifiedBy{keyless: result}, nil
+			return verifiedBy{
+				keyless:   result,
+				admitted:  allowed.admitted,
+				trustRoot: allowed.trustRoot,
+			}, nil
 		}
 		lastErr = err
 		tried = append(tried, describeIdentities(allowed.identities))

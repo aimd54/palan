@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -49,6 +50,7 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 		runtimeRef string
 		doVerify   bool
 		verifyKey  string
+		doRehash   bool
 	)
 
 	cmd := &cobra.Command{
@@ -78,8 +80,16 @@ to no offload will serve from CPU on a GPU host.`,
 			}
 
 			// Resolve the runtime once: every model uses the same binary.
+			// It is held to the same policy as the weights it will read,
+			// and by the same gate the models go through.
+			gate := verifyGate(v, st, doVerify, verifyKey)
+			rehash := rehashRequested(v, doRehash)
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
+			}
+			runtimeRef, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
+			if err != nil {
+				return err
 			}
 			bin, err := palanruntime.Resolve(ctx, st, runtimeRef)
 			if err != nil {
@@ -117,7 +127,8 @@ to no offload will serve from CPU on a GPU host.`,
 					bin:    bin,
 					refs:   refs,
 					logDir: filepath.Join(st.Root(), "state", "logs"),
-					gate:   verifyGate(v, st, doVerify, verifyKey),
+					gate:   gate,
+					rehash: rehash,
 				},
 				MemoryBudget: budget,
 				IdleTimeout:  idle,
@@ -158,6 +169,7 @@ to no offload will serve from CPU on a GPU host.`,
 	cmd.Flags().StringVar(&runtimeRef, "runtime", "", "runtime artifact reference (default: runtime.ref config, then PATH)")
 	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature before loading any model")
 	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
+	cmd.Flags().BoolVar(&doRehash, "rehash", false, "read each model's blobs back at load and hold them to the digests its manifest records")
 	must(v.BindPFlag(keyServeAddr, cmd.Flags().Lookup("addr")))
 	must(v.BindPFlag(keyServeIdleTimeout, cmd.Flags().Lookup("idle-timeout")))
 	must(v.BindPFlag(keyServeBudget, cmd.Flags().Lookup("memory-budget")))
@@ -173,8 +185,13 @@ type storeBackend struct {
 	// gate, when set, must accept a model before it is loaded. It runs once
 	// per load rather than once per request, and re-runs after an eviction,
 	// which is the point: it re-reads a store that may have changed since the
-	// model was imported.
-	gate func(ctx context.Context, ref string) error
+	// model was imported. It answers with the artifact the signature
+	// covered, which the copy on disk is then held against.
+	gate func(ctx context.Context, ref string) (ocispec.Descriptor, error)
+	// rehash asks for the loaded model's blobs to be read back on every
+	// load, closing the gap between a manifest that verifies and the bytes
+	// beneath it. Off by default: it re-reads whole weight files.
+	rehash bool
 }
 
 func (b *storeBackend) List(ctx context.Context) ([]string, error) {
@@ -212,8 +229,10 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 			return palanruntime.Spec{}, 0, errors.New("not among the served references")
 		}
 	}
+	var verified ocispec.Descriptor
 	if b.gate != nil {
-		if err := b.gate(ctx, ref); err != nil {
+		var err error
+		if verified, err = b.gate(ctx, ref); err != nil {
 			// Wrapped so the router answers 403: the model is present and
 			// refused, which is a different answer from missing.
 			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
@@ -222,6 +241,15 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 	desc, err := b.st.Resolve(ctx, ref)
 	if err != nil {
 		return palanruntime.Spec{}, 0, err
+	}
+	// Held before loadModelInfo, which parses the artifact's own bytes: a
+	// copy that is not the one that verified must be refused rather than
+	// read. Re-reading the blobs is asked for on its own as well, so this
+	// runs for it too rather than only behind a signature check.
+	if b.gate != nil || b.rehash {
+		if err := checkLoadedContent(ctx, b.st, ref, desc, verified, b.rehash); err != nil {
+			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
+		}
 	}
 	info, err := loadModelInfo(ctx, b.st, ref, desc)
 	if err != nil {

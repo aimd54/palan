@@ -9,7 +9,8 @@ model](../architecture.md#security-model) overview.
 
 - **Digest verification everywhere**: every blob on every transfer is
   verified against its manifest digest; a corrupted or tampered blob is
-  discarded, never installed.
+  discarded, never installed. That covers bytes in motion. For bytes at rest
+  in the store, see [Reading the weights back](#reading-the-weights-back).
 - **Bounded parsing**: GGUF headers and JSON blobs are parsed with strict
   size limits; hostile bundles (path traversal, links) are rejected on
   `load`.
@@ -246,6 +247,8 @@ every point it could otherwise get in or get used:
 | `load` | against the bundle, before anything reaches the store |
 | `run` | before deciding whether to fetch, so an unsigned model is never downloaded |
 | `serve` | when a model is loaded, on first request and again after an eviction |
+| `runtime pull` | before the engine build is downloaded |
+| `run`, `serve` | the configured engine build too, before it is unpacked or spawned |
 
 `serve` checks at load rather than at startup, so a refusal is a `403` on the
 request for that model and the rest keep serving. `/v1/models` still lists an
@@ -258,6 +261,126 @@ otherwise be trusted.
 
 This is the recommended configuration once your pipeline signs everything;
 palan ships it opt-in.
+
+### The copy that loads is the copy that verified
+
+A store can hold a model without holding its signature, in which case the
+check reads the registry. If the tag has moved since this host pulled, the
+registry's copy is signed and the host's copy is what it fetched, and each
+half on its own is fine. `run` and `serve` compare the two before loading
+anything and refuse when they differ, naming both digests.
+
+### The engine is checked the way the weights are
+
+A runtime artifact is the executable that reads the weights, so a host that
+checks its models and not its engine has checked the smaller half. Runtimes
+travel the same registries, are signed the same way, and are matched by the
+same trust-policy patterns:
+
+```yaml
+verify:
+  required: true
+  policy:
+    - pattern: registry.internal/runtimes/*
+      keys:
+        - /etc/palan/engine.pub
+    - pattern: registry.internal/llm/*
+      keys:
+        - /etc/palan/models.pub
+```
+
+Verifying the artifact is not the same as checking the file that runs. palan
+unpacks a runtime into a plain directory under the store and executes it from
+there, so its presence says nothing about its bytes, and the dynamic loader is
+pointed at that directory. Before the engine is spawned, every file in it is
+held to the digest the manifest records, and a directory that has been altered,
+has gained a file, or has had one replaced by a symlink is discarded and
+unpacked again. The unpack itself checks each blob as it copies, so the
+replacement is trustworthy as well as the tree it replaces. This part needs no
+flag: it is the engine, and it is the object that runs.
+
+`serve` checks the engine once, when it starts, while it re-checks each model
+on every load and after every eviction. A long-running `serve` will not notice
+an engine that changes underneath it, though the check above means the change
+would have to survive the next unpack.
+
+With no `runtime.ref` configured, `llama-server` comes from `PATH`. That build
+arrived by some other route and there is nothing here to hold it to, so `run`
+and `serve` say so on stderr rather than passing over it in silence.
+
+### Reading the weights back
+
+A signature covers a manifest, and a manifest names its blobs by digest.
+Nothing in that chain opens a weight file, so a blob replaced on disk after
+import leaves a signature that still verifies over content that changed.
+
+Anything palan copies out of the store is checked as it is written, which
+covers unpacking an engine and materialising a model with `pull --output`. A
+file that has left the store is addressed by its name alone, and it is what
+something else goes on to read, so leaving the store is the last moment
+anything can check it. Writing out also stays inside the directory it was
+given: a layer may name a nested file, and the write is resolved beneath the
+output directory, so a link at any point along the way cannot send the model
+somewhere else. What remains is the store's own blobs, read in place by
+whatever loads the model.
+
+`--rehash`, or `verify.rehash: true` in the config, reads those blobs back and
+holds each to the digest the manifest records:
+
+```sh
+palan verify registry.internal/llm/qwen3:8b-q4 --rehash
+palan run    registry.internal/llm/qwen3:8b-q4 --rehash
+```
+
+It is off by default because it re-reads whole weight files, on every load and
+after every eviction. Turn it on where the store is on shared or removable
+storage, or anywhere something other than palan can write to it.
+
+## What a host can prove
+
+`palan verify` answers whether a model is signed. `--explain` answers the
+larger question an operator arrives with, which is what this host can
+actually establish about the bytes it holds:
+
+```console
+$ palan verify registry.internal/llm/qwen3:8b-q4 --explain
+Verified registry.internal/llm/qwen3:8b-q4@sha256:1a2b3c...
+  source: local store
+
+  proven    reference   registry.internal/llm/qwen3:8b-q4 resolves to this digest in the local store
+  proven    signature   a signature over this digest verifies under the configured key
+  proven    policy      this signer is allowed to sign it by verify.policy rule registry.internal/llm/*
+  proven    provenance  packed from huggingface.co/org/repo@a1b2c3d
+  unproven  content     the blobs were not read back; --rehash holds them to the digests the manifest records
+```
+
+The unproven lines are the point. They are printed on every run, including
+for an artifact palan did not produce, because a chain shown with its gaps
+removed reads as a chain with no gaps. An artifact packed from local disk
+says so on the provenance line rather than leaving it blank, so a model that
+names no upstream can be told from one whose statement is missing.
+
+`--json` prints the same chain for a program, and nothing else goes to the
+stream, so the output parses whole:
+
+```json
+{
+  "reference": "registry.internal/llm/qwen3:8b-q4",
+  "digest": "sha256:1a2b3c...",
+  "source": "local store",
+  "links": [
+    { "link": "reference", "proven": true, "detail": "..." },
+    { "link": "content", "proven": false, "detail": "..." }
+  ]
+}
+```
+
+A keyless signature adds a transparency-log line naming the entry, when the
+log recorded it, and the trusted root the inclusion proof was rebuilt
+against.
+
+`--explain` describes a verification that succeeded. A refusal is still an
+error with a non-zero exit; the message names every identity that was tried.
 
 ## Trust policy
 

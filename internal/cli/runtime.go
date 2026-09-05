@@ -4,12 +4,18 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"text/tabwriter"
 
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"oras.land/oras-go/v2/errdef"
 
 	"github.com/aimd54/palan/internal/refname"
 	palanruntime "github.com/aimd54/palan/internal/runtime"
@@ -32,14 +38,30 @@ hosts receive inference engines through the already-established channel.`,
 }
 
 func newRuntimePullCmd(v *viper.Viper) *cobra.Command {
-	return &cobra.Command{
+	var (
+		doVerify  bool
+		verifyKey string
+	)
+	cmd := &cobra.Command{
 		Use:   "pull REF",
 		Short: "Pull a runtime artifact and materialize its executable",
 		Example: `  # Fetch a llama-server build and unpack it ready to run
-  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12`,
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12
+
+  # Refuse the build unless it carries a valid signature
+  palan runtime pull registry.internal/runtimes/llama-server:b4567-cuda12 --verify`,
+		Long: `Pull fetches a runtime artifact and unpacks its executable ready to run.
+
+A runtime is an engine that will read the weights, so it is signed and
+verified the way a model is. With --verify, or with verify.required set in
+the config, the signature is checked on the registry before anything is
+downloaded, and the trust policy decides who may sign it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// The engine a signature was checked against, empty when no
+			// check was asked for.
+			var verified digest.Digest
 			ref, err := refname.Parse(args[0], v.GetString(keyRegistryDefault))
 			if err != nil {
 				return err
@@ -58,8 +80,29 @@ func newRuntimePullCmd(v *viper.Viper) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Checked against the registry before anything is downloaded,
+			// so an unsigned engine build is refused rather than fetched
+			// and then rejected.
+			if doVerify || v.GetBool(keyVerifyRequired) {
+				repo, rerr := client.Repository(ref)
+				if rerr != nil {
+					return rerr
+				}
+				desc, rerr := repo.Resolve(ctx, ref.Reference)
+				if rerr != nil {
+					return rerr
+				}
+				if _, rerr = verifyDigest(ctx, v, verifyKey, remoteSource(repo, desc, "registry"), ref); rerr != nil {
+					return rerr
+				}
+				// Carried into the fetch, so the engine that arrives is the
+				// engine that was checked rather than whatever the tag
+				// answers with on the second ask.
+				verified = desc.Digest
+				fmt.Fprintf(cmd.ErrOrStderr(), "Signature verified for %s@%s\n", ref, desc.Digest)
+			}
 			pr := newProgress(v.GetBool("quiet"))
-			_, err = client.Pull(ctx, st, ref, pr.events())
+			pulled, err := client.Pull(ctx, st, ref, verified, pr.events())
 			pr.close(err)
 			if err != nil {
 				return err
@@ -68,11 +111,81 @@ func newRuntimePullCmd(v *viper.Viper) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Runtime ready: %s\n", entry)
+			fmt.Fprintf(cmd.OutOrStdout(), "Runtime ready: %s\nDigest: %s\n", entry, pulled.Digest)
 			fmt.Fprintf(cmd.OutOrStdout(), "Set runtime.ref: %q in the config to use it by default.\n", ref.String())
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&doVerify, "verify", false, "require a valid signature on the runtime before downloading it")
+	cmd.Flags().StringVar(&verifyKey, "verify-key", "", "public key for --verify (default: verify.key from the config)")
+	return cmd
+}
+
+// checkRuntime holds an engine build to the same policy as a model before it
+// is unpacked and spawned, and returns the reference to load.
+//
+// A runtime artifact is the executable that will read the weights, so a host
+// checking its models and not its engine has checked the smaller half. It
+// travels the same channel and is checked the same way.
+//
+// The reference is parsed here and handed back, so the artifact that was
+// checked and the artifact that is loaded are named identically. Resolving
+// the raw string separately would let a reference that needed a default
+// registry or a default tag be verified under one name and loaded under
+// another.
+//
+// An empty reference means no runtime artifact is configured and
+// llama-server comes from PATH. That binary arrived by some other route and
+// there is nothing here to hold it to, which is said rather than passed
+// over: silence would read the same as a runtime that was checked.
+func checkRuntime(
+	ctx context.Context, w io.Writer, v *viper.Viper, st *store.Store,
+	gate func(context.Context, string) (ocispec.Descriptor, error),
+	ref string, rehash bool,
+) (string, error) {
+	if gate == nil && !rehash {
+		return ref, nil
+	}
+	if ref == "" {
+		// The notice belongs to verification rather than to re-reading: a
+		// host that only asked for its blobs to be read back was never
+		// told anything about where its engine came from, so there is no
+		// claim here for silence to undercut.
+		if gate != nil {
+			fmt.Fprintln(w, "Verification is required and no runtime artifact is configured, "+
+				"so llama-server is taken from PATH and palan cannot say where that build came from. "+
+				"Set runtime.ref to a signed runtime artifact to bring it under the same policy.")
+		}
+		return ref, nil
+	}
+	parsed, err := refname.Parse(ref, v.GetString(keyRegistryDefault))
+	if err != nil {
+		return "", err
+	}
+	name := parsed.String()
+	// Absence is reported before the signature is checked, so a host that
+	// simply has not pulled the runtime is told that rather than sent to
+	// the registry to verify something it does not hold.
+	local, err := st.Resolve(ctx, name)
+	switch {
+	case errors.Is(err, errdef.ErrNotFound):
+		return "", fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", name, err)
+	case err != nil:
+		// A store that cannot answer is a different problem from one that
+		// answered "no", and sending an operator to `runtime pull` for a
+		// permission or corruption failure sends them to the wrong repair.
+		return "", fmt.Errorf("reading the runtime %q from the local store: %w", name, err)
+	}
+	var verified ocispec.Descriptor
+	if gate != nil {
+		if verified, err = gate(ctx, name); err != nil {
+			return "", err
+		}
+	}
+	if err := checkLoadedContent(ctx, st, name, local, verified, rehash); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func newRuntimeLsCmd() *cobra.Command {

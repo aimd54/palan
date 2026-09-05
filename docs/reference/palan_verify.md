@@ -27,6 +27,18 @@ timestamp is refused. All of that material travels with the artifact, so
 this too needs no network. The signer is reported, since it is the one thing
 the result establishes that the configuration did not already state.
 
+With --explain, the output is the whole chain rather than a verdict: which
+reference resolved to which digest, who signed it, what allowed them to,
+where the files came from, and whether the bytes on this host were read
+back. Every step says whether this host proved it. The steps it could not
+prove are printed too, since a chain shown with its gaps removed reads as a
+chain with no gaps. --json prints the same chain for a program.
+
+Signature verification reads a manifest, and a manifest names its blobs by
+digest, so it says nothing about a weight file replaced on disk afterwards.
+--rehash reads those blobs back and holds each to the digest the manifest
+records. It is off by default because it re-reads whole weight files.
+
 Where sign also wrote a statement of the model's sources, verify checks it
 against the same key and against the model's own layers, and names what the
 layers came from. A model with no such statement verifies exactly as it did
@@ -44,13 +56,22 @@ palan verify REF --key FILE [flags]
 ```
   # Verify against a registry, or from the local store when it holds the signature
   palan verify registry.internal/llm/qwen3:8b-q4 --key cosign.pub
+
+  # Every link in the chain, including the ones this host cannot prove
+  palan verify registry.internal/llm/qwen3:8b-q4 --explain
+
+  # Read the weight blobs back and hold them to the digests the manifest records
+  palan verify registry.internal/llm/qwen3:8b-q4 --explain --rehash
 ```
 
 ### Options
 
 ```
+      --explain      print every link in the chain, including the ones this host cannot prove
   -h, --help         help for verify
+      --json         print the chain as JSON
       --key string   public key file (cosign.pub; default: verify.key from the config)
+      --rehash       read the artifact's blobs back and hold each to the digest the manifest records
 ```
 
 ### Options inherited from parent commands
