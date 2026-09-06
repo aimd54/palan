@@ -67,14 +67,18 @@ func TestPullRefusesWhenTheTagAnswersDifferentlyTheSecondTime(t *testing.T) {
 	priv, privKey := attestKeypair(t)
 	pubKey := attestPubKeyFile(t, priv)
 
-	// A second artifact nobody signed, served from a different repository
-	// so the proxy can hand it back under the same tag.
+	// A second artifact nobody signed, in the same repository under another
+	// tag. Same repository matters: a manifest's blobs are fetched from the
+	// repository the request names, so a substitute served from somewhere
+	// else fails on a missing blob and the refusal under test never has to
+	// happen. Here the whole artifact is reachable and the copy would go
+	// through, which is what a tag moving actually looks like.
 	unsignedBody := []byte("the weights nobody ever signed")
-	reg.PutBlob("llm/swapped", unsignedBody)
-	seedModel(t, reg, "llm/swapped", "v1", []ocispec.Descriptor{localLayer(unsignedBody, "model.gguf")})
+	reg.PutBlob("llm/qwen3", unsignedBody)
+	seedModel(t, reg, "llm/qwen3", "moved", []ocispec.Descriptor{localLayer(unsignedBody, "model.gguf")})
 
 	host, arm := swappingRegistry(t, reg.Host(),
-		"/v2/llm/qwen3/manifests/v1", "/v2/llm/swapped/manifests/v1", 1)
+		"/v2/llm/qwen3/manifests/v1", "/v2/llm/qwen3/manifests/moved", 1)
 	ref := host + "/llm/qwen3:v1"
 	// Signed through the proxy, so the signature names this host.
 	if err := runSign(t, ref, privKey); err != nil {
@@ -136,13 +140,13 @@ func TestPullFetchesByDigestOnceTheTagHasBeenResolved(t *testing.T) {
 	pubKey := attestPubKeyFile(t, priv)
 
 	unsignedBody := []byte("the weights nobody ever signed")
-	reg.PutBlob("llm/swapped", unsignedBody)
-	seedModel(t, reg, "llm/swapped", "v1", []ocispec.Descriptor{localLayer(unsignedBody, "model.gguf")})
+	reg.PutBlob("llm/qwen3", unsignedBody)
+	seedModel(t, reg, "llm/qwen3", "moved", []ocispec.Descriptor{localLayer(unsignedBody, "model.gguf")})
 
 	// Two honest answers, then substitution: the check and the descriptor
 	// comparison both agree, and only the fetch is targeted.
 	host, arm := swappingRegistry(t, reg.Host(),
-		"/v2/llm/qwen3/manifests/v1", "/v2/llm/swapped/manifests/v1", 2)
+		"/v2/llm/qwen3/manifests/v1", "/v2/llm/qwen3/manifests/moved", 2)
 	ref := host + "/llm/qwen3:v1"
 	if err := runSign(t, ref, privKey); err != nil {
 		t.Fatalf("signing the fixture: %v", err)
@@ -168,5 +172,54 @@ func TestPullFetchesByDigestOnceTheTagHasBeenResolved(t *testing.T) {
 	}
 	if string(got) != string(signedBody) {
 		t.Fatalf("the output directory holds %q, which is not what verified", got)
+	}
+}
+
+// TestRunFetchesTheModelItChecked: run verifies before it fetches, and then
+// compares what landed against what verified, so a substitution is refused
+// either way. What differs is what the refusal costs. Fetching whatever the
+// tag answers with means the whole substituted artifact is downloaded,
+// written into the content-addressed store and tagged under this reference
+// before the comparison rejects it, leaving the store holding the thing
+// that was just refused and the tag pointing at it. A later run without
+// verification loads it.
+//
+// So the assertion is about the store, not about the error: a refusal has
+// to leave nothing behind.
+func TestRunFetchesTheModelItChecked(t *testing.T) {
+	reg := registrytest.New(t)
+
+	signedBody := []byte("the weights a publisher signed")
+	reg.PutBlob("llm/qwen3", signedBody)
+	seedModel(t, reg, "llm/qwen3", "v1", []ocispec.Descriptor{localLayer(signedBody, "model.gguf")})
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+
+	unsignedBody := []byte("the weights nobody ever signed")
+	reg.PutBlob("llm/qwen3", unsignedBody)
+	seedModel(t, reg, "llm/qwen3", "moved", []ocispec.Descriptor{localLayer(unsignedBody, "model.gguf")})
+
+	host, arm := swappingRegistry(t, reg.Host(),
+		"/v2/llm/qwen3/manifests/v1", "/v2/llm/qwen3/manifests/moved", 1)
+	ref := host + "/llm/qwen3:v1"
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+	arm()
+
+	home := t.TempDir()
+	if _, err := runRunCmd(t, home, ref, pubKey, "", false); err == nil {
+		t.Fatal("run verified one artifact and loaded another without noticing")
+	}
+
+	st, serr := store.Open(context.Background(), home)
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if _, berr := st.BlobPath(localLayer(unsignedBody, "model.gguf").Digest); berr == nil {
+		t.Fatal("the refusal left the unverified weights in the store")
+	}
+	if _, rerr := st.Resolve(context.Background(), ref); rerr == nil {
+		t.Fatal("the refusal left the reference tagged in the store, so a later run without --verify loads it")
 	}
 }
