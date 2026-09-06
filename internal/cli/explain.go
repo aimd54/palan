@@ -22,6 +22,7 @@ const (
 	linkPolicy    = "policy"
 	linkLog       = "transparency log"
 	linkSources   = "provenance"
+	linkLocal     = "local copy"
 	linkContent   = "content"
 )
 
@@ -63,7 +64,10 @@ type rehashOutcome struct {
 // nothing of its own: every link is a restatement of a result the steps
 // above already produced, which is why a link can be added here without
 // anything needing to re-derive it.
-func explain(ref, dgst string, src verifySource, by verifiedBy, att attestationReport, rh rehashOutcome) explanation {
+func explain(
+	ref, dgst string, src verifySource, by verifiedBy,
+	att attestationReport, rc residentCopy, rh rehashOutcome,
+) explanation {
 	e := explanation{Reference: ref, Digest: dgst, Source: src.name}
 	e.Links = append(e.Links,
 		link{
@@ -77,8 +81,33 @@ func explain(ref, dgst string, src verifySource, by verifiedBy, att attestationR
 	if by.keyless != nil {
 		e.Links = append(e.Links, logLink(by))
 	}
-	e.Links = append(e.Links, sourcesLink(att), contentLink(rh))
+	e.Links = append(e.Links, sourcesLink(att), localLink(rc), contentLink(rh))
 	return e
+}
+
+// localLink says whether the artifact that verified is the one this host
+// holds. Everything above it can be true of a copy that is somewhere else:
+// the signature was read from the registry whenever the store holds a
+// model without holding its signature, so the digest at the top of this
+// chain need not be the digest on this disk.
+//
+// Only two answers reach here. The artifact is held and agrees, or it is
+// not held at all; a host holding a different one is refused before an
+// explanation is assembled, because that is a disproven link rather than an
+// unproven one, and a chain is not the place to report it.
+func localLink(rc residentCopy) link {
+	if !rc.held {
+		return link{
+			Name:   linkLocal,
+			Proven: false,
+			Detail: "this host does not hold this artifact, so every link above describes the registry's copy",
+		}
+	}
+	return link{
+		Name:   linkLocal,
+		Proven: true,
+		Detail: "this host holds " + rc.desc.Digest.String() + " under this reference, which is the artifact that verified",
+	}
 }
 
 // signatureLink says who signed, in the terms the signature itself used: a

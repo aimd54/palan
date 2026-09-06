@@ -228,20 +228,27 @@ provenance reported as unchecked rather than checked.`,
 			if err != nil {
 				return err
 			}
+			// Before the attestation and before any re-read: the rest of
+			// the result describes this artifact, and this is what decides
+			// whether this host is holding it.
+			resident, err := checkResidentCopy(ctx, st, ref, src.subject)
+			if err != nil {
+				return err
+			}
 			report, err := checkAttestation(ctx, verifier, src, ref)
 			if err != nil {
 				return err
 			}
 			rh := rehashOutcome{}
 			if rehashRequested(v, doRehash) {
-				rh.report, err = rehashStore(ctx, st, ref, src.subject)
+				rh.report, err = rehashStore(ctx, st, ref, resident)
 				if err != nil {
 					return err
 				}
 				rh.ran = true
 			}
 			if doExplain || asJSON {
-				e := explain(ref.String(), src.subject.Digest.String(), src, verifier, report, rh)
+				e := explain(ref.String(), src.subject.Digest.String(), src, verifier, report, resident, rh)
 				if asJSON {
 					return renderExplanationJSON(cmd.OutOrStdout(), e)
 				}
@@ -257,6 +264,13 @@ provenance reported as unchecked rather than checked.`,
 			}
 			for _, p := range report.provenance {
 				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
+			}
+			// Said plainly, because "Verified" over a reference this host
+			// has never pulled is a result about the registry's copy, and
+			// a reader has no other way to tell the two apart.
+			if !resident.held {
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"  local copy: none on this host, so this covers the registry's copy\n")
 			}
 			if rh.ran {
 				fmt.Fprintf(cmd.OutOrStdout(), "  content: %d blobs re-read (%s), every digest matches\n",
@@ -278,6 +292,48 @@ provenance reported as unchecked rather than checked.`,
 	return cmd
 }
 
+// residentCopy is what this host holds under the reference that was
+// verified. held is false when the store has no copy at all, which is not a
+// failure: verifying before pulling is an ordinary thing to do.
+type residentCopy struct {
+	held bool
+	desc ocispec.Descriptor
+}
+
+// checkResidentCopy holds the artifact this host stores under ref against
+// the one whose signature was just checked.
+//
+// verify answers a question about a reference, and resolveVerifySource
+// reads the registry whenever the store holds a model without its
+// signature. So on a host that pulled before the tag moved, the signature
+// that verified covers an artifact that is not the one sitting here, and
+// saying "Verified" and stopping would report a result about somewhere
+// else. run, serve and the runtime gate all make this comparison before
+// loading; the command an operator reaches for first has to make it too,
+// or it hands out a verdict the loader will contradict.
+//
+// A store that holds nothing under the reference is reported rather than
+// refused, and the chain says so. What is refused is a store holding a
+// different artifact, because that is the answer that would otherwise read
+// as a pass while describing bytes this host does not have.
+func checkResidentCopy(
+	ctx context.Context, st *store.Store, ref registry.Reference, subject ocispec.Descriptor,
+) (residentCopy, error) {
+	local, err := st.Resolve(ctx, ref.String())
+	switch {
+	case errors.Is(err, errdef.ErrNotFound):
+		return residentCopy{}, nil
+	case err != nil:
+		return residentCopy{}, fmt.Errorf("reading the local store: %w", err)
+	case local.Digest != subject.Digest:
+		return residentCopy{}, fmt.Errorf(
+			"%s is %s on this host and %s where its signature was checked, "+
+				"so the artifact this host holds is not the one that verified",
+			ref, local.Digest, subject.Digest)
+	}
+	return residentCopy{held: true, desc: local}, nil
+}
+
 // rehashStore re-reads the blobs this host holds for ref and holds each
 // against the digest the manifest records.
 //
@@ -286,28 +342,20 @@ provenance reported as unchecked rather than checked.`,
 // registry's copy would download the whole artifact to prove something
 // about bytes that are somewhere else.
 //
-// A store holding a different digest under the same reference is refused
-// rather than re-hashed. Its blobs would hash correctly against their own
-// manifest and prove nothing about the artifact whose signature was just
-// checked, which is the one answer that would read as a pass while
-// establishing nothing.
+// It takes the copy checkResidentCopy already found rather than resolving
+// the reference again. Asking a second time would be asking a question that
+// has been answered, and acting on the second answer is how the artifact
+// that gets read stops being the artifact that was admitted. That check has
+// also already refused a host holding something other than what verified,
+// so what arrives here is the artifact the signature covered.
 func rehashStore(
-	ctx context.Context, st *store.Store, ref registry.Reference, subject ocispec.Descriptor,
+	ctx context.Context, st *store.Store, ref registry.Reference, rc residentCopy,
 ) (store.RehashReport, error) {
-	local, err := st.Resolve(ctx, ref.String())
-	switch {
-	case errors.Is(err, errdef.ErrNotFound):
+	if !rc.held {
 		return store.RehashReport{}, fmt.Errorf(
 			"%s is not in the local store, so there are no blobs here to read back", ref)
-	case err != nil:
-		return store.RehashReport{}, fmt.Errorf("reading the local store: %w", err)
-	case local.Digest != subject.Digest:
-		return store.RehashReport{}, fmt.Errorf(
-			"%s is %s in the local store and %s where its signature was checked, "+
-				"so the blobs on this host are not the ones that verified",
-			ref, local.Digest, subject.Digest)
 	}
-	return store.Rehash(ctx, st.OCI(), local)
+	return store.Rehash(ctx, st.OCI(), rc.desc)
 }
 
 // verifySource is where an artifact and its signature are read from.
