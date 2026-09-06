@@ -474,3 +474,151 @@ func TestMaterializeKeepsADirectoryItDidNotCreate(t *testing.T) {
 		t.Fatalf("the rollback removed a directory it did not create: %v", err)
 	}
 }
+
+// TestMaterializeDoesNotWriteThroughAHardLink: a root constrains how a path
+// resolves, and a hard link has nothing to resolve. It is a second name for
+// a file that already exists, and it reports as an ordinary regular file,
+// so containment can neither see it nor refuse it. Opening it and writing
+// puts the model's bytes into a file outside the output directory.
+//
+// The pull succeeds: replacing a name left by something else is what
+// materializing twice into one directory has to do. What must not happen is
+// the write landing anywhere but a file in this directory.
+func TestMaterializeDoesNotWriteThroughAHardLink(t *testing.T) {
+	reg := registrytest.New(t)
+	body := []byte("the weights the artifact actually carries")
+	ref, pubKey := seedNestedModel(t, reg, "model.gguf", body)
+
+	outer := t.TempDir()
+	victim := filepath.Join(outer, "victim.txt")
+	const original = "a file that has nothing to do with this pull"
+	if err := os.WriteFile(victim, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(outer, "models")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(victim, filepath.Join(dir, "model.gguf")); err != nil {
+		t.Skipf("this filesystem does not support hard links: %v", err)
+	}
+
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err != nil {
+		t.Fatalf("materializing over a name left by something else must work: %v", err)
+	}
+	outside, err := os.ReadFile(victim) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(outside) != original {
+		t.Fatalf("a file outside the output directory was written through a hard link, it now holds %q", outside)
+	}
+	inside, err := os.ReadFile(filepath.Join(dir, "model.gguf")) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatalf("the model was not written into the output directory: %v", err)
+	}
+	if string(inside) != string(body) {
+		t.Fatalf("the output directory holds %q, not the artifact's weights", inside)
+	}
+}
+
+// TestMaterializeHoldsTwoSimilarNamesToWhatTheFilesystemDoes: whether
+// "Model.gguf" and "model.gguf" are one file or two is a question about the
+// filesystem under the output directory, not about the strings. Folding the
+// names to compare them answers it wrongly in both directions: it refuses a
+// legitimate pair of layers where the two names are genuinely two files,
+// and it misses the collision where a filesystem folds by a rule that
+// simple lowercasing does not reproduce.
+//
+// So the test asks this filesystem what it does, and then requires the
+// outcome that is correct there.
+func TestMaterializeHoldsTwoSimilarNamesToWhatTheFilesystemDoes(t *testing.T) {
+	probe := t.TempDir()
+	if err := os.WriteFile(filepath.Join(probe, "probe"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := os.Stat(filepath.Join(probe, "PROBE"))
+	oneFile := err == nil
+
+	reg := registrytest.New(t)
+	upper := []byte("the layer whose name is capitalized")
+	lower := []byte("the layer whose name is not")
+	reg.PutBlob("llm/similar", upper)
+	reg.PutBlob("llm/similar", lower)
+	seedModel(t, reg, "llm/similar", "v1", []ocispec.Descriptor{
+		localLayer(upper, "Model.gguf"),
+		localLayer(lower, "model.gguf"),
+	})
+	ref := reg.Host() + "/llm/similar:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	_, perr := runPullOutput(t, t.TempDir(), ref, pubKey, dir)
+
+	if oneFile {
+		if perr == nil {
+			t.Fatal("both layers resolve to one file here, and materializing them reported success while one overwrote the other")
+		}
+		entries, rerr := os.ReadDir(dir)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			t.Fatal(rerr)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("the refusal left %d files behind", len(entries))
+		}
+		return
+	}
+	if perr != nil {
+		t.Fatalf("two names that are two files here must both materialize: %v", perr)
+	}
+	for name, want := range map[string][]byte{"Model.gguf": upper, "model.gguf": lower} {
+		got, rerr := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- test fixture under a temp dir
+		if rerr != nil {
+			t.Fatalf("%s was not written: %v", name, rerr)
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s holds %q, not its own layer's bytes", name, got)
+		}
+	}
+}
+
+// TestMaterializeLeavesWhatItRefusedToOpen: the rollback takes back what
+// this run created, and a name it never managed to create was never this
+// run's to remove. Recording a layer as written before knowing whether
+// anything was written puts somebody else's file on the cleanup list.
+func TestMaterializeLeavesWhatItRefusedToOpen(t *testing.T) {
+	reg := registrytest.New(t)
+	first := []byte("a layer that materializes before the refusal")
+	second := []byte("the layer whose name is already taken")
+	reg.PutBlob("llm/taken", first)
+	reg.PutBlob("llm/taken", second)
+	seedModel(t, reg, "llm/taken", "v1", []ocispec.Descriptor{
+		localLayer(first, "model.gguf"),
+		localLayer(second, "extra.bin"),
+	})
+	ref := reg.Host() + "/llm/taken:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "models")
+	if err := os.MkdirAll(filepath.Join(dir, "extra.bin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("a layer whose name is a directory was reported as materialized")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "extra.bin")); err != nil || !fi.IsDir() {
+		t.Fatalf("the refusal removed a directory it did not create (%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "model.gguf")); !os.IsNotExist(err) {
+		t.Fatalf("the layer this run did write was left behind (%v)", err)
+	}
+}

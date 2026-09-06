@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -155,7 +156,11 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 
 	var written []string
 	var madeDirs []string
-	seen := make(map[string]bool, len(manifest.Layers))
+	// The files this run created, kept so that a name already taken can be
+	// told apart from a name this run took a moment ago. Identity rather
+	// than spelling, because whether two names are one file is a question
+	// only the filesystem under this directory can answer.
+	var mine []os.FileInfo
 	// A model can be many files, and a failure on the fourth leaves three
 	// already on disk. The directory is what something else reads, so a
 	// refusal has to take back what it wrote rather than leave a partial
@@ -195,16 +200,6 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("layer file name %q escapes the output directory", name)
 		}
-		// Compared case-insensitively as well as exactly. macOS is a
-		// release target and its default filesystem folds case, so two
-		// layers named "Model.gguf" and "model.gguf" are one file there:
-		// the second write opens the first one's inode and the earlier
-		// layer's bytes are gone with nothing reported.
-		fold := strings.ToLower(clean)
-		if seen[fold] {
-			return nil, fmt.Errorf("two layers claim the file name %q, so one would overwrite the other", clean)
-		}
-		seen[fold] = true
 		if parent := filepath.Dir(clean); parent != "." {
 			// Recorded before creation, and only the components that were
 			// missing, so a refusal leaves the directory as it found it.
@@ -219,13 +214,20 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		if err != nil {
 			return nil, err
 		}
-		// Recorded before the write, so the cleanup below covers the file
-		// that failed as well as the ones that succeeded. A failure can
-		// leave a partial or wrong-length file, and it is the same problem
-		// as a completed one holding the wrong bytes.
-		written = append(written, clean)
-		if err := copyFile(src, root, clean, l, 0o644); err != nil {
-			return nil, err
+		fi, cerr := copyFile(src, root, clean, l, 0o644, mine)
+		// Recorded as soon as the file exists, before the write is known
+		// to have finished, so the cleanup below covers the file that
+		// failed as well as the ones that succeeded: a failure can leave a
+		// partial or wrong-length file, which is the same problem as a
+		// complete one holding the wrong bytes. A layer that never got as
+		// far as creating anything adds nothing here, so a refusal takes
+		// back only what it made.
+		if fi != nil {
+			written = append(written, clean)
+			mine = append(mine, fi)
+		}
+		if cerr != nil {
+			return nil, cerr
 		}
 	}
 	if len(written) == 0 {
@@ -260,24 +262,24 @@ func missingDirs(root *os.Root, rel string) []string {
 
 // copyFile writes one blob out of the store to name beneath root, holding
 // the bytes to the digest desc records as they go past.
-func copyFile(src string, root *os.Root, name string, desc ocispec.Descriptor, mode os.FileMode) error {
+//
+// mine is the files already created by this run, used to tell a colliding
+// name apart from a stale one. The returned FileInfo describes the file
+// that was created, and is non-nil whenever one was, including when the
+// write that followed failed: the caller records it so a refusal can take
+// it away again.
+func copyFile(
+	src string, root *os.Root, name string, desc ocispec.Descriptor,
+	mode os.FileMode, mine []os.FileInfo,
+) (os.FileInfo, error) {
 	in, err := os.Open(src) // #nosec G304 -- digest-derived path inside the store
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = in.Close() }()
-	// The root refuses a name resolving outside the output directory,
-	// including through a link at any component, and it resolves the path
-	// itself, so a caller's O_NOFOLLOW is subsumed and does nothing. A link
-	// that stays inside the directory is therefore followed, and the write
-	// lands on whatever it names. Refused here instead: the file this
-	// writes has to be the file the layer named.
-	if fi, lerr := root.Lstat(name); lerr == nil && !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s is a %s in the output directory, not a regular file", name, fi.Mode().Type())
-	}
-	out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, fi, err := createOutputFile(root, name, mode, mine)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	verifier := desc.Digest.Verifier()
 	n, err := io.Copy(io.MultiWriter(out, verifier), io.LimitReader(in, desc.Size+1))
@@ -285,15 +287,91 @@ func copyFile(src string, root *os.Root, name string, desc ocispec.Descriptor, m
 		err = cerr
 	}
 	if err != nil {
-		return err
+		return fi, err
 	}
 	if n != desc.Size {
-		return fmt.Errorf("blob %s holds %d bytes in the store, the manifest records %d", desc.Digest, n, desc.Size)
+		return fi, fmt.Errorf("blob %s holds %d bytes in the store, the manifest records %d", desc.Digest, n, desc.Size)
 	}
 	if !verifier.Verified() {
-		return fmt.Errorf(
+		return fi, fmt.Errorf(
 			"blob %s does not hash to the digest the manifest records, so %s was not written",
 			desc.Digest, filepath.Base(name))
 	}
-	return nil
+	return fi, nil
+}
+
+// createOutputFile makes name beneath root and returns it open for writing,
+// along with what it made.
+//
+// Created outright rather than opened and truncated. A root constrains how
+// a path resolves, and a hard link has no path to resolve: it is a second
+// name for an existing file, indistinguishable from any other regular file,
+// so writing through one puts the model's bytes into a file outside the
+// output directory that the root can neither see nor refuse. Creating the
+// name means the bytes only ever land in a file this run made. It also
+// closes the same question for a symlink pointing back inside the
+// directory, which a root resolves happily.
+//
+// A name already taken is removed and created again, because materializing
+// twice into one directory is ordinary and the second run has to replace
+// the first. That retry is also what separates the two reasons a name can
+// be taken. A file left by an earlier run is replaced. A file this run
+// created moments ago means two layers resolved to a single file on this
+// filesystem, and replacing it would destroy the earlier layer's bytes and
+// report success, so it is refused instead.
+//
+// Which of the two it is gets decided by identity, not by comparing the
+// names. A filesystem that folds case or normalizes Unicode gives the
+// collision a different spelling from the file already written, and one
+// that does neither keeps two similar names properly apart. Comparing
+// spellings would miss the collision on the first and invent one on the
+// second; asking the filesystem which file a name refers to is the question
+// actually at issue.
+func createOutputFile(
+	root *os.Root, name string, mode os.FileMode, mine []os.FileInfo,
+) (*os.File, os.FileInfo, error) {
+	f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err == nil {
+		return withInfo(f)
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, nil, err
+	}
+	existing, err := root.Lstat(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !existing.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf(
+			"%s is a %s in the output directory, not a regular file", name, existing.Mode().Type())
+	}
+	for _, w := range mine {
+		if os.SameFile(existing, w) {
+			return nil, nil, fmt.Errorf(
+				"two layers resolve to the file %q in the output directory, so one would overwrite the other", name)
+		}
+	}
+	if err := root.Remove(name); err != nil {
+		return nil, nil, err
+	}
+	// Once, and still exclusive. A name taken again in the moment between
+	// the remove and this create is something else writing into the output
+	// directory while this runs, and taking the name from it is not this
+	// command's to do.
+	f, err = root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return nil, nil, err
+	}
+	return withInfo(f)
+}
+
+// withInfo pairs an open file with its identity, which is what later
+// collisions are tested against.
+func withInfo(f *os.File) (*os.File, os.FileInfo, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, fi, nil
 }
