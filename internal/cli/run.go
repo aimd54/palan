@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -102,7 +103,7 @@ opens an interactive chat. With --prompt it answers once and exits; with
 					return checkLoadedContent(ctx, st, ref.String(), local, verified, rehash)
 				}
 			}
-			model, err := ensureModel(ctx, cmd, v, st, ref.String(), check)
+			model, err := ensureModel(ctx, cmd, v, st, ref.String(), verified.Digest, check)
 			if err != nil {
 				return err
 			}
@@ -185,9 +186,18 @@ type modelInfo struct {
 // loadModelInfo parses the artifact's own bytes to decide whether it can be
 // served, so a check placed after it would report a parse failure over
 // content that should never have been opened.
+//
+// expected is the digest a signature was checked against, empty when
+// nothing was checked. It bounds the fetch rather than the load. The check
+// above would catch a substitution either way, but only after the whole
+// substituted artifact had been downloaded, written into the store and
+// tagged under this reference, leaving a refusal that wrote gigabytes and
+// left the tag pointing at what it just refused. Naming the digest up front
+// means the fetch either brings back the artifact that verified or brings
+// back nothing.
 func ensureModel(
 	ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string,
-	check func(context.Context, ocispec.Descriptor) error,
+	expected digest.Digest, check func(context.Context, ocispec.Descriptor) error,
 ) (*modelInfo, error) {
 	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
@@ -205,7 +215,7 @@ func ensureModel(
 			return nil, lerr
 		}
 		pr := newProgress(v.GetBool("quiet"))
-		desc, err = client.Pull(ctx, st, parsed, "", pr.events())
+		desc, err = client.Pull(ctx, st, parsed, expected, pr.events())
 		pr.close(err)
 		unlock()
 		if err != nil {
