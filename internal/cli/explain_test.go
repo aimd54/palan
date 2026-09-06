@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -56,6 +57,9 @@ func runPullInto(t *testing.T, home, ref string) {
 // out by a tabwriter: their widths depend on which links happen to be
 // present, so a hardcoded gap passes or fails for reasons that have nothing
 // to do with the verdict under test.
+// columnGap separates the columns tabwriter padded out.
+var columnGap = regexp.MustCompile(`\s{2,}`)
+
 func renderedVerdicts(t *testing.T, out string) map[string]string {
 	t.Helper()
 	verdicts := make(map[string]string)
@@ -70,13 +74,15 @@ func renderedVerdicts(t *testing.T, out string) map[string]string {
 		default:
 			continue
 		}
-		// A link name can be two words, so it is matched against the names
-		// this package defines rather than split off by position.
-		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, verdict))
-		for _, name := range []string{linkReference, linkSignature, linkPolicy, linkLog, linkSources, linkContent} {
-			if strings.HasPrefix(rest, name+" ") {
-				verdicts[name] = verdict
-			}
+		// Columns, not a list of known names. A link name can be two
+		// words, so it cannot be split off by position; keeping a copy of
+		// the names here instead would mean a link added later is simply
+		// absent from every test that reads this, which is the failure the
+		// chain exists to prevent. The renderer pads its columns, so two
+		// or more spaces is the boundary and a name keeps its single one.
+		fields := columnGap.Split(trimmed, 3)
+		if len(fields) == 3 {
+			verdicts[fields[1]] = verdict
 		}
 	}
 	return verdicts
@@ -270,14 +276,18 @@ func TestRehashRefusesWhenTheBlobsAreNotOnThisHost(t *testing.T) {
 	}
 }
 
-// TestRehashRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag
+// TestVerifyRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag
 // covers the case that would otherwise read as a pass: a tag that moved on
 // the registry while this host kept the old copy and never held a
 // signature, so the signature is checked against what the registry serves
-// now while the blobs here belong to the artifact from before. Re-hashing
-// them would succeed against their own manifest and establish nothing
-// about the one that was verified.
-func TestRehashRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag(t *testing.T) {
+// now while the blobs here belong to the artifact from before.
+//
+// Nothing about the signature is wrong, which is what makes this the
+// dangerous shape. The refusal can only come from comparing what verified
+// against what this host holds, and it has to come without --rehash being
+// asked for: an operator gating a rollout on verify has no second chance,
+// and run would go on to refuse the same reference on the same host.
+func TestVerifyRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag(t *testing.T) {
 	reg := registrytest.New(t)
 	home := t.TempDir()
 	ref := reg.Host() + "/llm/tiny:q4"
@@ -299,18 +309,23 @@ func TestRehashRefusesWhenTheStoreHoldsADifferentArtifactUnderTheSameTag(t *test
 		t.Fatalf("signing the moved tag: %v", err)
 	}
 
-	// Without --rehash this verifies: the registry's copy is signed, and
-	// nothing has looked at what is on disk here.
-	if _, err := runVerifyIn(t, home, ref, "--key", pubKey); err != nil {
-		t.Fatalf("the registry's copy is signed and must verify: %v", err)
+	// The signature is good and covers the artifact the tag names now.
+	// What is wrong is that this host holds a different one under that
+	// reference, and saying "Verified" here would be a verdict about a
+	// copy that is somewhere else.
+	_, err := runVerifyIn(t, home, ref, "--key", pubKey)
+	if err == nil {
+		t.Fatal("verify passed while this host holds a different artifact under the verified reference")
+	}
+	if !strings.Contains(err.Error(), "not the one that verified") {
+		t.Errorf("the refusal does not say the artifact here is not the verified one: %v", err)
 	}
 
-	_, err := runVerifyIn(t, home, ref, "--key", pubKey, "--rehash")
-	if err == nil {
+	// Refused before any blob is read, rather than after: the digests
+	// settle it, and reading whole weight files to reach the same answer
+	// would be gigabytes spent on a question already decided.
+	if _, err := runVerifyIn(t, home, ref, "--key", pubKey, "--rehash"); err == nil {
 		t.Fatal("--rehash reported on blobs belonging to a different artifact")
-	}
-	if !strings.Contains(err.Error(), "not the ones that verified") {
-		t.Errorf("the refusal does not say the blobs here are not the verified ones: %v", err)
 	}
 }
 
@@ -395,5 +410,44 @@ func TestVerifyReadsTheBlobsBackWhenTheConfigAsksRatherThanTheFlag(t *testing.T)
 	}
 	if !strings.Contains(links[linkContent].Detail, "3 blobs") {
 		t.Errorf("the content link does not say what was read: %+v", links[linkContent])
+	}
+}
+
+// TestExplainSaysWhetherThisHostHoldsTheArtifact: every link above this one
+// can be true of a copy that is somewhere else. The signature is read from
+// the registry whenever the store holds a model without holding its
+// signature, and verifying before pulling anything at all is ordinary. A
+// chain that stopped at the signature would describe the registry's copy
+// and read as though it described this host.
+func TestExplainSaysWhetherThisHostHoldsTheArtifact(t *testing.T) {
+	reg := registrytest.New(t)
+	body := []byte("weights this host will come to hold")
+	reg.PutBlob("llm/tiny", body)
+	seedModel(t, reg, "llm/tiny", "q4", []ocispec.Descriptor{localLayer(body, "model.gguf")})
+	ref := reg.Host() + "/llm/tiny:q4"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	// Nothing pulled yet. Verifying is legitimate and must succeed; what
+	// the chain may not do is imply the bytes are here.
+	home := t.TempDir()
+	out, err := runVerifyIn(t, home, ref, "--key", pubKey, "--explain")
+	if err != nil {
+		t.Fatalf("verifying before pulling must work: %v", err)
+	}
+	if got := renderedVerdicts(t, out)[linkLocal]; got != "unproven" {
+		t.Errorf("a host holding nothing reports the local copy as %q", got)
+	}
+
+	runPullInto(t, home, ref)
+	out, err = runVerifyIn(t, home, ref, "--key", pubKey, "--explain")
+	if err != nil {
+		t.Fatalf("verifying what was just pulled: %v", err)
+	}
+	if got := renderedVerdicts(t, out)[linkLocal]; got != "proven" {
+		t.Errorf("the artifact is on this host and the local copy reports %q", got)
 	}
 }
