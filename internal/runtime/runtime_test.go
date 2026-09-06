@@ -153,7 +153,7 @@ func TestPackEnsureRoundTrip(t *testing.T) {
 		t.Fatalf("pack: %v", err)
 	}
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestPackEnsureRoundTrip(t *testing.T) {
 
 	// Idempotent second Ensure, and the materialized binary actually runs
 	// under the supervisor.
-	entry2, err := Ensure(ctx, st, ref)
+	entry2, err := ensureTag(ctx, st, ref)
 	if err != nil || entry2 != entry {
 		t.Fatalf("second ensure: %s (%v)", entry2, err)
 	}
@@ -193,7 +193,7 @@ func TestEnsureRejectsWrongPlatform(t *testing.T) {
 	if _, err := Pack(ctx, st, []PackFile{{Path: fakellamaBin, Name: "llama-server"}}, cfg, ref); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Ensure(ctx, st, ref); err == nil || !strings.Contains(err.Error(), "plan9") {
+	if _, err := ensureTag(ctx, st, ref); err == nil || !strings.Contains(err.Error(), "plan9") {
 		t.Errorf("expected platform mismatch error, got %v", err)
 	}
 }
@@ -227,15 +227,27 @@ func TestResolveFallsBackToPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	p, err := Resolve(context.Background(), st, "")
+	p, err := Resolve(context.Background(), st, "", ocispec.Descriptor{})
 	if err != nil || p != fake {
 		t.Errorf("resolve: %q (%v)", p, err)
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	if _, err := Resolve(context.Background(), st, ""); err == nil {
+	if _, err := Resolve(context.Background(), st, "", ocispec.Descriptor{}); err == nil {
 		t.Error("resolve must fail with no runtime anywhere")
 	}
+}
+
+// ensureTag resolves a tag in the store and materializes what it names,
+// which is the two steps the commands take. Ensure itself is given a
+// descriptor so that the artifact a caller checked is the artifact that
+// gets unpacked, and these tests are not checking anything.
+func ensureTag(ctx context.Context, st *store.Store, ref string) (string, error) {
+	desc, err := st.Resolve(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	return Ensure(ctx, st, ref, desc)
 }
 
 // writeLib drops a plausibly-named shared library into dir.
@@ -375,7 +387,7 @@ func TestEnsureReplacesAnUnpackedEngineThatWasTamperedWith(t *testing.T) {
 	st := openTestStore(t)
 	ref := packRuntime(t, st)
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -387,7 +399,7 @@ func TestEnsureReplacesAnUnpackedEngineThatWasTamperedWith(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	again, err := Ensure(ctx, st, ref)
+	again, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure after tampering: %v", err)
 	}
@@ -420,7 +432,7 @@ func TestEnsureReplacesAnUnpackedTreeThatGainedAFile(t *testing.T) {
 	st := openTestStore(t)
 	ref := packRuntime(t, st)
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -429,7 +441,7 @@ func TestEnsureReplacesAnUnpackedTreeThatGainedAFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Ensure(ctx, st, ref); err != nil {
+	if _, err := ensureTag(ctx, st, ref); err != nil {
 		t.Fatalf("ensure after a file was planted: %v", err)
 	}
 	if _, err := os.Stat(planted); !os.IsNotExist(err) {
@@ -519,7 +531,7 @@ func TestEnsureRefusesAConfigWhoseNameEscapesTheStore(t *testing.T) {
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
 	}, map[string][]byte{"llama-server": []byte("an engine unpacked over somebody else's directory")}, ref)
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("a config naming a path outside the store was accepted")
 	} else if !strings.Contains(err.Error(), "single path component") {
 		t.Errorf("the refusal does not say what is wrong with the config: %v", err)
@@ -541,7 +553,7 @@ func TestEnsureRefusesAnEntrypointTheArtifactDoesNotCarry(t *testing.T) {
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "not-packed",
 	}, map[string][]byte{"llama-server": []byte("the only file this artifact carries")}, ref)
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("an entrypoint the artifact does not carry was accepted")
 	} else if !strings.Contains(err.Error(), "not-packed") {
 		t.Errorf("the refusal does not name the entrypoint: %v", err)
@@ -558,7 +570,7 @@ func TestEnsureRefusesAStoreBlobThatWasRewritten(t *testing.T) {
 	st := openTestStore(t)
 	ref := packRuntime(t, st)
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -590,7 +602,7 @@ func TestEnsureRefusesAStoreBlobThatWasRewritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("an engine was unpacked from a store blob that does not hash to its manifest")
 	} else if !strings.Contains(err.Error(), engine.Digest.String()) {
 		t.Errorf("the refusal does not name the blob: %v", err)
@@ -609,7 +621,7 @@ func TestEnsureRefusesASymlinkedEngine(t *testing.T) {
 	st := openTestStore(t)
 	ref := packRuntime(t, st)
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -628,7 +640,7 @@ func TestEnsureRefusesASymlinkedEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Ensure(ctx, st, ref); err != nil {
+	if _, err := ensureTag(ctx, st, ref); err != nil {
 		t.Fatalf("ensure over a symlinked engine: %v", err)
 	}
 	fi, err := os.Lstat(entry)
@@ -661,7 +673,7 @@ func TestEnsureKeepsTheOldEngineWhenTheUnpackCannotFinish(t *testing.T) {
 	st := openTestStore(t)
 	ref := packRuntime(t, st)
 
-	entry, err := Ensure(ctx, st, ref)
+	entry, err := ensureTag(ctx, st, ref)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -686,7 +698,7 @@ func TestEnsureKeepsTheOldEngineWhenTheUnpackCannotFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("the unpack reported success from a store that cannot supply the files")
 	}
 	if _, err := os.Stat(entry); err != nil {
@@ -719,7 +731,7 @@ func TestEnsureRefusesADigestItCannotCompute(t *testing.T) {
 		Name: "llama-server", Build: "b9", Flavor: "cpu",
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
 	}, map[string][]byte{"llama-server": []byte("an engine digested with an algorithm palan does not link")}, hostile)
-	if _, err := Ensure(ctx, st, ref); err != nil {
+	if _, err := ensureTag(ctx, st, ref); err != nil {
 		t.Fatalf("unpacking the genuine runtime: %v", err)
 	}
 	retagWithDigestAlgorithm(t, st, hostile, "md5:900150983cd24fb0d6963f7d28e17f72")
@@ -727,7 +739,7 @@ func TestEnsureRefusesADigestItCannotCompute(t *testing.T) {
 	// The refusal is the assertion: reaching this line at all means no
 	// panic, and the message has to name the algorithm rather than blame
 	// the file on disk.
-	_, err := Ensure(ctx, st, hostile)
+	_, err := ensureTag(ctx, st, hostile)
 	if err == nil {
 		t.Fatal("a manifest digested with an unavailable algorithm was accepted")
 	}
@@ -793,11 +805,11 @@ func TestEnsureKeepsRuntimesWhoseFlavourLooksLikeAStagingDirectory(t *testing.T)
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
 	}, map[string][]byte{"llama-server": engine}, colliding)
 
-	first, err := Ensure(ctx, st, colliding)
+	first, err := ensureTag(ctx, st, colliding)
 	if err != nil {
 		t.Fatalf("unpacking the runtime whose flavour ends in the staging suffix: %v", err)
 	}
-	if _, err := Ensure(ctx, st, plain); err != nil {
+	if _, err := ensureTag(ctx, st, plain); err != nil {
 		t.Fatalf("unpacking the plain runtime: %v", err)
 	}
 	// Positive state: the first engine is still where it was put.
@@ -815,7 +827,7 @@ func TestEnsureRefusesAConfigNamingTheStoreRoot(t *testing.T) {
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
 	}, map[string][]byte{"llama-server": []byte("an engine unpacked a level too high")}, ref)
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal(`a config naming ".." was accepted, so its directory and its removal sit above the runtimes tree`)
 	} else if !strings.Contains(err.Error(), "single path component") {
 		t.Errorf("the refusal does not say what is wrong with the config: %v", err)
@@ -831,7 +843,7 @@ func TestEnsureRefusesALayerNamedDotDot(t *testing.T) {
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
 	}, map[string][]byte{"llama-server": []byte("an engine"), "..": []byte("a layer naming a directory")}, ref)
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("a layer named \"..\" was accepted")
 	} else if !strings.Contains(err.Error(), "invalid file name") {
 		t.Errorf("the refusal comes from somewhere other than the name check: %v", err)
@@ -865,7 +877,7 @@ func TestEnsureRefusesTwoLayersClaimingOneFileName(t *testing.T) {
 	}, map[string][]byte{"llama-server": []byte("the engine")}, ref)
 	duplicateFirstLayer(t, st, ref)
 
-	if _, err := Ensure(ctx, st, ref); err == nil {
+	if _, err := ensureTag(ctx, st, ref); err == nil {
 		t.Fatal("two layers claiming one file name were unpacked, so one silently replaced the other")
 	} else if !strings.Contains(err.Error(), "llama-server") {
 		t.Errorf("the refusal does not name the file both layers claim: %v", err)
@@ -918,5 +930,56 @@ func TestPackRefusesTwoFilesWithOneName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "llama-server") {
 		t.Errorf("the refusal does not name the file: %v", err)
+	}
+}
+
+// TestEnsureMaterializesTheArtifactItWasGiven: a tag is mutable and the
+// store answers each question on its own, so resolving it to check an
+// engine and resolving it again to unpack one asks twice and acts on the
+// second answer. Between those two moments anything that can write to the
+// store can move the tag, and what gets unpacked and executed is then not
+// what was admitted.
+//
+// Both artifacts here declare the same name, build and flavour, so they
+// materialize to one directory and the only thing separating them is which
+// descriptor Ensure was handed.
+func TestEnsureMaterializesTheArtifactItWasGiven(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	const ref = "registry.example/runtimes/llama-server:b9-cpu"
+	cfg := Config{
+		Name: "llama-server", Build: "b9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+
+	admitted := []byte("#!/bin/sh\n# the engine that was checked\nexit 0\n")
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": admitted}, ref)
+	checked, err := st.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The tag moves to a different engine, exactly as a concurrent pull of
+	// another artifact under the same name would move it.
+	substitute := []byte("#!/bin/sh\n# an engine nothing admitted\nexit 0\n")
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": substitute}, ref)
+	moved, err := st.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Digest == checked.Digest {
+		t.Fatal("the fixture did not move the tag, so this test proves nothing")
+	}
+
+	entry, err := Ensure(ctx, st, ref, checked)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	got, err := os.ReadFile(entry) // #nosec G304 -- path returned by the code under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(admitted) {
+		t.Fatalf("the engine on disk is not the one that was checked, it holds %q", got)
 	}
 }

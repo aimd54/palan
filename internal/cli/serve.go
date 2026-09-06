@@ -87,11 +87,12 @@ to no offload will serve from CPU on a GPU host.`,
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
-			runtimeRef, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
+			var runtimeDesc ocispec.Descriptor
+			runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
 			if err != nil {
 				return err
 			}
-			bin, err := palanruntime.Resolve(ctx, st, runtimeRef)
+			bin, err := palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc)
 			if err != nil {
 				return err
 			}

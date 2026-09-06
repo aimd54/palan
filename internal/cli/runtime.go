@@ -107,7 +107,10 @@ downloaded, and the trust policy decides who may sign it.`,
 			if err != nil {
 				return err
 			}
-			entry, err := palanruntime.Ensure(ctx, st, ref.String())
+			// The descriptor the pull returned, so the engine that is
+			// unpacked is the one whose bytes just arrived and, with
+			// --verify, the one the signature covered.
+			entry, err := palanruntime.Ensure(ctx, st, ref.String(), pulled)
 			if err != nil {
 				return err
 			}
@@ -138,14 +141,16 @@ downloaded, and the trust policy decides who may sign it.`,
 // llama-server comes from PATH. That binary arrived by some other route and
 // there is nothing here to hold it to, which is said rather than passed
 // over: silence would read the same as a runtime that was checked.
+//
+// The descriptor comes back with the name because it is the artifact that
+// was admitted, and unpacking has to act on that rather than ask the store
+// what the tag means for a second time. It is the zero value only when the
+// reference was empty, in which case there is no artifact to unpack.
 func checkRuntime(
 	ctx context.Context, w io.Writer, v *viper.Viper, st *store.Store,
 	gate func(context.Context, string) (ocispec.Descriptor, error),
 	ref string, rehash bool,
-) (string, error) {
-	if gate == nil && !rehash {
-		return ref, nil
-	}
+) (string, ocispec.Descriptor, error) {
 	if ref == "" {
 		// The notice belongs to verification rather than to re-reading: a
 		// host that only asked for its blobs to be read back was never
@@ -156,36 +161,45 @@ func checkRuntime(
 				"so llama-server is taken from PATH and palan cannot say where that build came from. "+
 				"Set runtime.ref to a signed runtime artifact to bring it under the same policy.")
 		}
-		return ref, nil
+		return ref, ocispec.Descriptor{}, nil
 	}
 	parsed, err := refname.Parse(ref, v.GetString(keyRegistryDefault))
 	if err != nil {
-		return "", err
+		return "", ocispec.Descriptor{}, err
 	}
 	name := parsed.String()
+	// Resolved here whether or not anything is being checked, because the
+	// descriptor is what gets unpacked either way. The store is read under
+	// the name the reference parses to, which is the name a pull tagged it
+	// under, so a configured reference that leaves the registry or the tag
+	// implicit still finds what was fetched.
+	//
 	// Absence is reported before the signature is checked, so a host that
 	// simply has not pulled the runtime is told that rather than sent to
 	// the registry to verify something it does not hold.
 	local, err := st.Resolve(ctx, name)
 	switch {
 	case errors.Is(err, errdef.ErrNotFound):
-		return "", fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", name, err)
+		return "", ocispec.Descriptor{}, fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", name, err)
 	case err != nil:
 		// A store that cannot answer is a different problem from one that
 		// answered "no", and sending an operator to `runtime pull` for a
 		// permission or corruption failure sends them to the wrong repair.
-		return "", fmt.Errorf("reading the runtime %q from the local store: %w", name, err)
+		return "", ocispec.Descriptor{}, fmt.Errorf("reading the runtime %q from the local store: %w", name, err)
+	}
+	if gate == nil && !rehash {
+		return name, local, nil
 	}
 	var verified ocispec.Descriptor
 	if gate != nil {
 		if verified, err = gate(ctx, name); err != nil {
-			return "", err
+			return "", ocispec.Descriptor{}, err
 		}
 	}
 	if err := checkLoadedContent(ctx, st, name, local, verified, rehash); err != nil {
-		return "", err
+		return "", ocispec.Descriptor{}, err
 	}
-	return name, nil
+	return name, local, nil
 }
 
 func newRuntimeLsCmd() *cobra.Command {

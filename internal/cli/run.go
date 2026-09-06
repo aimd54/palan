@@ -127,11 +127,12 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			}
 			// The engine is held to the same policy as the weights it is
 			// about to read.
-			runtimeRef, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
+			var runtimeDesc ocispec.Descriptor
+			runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
 			if err != nil {
 				return err
 			}
-			if spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef); err != nil {
+			if spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc); err != nil {
 				return err
 			}
 

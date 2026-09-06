@@ -181,9 +181,18 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 	return mDesc, nil
 }
 
-// Ensure materializes the runtime tagged ref from the store and returns the
-// absolute path of its executable entrypoint. Materialization is atomic
-// (temp dir + rename) and idempotent.
+// Ensure materializes the runtime artifact desc from the store and returns
+// the absolute path of its executable entrypoint. Materialization is atomic
+// (temp dir + rename) and idempotent. The ref names the artifact in
+// messages and nothing else reads it.
+//
+// The artifact is named by descriptor rather than looked up by tag, because
+// the caller has already decided which one it means: it resolved the tag,
+// and in the verifying case checked a signature over exactly that digest.
+// Resolving the tag again here would ask the same question a second time
+// and act on the second answer, so a tag that moved in between would put a
+// different engine on disk from the one that was admitted. What is
+// unpacked and executed is what the caller checked.
 //
 // Files already unpacked are held to the digests the manifest records
 // before the path is handed back. The unpacked copy is a plain file tree
@@ -198,11 +207,7 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 // extraction that went wrong and the answer to one that was tampered with,
 // and it restores the idempotence this function claims: the result depends
 // on what the store holds, not on what is already on disk.
-func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
-	desc, err := st.Resolve(ctx, ref)
-	if err != nil {
-		return "", fmt.Errorf("runtime %q not in local store (try `palan runtime pull`): %w", ref, err)
-	}
+func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descriptor) (string, error) {
 	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
 	if err != nil {
 		return "", err
@@ -246,8 +251,12 @@ func Ensure(ctx context.Context, st *store.Store, ref string) (string, error) {
 	// A unique staging directory rather than destDir+".tmp". That name is
 	// itself a legal destination: a runtime whose flavour ends in ".tmp"
 	// resolves to exactly the staging path of another one, so unpacking
-	// either would delete the other's engine. A unique name also stops two
-	// unpacks running at once from writing into the same place.
+	// either would delete the other's engine. A unique name also keeps two
+	// unpacks running at once from staging into the same place, which is
+	// as far as it goes: they still install to one destination, and two
+	// that race there can leave one of them reporting a path that the
+	// other removed. Both would be unpacking a tree the store vouches for,
+	// so this is a failure to start rather than a wrong engine.
 	tmpDir, err := os.MkdirTemp(filepath.Dir(destDir), ".unpack-")
 	if err != nil {
 		return "", err
