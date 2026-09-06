@@ -67,6 +67,19 @@ func Rehash(ctx context.Context, fetcher content.Fetcher, desc ocispec.Descripto
 		return RehashReport{}, fmt.Errorf("decoding the manifest %s: %w", desc.Digest, err)
 	}
 
+	// An image manifest has a config blob. A document carrying no config
+	// decoded cleanly into this struct, which means the media type said
+	// image manifest and the content is something else: an index
+	// relabelled, or a manifest from a shape palan has not been taught.
+	// Named for what it is, because the digest check below would otherwise
+	// report the zero descriptor as an unusable digest, which reads as
+	// tampering and sends an operator looking for damage that is not there.
+	if man.Config.Digest == "" {
+		return RehashReport{}, fmt.Errorf(
+			"the manifest %s records no config blob, so it is not an image manifest whatever its media type says",
+			desc.Digest)
+	}
+
 	report := RehashReport{Blobs: 1, Bytes: desc.Size}
 	blobs := append([]ocispec.Descriptor{man.Config}, man.Layers...)
 	for _, b := range blobs {

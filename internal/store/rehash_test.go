@@ -4,11 +4,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -126,5 +128,33 @@ func TestRehashRefusesAnArtifactShapeItCannotWalk(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ocispec.MediaTypeImageIndex) {
 		t.Errorf("the refusal does not name the shape it was given: %v", err)
+	}
+}
+
+// TestRehashNamesAManifestWithNoConfigForWhatItIs: a document carrying no
+// config decodes into an image manifest without complaint and leaves a zero
+// descriptor where the config belongs. Walking it refuses, which is right,
+// but the refusal came from the digest check and described an unusable
+// digest, which reads as a damaged or tampered artifact and sends an
+// operator looking for harm that never happened. What is actually wrong is
+// the shape.
+func TestRehashNamesAManifestWithNoConfigForWhatItIs(t *testing.T) {
+	s := openTestStore(t)
+	body := []byte(`{"schemaVersion":2,"mediaType":"` + ocispec.MediaTypeImageManifest + `","layers":[]}`)
+	desc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.FromBytes(body),
+		Size:      int64(len(body)),
+	}
+	if err := s.OCI().Push(context.Background(), desc, bytes.NewReader(body)); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	report, err := Rehash(context.Background(), s.OCI(), desc)
+	if err == nil {
+		t.Fatalf("a document with no config was walked, reporting %d blobs read", report.Blobs)
+	}
+	if !strings.Contains(err.Error(), "no config blob") {
+		t.Errorf("the refusal does not say what the document is missing: %v", err)
 	}
 }
