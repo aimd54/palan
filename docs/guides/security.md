@@ -270,6 +270,11 @@ registry's copy is signed and the host's copy is what it fetched, and each
 half on its own is fine. `run` and `serve` compare the two before loading
 anything and refuse when they differ, naming both digests.
 
+`verify` makes the same comparison and refuses the same way, so the command
+an operator reaches for first cannot hand out a verdict the loader will
+contradict. Verifying a reference this host does not hold is still a normal
+thing to do, and the result says so rather than implying the bytes are here.
+
 ### The engine is checked the way the weights are
 
 A runtime artifact is the executable that reads the weights, so a host that
@@ -296,8 +301,11 @@ pointed at that directory. Before the engine is spawned, every file in it is
 held to the digest the manifest records, and a directory that has been altered,
 has gained a file, or has had one replaced by a symlink is discarded and
 unpacked again. The unpack itself checks each blob as it copies, so the
-replacement is trustworthy as well as the tree it replaces. This part needs no
-flag: it is the engine, and it is the object that runs.
+replacement is trustworthy as well as the tree it replaces. What gets unpacked
+is the artifact the check admitted, named by digest rather than looked up by
+tag a second time, so a tag that moves in between cannot put a different engine
+on disk. This part needs no flag: it is the engine, and it is the object that
+runs.
 
 `serve` checks the engine once, when it starts, while it re-checks each model
 on every load and after every eviction. A long-running `serve` will not notice
@@ -319,10 +327,21 @@ covers unpacking an engine and materialising a model with `pull --output`. A
 file that has left the store is addressed by its name alone, and it is what
 something else goes on to read, so leaving the store is the last moment
 anything can check it. Writing out also stays inside the directory it was
-given: a layer may name a nested file, and the write is resolved beneath the
-output directory, so a link at any point along the way cannot send the model
-somewhere else. What remains is the store's own blobs, read in place by
-whatever loads the model.
+given. A layer may name a nested file, and the write is resolved beneath the
+output directory, so a symlink at any point along the way cannot send the
+model somewhere else.
+
+Resolution is not the whole answer, because a hard link is a second name for
+a file that already exists and has no path to resolve: it reports as an
+ordinary file and containment can neither see it nor refuse it. So each file
+is created rather than opened, and a name already in the directory is
+unlinked first. The bytes only ever land in a file the command itself made,
+and materialising twice into one directory still works. Two layers that the
+filesystem underneath would resolve to a single file are refused, which that
+filesystem decides rather than a comparison of the two names.
+
+What remains is the store's own blobs, read in place by whatever loads the
+model.
 
 `--rehash`, or `verify.rehash: true` in the config, reads those blobs back and
 holds each to the digest the manifest records:

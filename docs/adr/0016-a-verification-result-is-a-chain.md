@@ -59,7 +59,12 @@ defer it.
 We will **hold the resident copy to the artifact that verified**, always,
 with no flag. That comparison is a digest against a digest and costs
 nothing, and the failure it catches is not a corrupted store but a correct
-one being vouched for by a signature over something else.
+one being vouched for by a signature over something else. It runs at
+`verify` as well as at load, so the command reached for first cannot hand
+out a verdict the loader will contradict, and the chain carries a link for
+it: an artifact this host does not hold is an ordinary thing to verify, and
+the result says so rather than leaving every link above reading as though
+the bytes were here.
 
 We will **put the runtime channel through the same gate**, at `runtime
 pull` and again before an engine is unpacked or spawned, and we will **hold
@@ -76,6 +81,12 @@ is addressed by its file name and by nothing else, so reading one back is a
 plain file open. That last check takes no flag: it is the object that
 actually runs, and an engine is measured in megabytes where a model is
 measured in gigabytes.
+
+What gets unpacked is named by descriptor rather than looked up by tag a
+second time. A tag is mutable and every lookup is answered on its own, so
+resolving a name to check it and resolving the same name to act on it asks
+a question twice and acts on the second answer. Anything that can write to
+the store in between decides what runs.
 
 A runtime's name, build, flavour and entrypoint are read from the artifact's
 own config blob and joined into the path that unpacking removes and
@@ -143,6 +154,22 @@ engine that was checked.
   land outside the one that was asked for. Checking the components first
   and opening afterwards is not enough, since the path is resolved again at
   open time.
+- Resolving the path is not the whole of containment either. A hard link is
+  a second name for a file that already exists and has no path to resolve,
+  so it reports as an ordinary file and a write through it lands wherever
+  the other name is. Each file is therefore created rather than opened, and
+  a name already in the directory is unlinked first, which keeps the bytes
+  in a file the command itself made while leaving a repeat materialisation
+  working. It also settles whether two layer names are one file by asking
+  the filesystem instead of folding the names, which was wrong in both
+  directions: it refused a legitimate pair where the two names really are
+  two files, and missed the collision on a filesystem folding by a rule
+  that lowercasing does not reproduce.
+- A fetch is bounded by the digest that verified, so a refusal writes
+  nothing. Comparing afterwards is enough to refuse, but only once the
+  substituted artifact has been downloaded, written into the store and
+  tagged under the reference, which leaves the store holding what was just
+  refused and a later load without verification taking it.
 - Revisit the opt-in default at 1.0. If `verify.required` becomes the
   default and the cost of a re-read proves acceptable on the hardware
   people actually serve from, the two should probably move together.
