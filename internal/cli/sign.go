@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
 
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -1031,13 +1033,37 @@ func provenanceLines(layers []attest.Layer) []string {
 			continue
 		}
 		seen[key] = true
+		repo, rev := displaySafe(l.Repo), displaySafe(l.Revision)
 		if l.Revision == "" {
-			lines = append(lines, l.Repo)
+			lines = append(lines, repo)
 			continue
 		}
-		lines = append(lines, l.Repo+"@"+l.Revision)
+		lines = append(lines, repo+"@"+rev)
 	}
 	return lines
+}
+
+// displaySafe renders a string that came out of an artifact so that it
+// cannot forge the output it is printed into.
+//
+// A repository and a revision are read from layer annotations, which no
+// part of the format constrains to printable text. The chain is a column
+// layout meant for a person to read: a newline inside one of these draws an
+// extra row, and a row can be made to read "proven", which is the single
+// claim this output exists to make. An escape sequence rewrites what is
+// already on the screen. A signer the policy admits is enough to plant
+// either, so the artifact's own bytes must not be able to write the verdict
+// beside them.
+//
+// Quoted only when there is something to hide, so an ordinary reference
+// still prints as itself. JSON escapes on its own and needs none of this.
+func displaySafe(s string) string {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 // passwordFunc sources the key password: COSIGN_PASSWORD, else a prompt on
