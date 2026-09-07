@@ -240,43 +240,77 @@ func (s *Store) GC(ctx context.Context) error {
 // A manifest that cannot be read is left alone. GC reclaims storage; it is not
 // the place to act on content it cannot interpret.
 func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
-	entries, err := s.List(ctx)
+	tagged, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	// Everything the layout holds, whether or not a tag reaches it. An
+	// orphaned referrer that has already lost its tag is the case that
+	// matters most and the one a list of tags cannot show: it is
+	// unreachable by name, it still names its subject and so still holds
+	// that subject's blobs, and on oras-go v2.6.2 it stops collection from
+	// returning at all. Removal deletes a referrer along with its tag, so
+	// reaching this state takes an interruption between those two steps, a
+	// store written by other tooling, or a bundle carrying one. Recovering
+	// from it matters more than any of those being likely, because the
+	// command that would repair it is the one that hangs.
+	all, err := s.indexManifests()
 	if err != nil {
 		return err
 	}
 
-	subjects := make(map[digest.Digest]ocispec.Descriptor, len(entries))
-	artifacts := make(map[digest.Digest]bool, len(entries))
-	for _, e := range entries {
+	artifacts := make(map[digest.Digest]bool, len(tagged))
+	refNames := make(map[digest.Digest]string, len(tagged))
+	for _, e := range tagged {
+		refNames[e.Descriptor.Digest] = e.Ref
 		manifest, err := FetchManifest(ctx, s.oci, e.Descriptor)
-		if err != nil {
-			continue
-		}
-		if manifest.Subject == nil {
+		if err != nil || manifest.Subject == nil {
+			// An unreadable manifest counts as an artifact. GC reclaims
+			// storage; it is not the place to sweep away what is attached
+			// to something it could not read.
 			artifacts[e.Descriptor.Digest] = true
-			continue
 		}
-		subjects[e.Descriptor.Digest] = *manifest.Subject
 	}
 
-	for _, e := range entries {
-		subject, isReferrer := subjects[e.Descriptor.Digest]
-		if !isReferrer || artifacts[subject.Digest] {
+	for _, desc := range all {
+		manifest, err := FetchManifest(ctx, s.oci, desc)
+		if err != nil || manifest.Subject == nil {
 			continue
 		}
-		if err := s.oci.Untag(ctx, e.Ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.Ref, err)
+		if artifacts[manifest.Subject.Digest] {
+			continue
 		}
-		// Delete rather than leave it for the sweep below. An untagged
-		// referrer whose subject is not in the reachable graph sends
-		// oras-go v2.6.2's own index reload into an endless loop: it
-		// re-reads the same manifest instead of walking to the next
-		// subject, so leaving one behind hangs GC rather than failing it.
-		if err := s.oci.Delete(ctx, e.Descriptor); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("removing orphaned referrer %q: %w", e.Ref, err)
+		if ref, isTagged := refNames[desc.Digest]; isTagged {
+			if err := s.oci.Untag(ctx, ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+				return fmt.Errorf("unlinking orphaned referrer %q: %w", ref, err)
+			}
+		}
+		if err := s.oci.Delete(ctx, desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing orphaned referrer %s: %w", desc.Digest, err)
 		}
 	}
 	return nil
+}
+
+// indexManifests reads the manifests the OCI layout records, tagged or not.
+//
+// Read from index.json rather than asked of the store, which answers with
+// tags and so cannot describe a manifest that has lost its own. The file is
+// what the image-layout spec defines and what this store already writes, so
+// reading it is reading the store's own record rather than guessing at it.
+func (s *Store) indexManifests() ([]ocispec.Descriptor, error) {
+	raw, err := os.ReadFile(filepath.Join(s.root, "index.json")) // #nosec G304 -- the store's own layout file
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading the store index: %w", err)
+	}
+	var index ocispec.Index
+	if err := json.Unmarshal(raw, &index); err != nil {
+		return nil, fmt.Errorf("decoding the store index: %w", err)
+	}
+	return index.Manifests, nil
 }
 
 // IngestDir returns (creating if needed) the directory holding partial
