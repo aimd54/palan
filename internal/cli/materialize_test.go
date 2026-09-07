@@ -622,3 +622,72 @@ func TestMaterializeLeavesWhatItRefusedToOpen(t *testing.T) {
 		t.Fatalf("the layer this run did write was left behind (%v)", err)
 	}
 }
+
+// TestMaterializeTakesBackAnOutputDirectoryItCreated: nested directories
+// are already tracked so a refusal leaves the tree as it found it, on the
+// argument that the gate pattern is sold on a refusal writing nothing and a
+// directory left behind is something. The output directory itself was
+// created without being held to that.
+func TestMaterializeTakesBackAnOutputDirectoryItCreated(t *testing.T) {
+	reg := registrytest.New(t)
+	first := []byte("the layer that would be written first")
+	second := []byte("the layer that would overwrite it")
+	reg.PutBlob("llm/clash2", first)
+	reg.PutBlob("llm/clash2", second)
+	seedModel(t, reg, "llm/clash2", "v1", []ocispec.Descriptor{
+		localLayer(first, "model.gguf"),
+		localLayer(second, "model.gguf"),
+	})
+	ref := reg.Host() + "/llm/clash2:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "models")
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("two layers claiming one name were materialized")
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the refusal left behind the output directory it created (%v)", err)
+	}
+}
+
+// TestMaterializeKeepsAnOutputDirectoryItWasGiven is the other half: a
+// directory that was already there belongs to whoever made it, and a
+// refusal that removed it would take away a mounted volume.
+func TestMaterializeKeepsAnOutputDirectoryItWasGiven(t *testing.T) {
+	reg := registrytest.New(t)
+	first := []byte("the layer that would be written first")
+	second := []byte("the layer that would overwrite it")
+	reg.PutBlob("llm/clash3", first)
+	reg.PutBlob("llm/clash3", second)
+	seedModel(t, reg, "llm/clash3", "v1", []ocispec.Descriptor{
+		localLayer(first, "model.gguf"),
+		localLayer(second, "model.gguf"),
+	})
+	ref := reg.Host() + "/llm/clash3:v1"
+	priv, privKey := attestKeypair(t)
+	pubKey := attestPubKeyFile(t, priv)
+	if err := runSign(t, ref, privKey); err != nil {
+		t.Fatalf("signing the fixture: %v", err)
+	}
+
+	dir := t.TempDir()
+	if _, err := runPullOutput(t, t.TempDir(), ref, pubKey, dir); err == nil {
+		t.Fatal("two layers claiming one name were materialized")
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("the refusal removed a directory it was handed (%v)", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the refusal left %d entr(ies) in the directory it was handed", len(entries))
+	}
+}
