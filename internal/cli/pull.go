@@ -139,6 +139,12 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 	if err != nil {
 		return nil, err
 	}
+	// Whether the output directory was already there decides whether a
+	// refusal may take it away. Nested directories below are tracked for
+	// the same reason, and leaving the top one behind held it to a
+	// standard the ones under it were held to.
+	_, statErr := os.Lstat(dir)
+	madeDir := errors.Is(statErr, os.ErrNotExist)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
@@ -177,6 +183,14 @@ func materialize(ctx context.Context, st *store.Store, desc ocispec.Descriptor, 
 		// refusal did not create are not in this list and stay.
 		for i := len(madeDirs) - 1; i >= 0; i-- {
 			_ = root.Remove(madeDirs[i])
+		}
+		// The output directory last, and only when this run made it. The
+		// handle has to go first: it is open on the directory being
+		// removed. Any parent components MkdirAll created along the way
+		// stay, since nothing here knows which those were.
+		if madeDir {
+			_ = root.Close()
+			_ = os.Remove(dir)
 		}
 	}()
 	for _, l := range manifest.Layers {
@@ -332,7 +346,7 @@ func createOutputFile(
 ) (*os.File, os.FileInfo, error) {
 	f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err == nil {
-		return withInfo(f)
+		return withInfo(root, name, f)
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, nil, err
@@ -362,15 +376,22 @@ func createOutputFile(
 	if err != nil {
 		return nil, nil, err
 	}
-	return withInfo(f)
+	return withInfo(root, name, f)
 }
 
 // withInfo pairs an open file with its identity, which is what later
 // collisions are tested against.
-func withInfo(f *os.File) (*os.File, os.FileInfo, error) {
+//
+// A file whose identity cannot be read is removed rather than left. The
+// caller records a file for cleanup once it exists, and it learns that a
+// file exists from this returning one, so a handle that got created and
+// then could not be described would otherwise sit in the output directory
+// past a refusal, named after a layer and holding nothing.
+func withInfo(root *os.Root, name string, f *os.File) (*os.File, os.FileInfo, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
+		_ = root.Remove(name)
 		return nil, nil, err
 	}
 	return f, fi, nil
