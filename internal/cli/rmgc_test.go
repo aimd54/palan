@@ -49,12 +49,16 @@ func runRm(t *testing.T, home string, refs ...string) error {
 	return cmd.Execute()
 }
 
-// TestGCReturnsAfterRemovingASignedModel: removing a model untagged its
-// signature and left the manifest in the store, still indexed as a referrer
-// naming a subject no tag reached any more. Collection walks that chain, and
-// on the version of oras-go this builds against the walk does not advance,
-// so gc never returned at all. A command that hangs reports nothing and
-// exits nothing, which no assertion about its output would have caught.
+// TestGCReturnsAfterRemovingASignedModel is the sequence from the report:
+// pull a signed model, remove it, collect. It used to sit there with no
+// output and no error until it was interrupted.
+//
+// It covers the command sequence and nothing finer. Removal now takes the
+// signature away with its tag, so by the time collection runs there is no
+// orphan left for it to find and the weights are already gone; asserting
+// that they went would be asserting what rm did one line earlier. The sweep
+// that recovers a store which reached that state by some other route is
+// covered in internal/store, where the state can be built directly.
 func TestGCReturnsAfterRemovingASignedModel(t *testing.T) {
 	home := t.TempDir()
 	ref, _, weight, _ := signedModelIn(t, home, "llm/tiny")
@@ -80,14 +84,15 @@ func TestGCReturnsAfterRemovingASignedModel(t *testing.T) {
 		t.Fatal("gc did not return after a signed model was removed")
 	}
 
-	// Returning is not the whole claim. The point of collection is that the
-	// weights actually go, and a signature left behind holds them.
+	// The weights are gone by the end of the sequence, which is what the
+	// person who ran it wanted. Which of the two commands freed them is not
+	// this test's claim.
 	st, err := store.Open(context.Background(), home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.BlobPath(weight.Digest); err == nil {
-		t.Fatal("gc returned but the removed model's weights are still on disk")
+		t.Fatal("the removed model's weights are still on disk")
 	}
 }
 
