@@ -262,7 +262,7 @@ provenance reported as unchecked rather than checked.`,
 			// keyless signature names its signer, and that name is what
 			// the policy matched.
 			if verifier.keyless != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "  signer: %s\n", verifier.keyless)
+				fmt.Fprintf(cmd.OutOrStdout(), "  signer: %s\n", displaySafe(verifier.keyless.String()))
 			}
 			for _, p := range report.provenance {
 				fmt.Fprintf(cmd.OutOrStdout(), "  provenance: %s\n", p)
@@ -889,7 +889,8 @@ func attestationMatchesManifest(attested []attest.Layer, man ocispec.Manifest) e
 	// same one on every run.
 	for _, w := range want {
 		if remaining[layerOf(w)] > 0 {
-			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it", w.Digest, w.Path)
+			return fmt.Errorf("layer %s (%s) carries a source annotation but the attestation has no record for it",
+				w.Digest, displaySafe(w.Path))
 		}
 	}
 	return nil
@@ -944,12 +945,12 @@ func claimedSources(ctx context.Context, src verifySource) (int, string) {
 	raw, err := content.FetchAll(ctx, src.target, src.subject)
 	if err != nil {
 		return 0, fmt.Sprintf(
-			"this artifact's manifest could not be read to say whether one was owed: %v", err)
+			"this artifact's manifest could not be read to say whether one was owed: %s", displaySafe(err.Error()))
 	}
 	var man ocispec.Manifest
 	if err := json.Unmarshal(raw, &man); err != nil {
 		return 0, fmt.Sprintf(
-			"this artifact's manifest could not be decoded to say whether one was owed: %v", err)
+			"this artifact's manifest could not be decoded to say whether one was owed: %s", displaySafe(err.Error()))
 	}
 	return len(signing.LayersFromManifest(man)), ""
 }
@@ -1010,7 +1011,8 @@ func unmatchedRecord(a attest.Layer, want []attest.Layer) error {
 		}
 		if a.Repo != w.Repo || a.Path != w.Path || a.Revision != w.Revision {
 			return fmt.Errorf("layer %s: attestation records %s %s@%s, the artifact's manifest records %s %s@%s",
-				a.Digest, a.Repo, a.Path, a.Revision, w.Repo, w.Path, w.Revision)
+				a.Digest, displaySafe(a.Repo), displaySafe(a.Path), displaySafe(a.Revision),
+				displaySafe(w.Repo), displaySafe(w.Path), displaySafe(w.Revision))
 		}
 		if a.Published != w.Published {
 			return fmt.Errorf("layer %s: attestation records published digest %q, the artifact's manifest records %q",
