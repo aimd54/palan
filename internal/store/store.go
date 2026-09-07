@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -42,6 +41,12 @@ const maxJSONBlobSize = 4 * 1024 * 1024
 // takes part in the subject chain collection has to walk, and refusing to
 // look at one leaves it behind for the collector to hang on.
 const maxWalkedManifestSize = 64 * 1024 * 1024
+
+// mediaTypeArtifactManifest is the OCI 1.1 artifact manifest. oras-go keeps
+// its own copy in an internal package, and the collector's subject reader
+// accepts it alongside the two image types, so this has to as well or the
+// two would disagree about which manifests carry a subject.
+const mediaTypeArtifactManifest = "application/vnd.oci.artifact.manifest.v1+json"
 
 // lockRetryInterval is how often lock acquisition retries under contention.
 const lockRetryInterval = 100 * time.Millisecond
@@ -85,6 +90,15 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening OCI layout at %s: %w", root, err)
 	}
+	// Deleting a manifest deletes that manifest. By default the layout also
+	// walks what the delete leaves dangling and removes that too, and a
+	// subject is one of the things a manifest names, so removing a
+	// signature would take the artifact it describes with it, and removing
+	// something attached to a signature would take the signature. Both are
+	// content nothing asked to lose. It is also what `palan rm` and
+	// `palan gc` are documented to divide between them: unlinking is one
+	// command and reclaiming is the other.
+	ociStore.AutoGC = false
 	return &Store{
 		root: root,
 		oci:  ociStore,
@@ -168,10 +182,9 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 }
 
 // Remove unlinks a reference. Content stays until GC reclaims it
-// (`palan rm` unlinks, `palan gc` reclaims), with one exception: removing a
-// referrer deletes its manifest, and the layout reclaims what that leaves
-// unreferenced at the same time. So removing a signed model can free its
-// weights immediately rather than at the next collection.
+// (`palan rm` unlinks, `palan gc` reclaims). A referrer's manifest is
+// deleted rather than merely untagged, for the reason given below, but its
+// blobs go the same way as everything else: at the next collection.
 func (s *Store) Remove(ctx context.Context, ref string) error {
 	// Read before untagging: a referrer is addressed by the tag about to
 	// go, and what it is can only be answered while the tag still answers.
@@ -250,98 +263,99 @@ func (s *Store) GC(ctx context.Context) error {
 // A manifest that cannot be read is left alone. GC reclaims storage; it is not
 // the place to act on content it cannot interpret.
 func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
-	tagged, err := s.List(ctx)
-	if err != nil {
-		return err
-	}
-	// Everything the layout holds, whether or not a tag reaches it. An
-	// orphaned referrer that has already lost its tag is the case that
-	// matters most and the one a list of tags cannot show: it is
-	// unreachable by name, it still names its subject and so still holds
-	// that subject's blobs, and on oras-go v2.6.2 it stops collection from
-	// returning at all. Removal deletes a referrer along with its tag, so
-	// reaching this state takes an interruption between those two steps, a
-	// store written by other tooling, or a bundle carrying one. Recovering
-	// from it matters more than any of those being likely, because the
-	// command that would repair it is the one that hangs.
 	all, err := s.indexManifests()
 	if err != nil {
 		return err
 	}
 
-	named := make(map[digest.Digest][]string, len(tagged))
-	for _, e := range tagged {
-		named[e.Descriptor.Digest] = append(named[e.Descriptor.Digest], e.Ref)
+	named := make(map[digest.Digest][]string, len(all))
+	var roots []ocispec.Descriptor
+	type attached struct {
+		desc    ocispec.Descriptor
+		subject ocispec.Descriptor
+	}
+	var candidates []attached
+	for _, desc := range all {
+		ref := desc.Annotations[ocispec.AnnotationRefName]
+		if ref != "" {
+			named[desc.Digest] = append(named[desc.Digest], ref)
+		}
+		subject, serr := s.subjectOf(ctx, desc)
+		if serr != nil {
+			// Nothing was established about it either way, and a manifest
+			// this cannot read is one the collector cannot read either, so
+			// it fails rather than looping. Collection reclaims storage; it
+			// is not the place to act on content it could not interpret.
+			continue
+		}
+		if subject == nil {
+			// An artifact in its own right, and a root of what is reachable
+			// only when a tag names it.
+			if ref != "" {
+				roots = append(roots, desc)
+			}
+			continue
+		}
+		candidates = append(candidates, attached{desc: desc, subject: *subject})
 	}
 
-	for _, desc := range all {
-		subject, err := s.subjectOf(ctx, desc)
-		if err != nil || subject == nil {
-			// Not a referrer, or a manifest this cannot read. Collection
-			// reclaims storage; it is not the place to act on content it
-			// could not interpret.
+	reachable, err := s.successorClosure(ctx, roots)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range candidates {
+		if reachable[c.subject.Digest] {
 			continue
 		}
-		reaches, err := s.reachesATag(ctx, *subject, named)
-		if err != nil {
-			return err
-		}
-		if reaches {
-			continue
-		}
-		for _, ref := range named[desc.Digest] {
+		for _, ref := range named[c.desc.Digest] {
 			if err := s.oci.Untag(ctx, ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
 				return fmt.Errorf("unlinking orphaned referrer %q: %w", ref, err)
 			}
 		}
-		if err := s.oci.Delete(ctx, desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("removing orphaned referrer %s: %w", desc.Digest, err)
+		if err := s.oci.Delete(ctx, c.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing orphaned referrer %s: %w", c.desc.Digest, err)
 		}
 	}
 	return nil
 }
 
-// reachesATag follows a subject chain and reports whether it arrives at
-// something a tag still names.
+// successorClosure returns every digest reachable from roots by following
+// what each manifest names: its config, its layers, an index's children, and
+// the subject of anything carrying one.
 //
-// The chain, not the first hop. A referrer may describe another referrer,
-// and stopping at one step calls the outer one orphaned while the chain
-// beneath it ends at a live model, so collection would delete a signature
-// nothing had finished with. Deleting it also takes the middle of the
-// chain with it, because a subject is a graph successor and the layout
-// reclaims what that leaves unreferenced. This is the rule oras-go's own
-// collector applies, and disagreeing with it is what makes the difference
-// visible as deleted content rather than as an error.
+// This is the set the collector decides against. It builds the same closure
+// from every tagged descriptor and then asks, for each untagged manifest
+// carrying a subject, whether that subject is in it. Answering with the list
+// of tags instead would call a signature on a tagged index's child an
+// orphan, because the child is reachable without being tagged, and delete a
+// signature the collector would have kept.
 //
-// A subject that is not in the store ends the chain: it reaches nothing, so
-// what named it is orphaned. A subject that is present but unreadable keeps
-// what is attached to it, since nothing was established either way. A cycle
-// reaches nothing and says so rather than following it, which is the shape
-// that hangs the collector this works around.
-func (s *Store) reachesATag(
-	ctx context.Context, start ocispec.Descriptor, named map[digest.Digest][]string,
-) (bool, error) {
-	seen := make(map[digest.Digest]bool)
-	cur := start
-	for {
-		if seen[cur.Digest] {
-			return false, nil
+// A node the store does not hold contributes itself and nothing under it: it
+// is not there to expand, and being absent is exactly what makes whatever
+// named it unreachable.
+func (s *Store) successorClosure(
+	ctx context.Context, roots []ocispec.Descriptor,
+) (map[digest.Digest]bool, error) {
+	reachable := make(map[digest.Digest]bool, len(roots))
+	queue := append([]ocispec.Descriptor(nil), roots...)
+	for len(queue) > 0 {
+		node := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if reachable[node.Digest] {
+			continue
 		}
-		seen[cur.Digest] = true
-		if len(named[cur.Digest]) > 0 {
-			return true, nil
-		}
-		subject, err := s.subjectOf(ctx, cur)
+		reachable[node.Digest] = true
+		successors, err := content.Successors(ctx, s.oci, node)
 		switch {
 		case errors.Is(err, errdef.ErrNotFound) || errors.Is(err, os.ErrNotExist):
-			return false, nil
+			continue
 		case err != nil:
-			return true, nil
-		case subject == nil:
-			return false, nil
+			return nil, fmt.Errorf("walking what %s names: %w", node.Digest, err)
 		}
-		cur = *subject
+		queue = append(queue, successors...)
 	}
+	return reachable, nil
 }
 
 // subjectOf reads the subject a manifest names, and nothing else.
@@ -349,28 +363,37 @@ func (s *Store) reachesATag(
 // Deciding what is still attached to a live artifact is not the same as
 // parsing a manifest in order to act on its contents, so this does not
 // share the bound that protects the latter. A manifest too large for that
-// bound still has a subject, and skipping it here would leave behind
-// exactly the referrer whose chain stops collection from returning: the
-// guard would once again exclude the broken case. It is still bounded,
-// because the point of a bound is not to read something arbitrary into
-// memory.
+// bound still names a subject, and skipping it here would leave behind
+// exactly the referrer the collector then spins on: the guard would once
+// again exclude the broken case. It is still bounded, because the point of
+// a bound is not to read something arbitrary into memory.
+//
+// Otherwise it answers exactly as the collector's own reader does: the same
+// media types carry a subject, the bytes are verified against the digest
+// before they are decoded, and trailing data after the document is an error
+// rather than something to read past. Disagreeing on any of those would
+// mean deciding to keep a manifest the collector will then refuse.
 func (s *Store) subjectOf(ctx context.Context, desc ocispec.Descriptor) (*ocispec.Descriptor, error) {
+	switch desc.MediaType {
+	case ocispec.MediaTypeImageManifest, ocispec.MediaTypeImageIndex, mediaTypeArtifactManifest:
+	default:
+		return nil, nil
+	}
 	if desc.Size <= 0 || desc.Size > maxWalkedManifestSize {
 		return nil, fmt.Errorf("refusing to walk a %s manifest of size %d (limit %d)",
 			desc.MediaType, desc.Size, maxWalkedManifestSize)
 	}
-	rc, err := s.oci.Fetch(ctx, desc)
+	raw, err := content.FetchAll(ctx, s.oci, desc)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rc.Close() }()
-	var envelope struct {
-		Subject *ocispec.Descriptor `json:"subject"`
+	var manifest struct {
+		Subject *ocispec.Descriptor `json:"subject,omitempty"`
 	}
-	if err := json.NewDecoder(io.LimitReader(rc, desc.Size)).Decode(&envelope); err != nil {
+	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return nil, fmt.Errorf("reading the subject of %s: %w", desc.Digest, err)
 	}
-	return envelope.Subject, nil
+	return manifest.Subject, nil
 }
 
 // indexManifests reads the manifests the OCI layout records, tagged or not.

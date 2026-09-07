@@ -111,14 +111,21 @@ func TestGCKeepsAReferrerWhoseSubjectIsStillTagged(t *testing.T) {
 	}
 }
 
-// TestGCKeepsAReferrerWhoseChainReachesATag: a referrer may describe another
-// referrer, so whether one is orphaned is a question about the chain and not
-// about its first hop. Stopping at one step calls the outer one orphaned
-// while the chain beneath it ends at a live model, and deleting it takes the
-// middle of the chain with it, because a subject is a graph successor and
-// the layout reclaims what that leaves unreferenced. Both would go without
-// a word.
-func TestGCKeepsAReferrerWhoseChainReachesATag(t *testing.T) {
+// TestGCRemovesAReferrerOnAnUntaggedReferrer, and keeps the one beneath it.
+//
+// The collector asks one question of an untagged manifest: is the subject it
+// names already in the graph built from the tagged artifacts. It does not
+// follow the answer further, and a subject that is not there does not make
+// it drop the manifest, it makes it read the same manifest again forever.
+// So a referrer describing another referrer is not something to keep: its
+// subject is untagged and is not reachable from any tagged artifact, and
+// leaving it is leaving the input the collector spins on.
+//
+// The one beneath it is a different case and has to survive. Its subject is
+// the model, the model is tagged, and the collector keeps it. Deleting the
+// outer one must not take it along, which is what the layout would do on its
+// own by treating a subject as something the delete leaves dangling.
+func TestGCRemovesAReferrerOnAnUntaggedReferrer(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	const ref = "registry.internal/llm/chain:v1"
@@ -126,15 +133,96 @@ func TestGCKeepsAReferrerWhoseChainReachesATag(t *testing.T) {
 	middle := pushUntaggedReferrer(t, s, model, "a signature over the model")
 	outer := pushUntaggedReferrer(t, s, middle, "something describing the signature")
 
+	done := make(chan error, 1)
+	go func() { done <- s.GC(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("gc: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("gc did not return with a referrer on an untagged referrer")
+	}
+
+	if _, err := s.BlobPath(outer.Digest); err == nil {
+		t.Error("a referrer whose subject no tagged artifact reaches survived collection")
+	}
+	if _, err := s.BlobPath(middle.Digest); err != nil {
+		t.Errorf("collection took the signature on the model along with it: %v", err)
+	}
+	if _, err := s.BlobPath(model.Digest); err != nil {
+		t.Errorf("collection removed a tagged model: %v", err)
+	}
+}
+
+// TestGCKeepsAReferrerOnAChildOfATaggedIndex: what is reachable is not what
+// is tagged. Pulling a multi-platform artifact tags the index and leaves its
+// children untagged, and a signature over one child names a manifest that no
+// tag reaches but that the collector has in its graph, because it indexes
+// everything the tagged descriptors lead to. Deciding from the list of tags
+// would delete a signature the collector would have kept, silently.
+func TestGCKeepsAReferrerOnAChildOfATaggedIndex(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	child := pushTestModel(t, s, "registry.internal/llm/child:tmp", []byte("weights of one platform"))
+	if err := s.OCI().Untag(ctx, "registry.internal/llm/child:tmp"); err != nil {
+		t.Fatal(err)
+	}
+	index := ocispec.Index{
+		MediaType: ocispec.MediaTypeImageIndex,
+		Manifests: []ocispec.Descriptor{child},
+	}
+	raw, err := json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexDesc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageIndex, raw)
+	if err := s.OCI().Push(ctx, indexDesc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OCI().Tag(ctx, indexDesc, "registry.internal/llm/multi:v1"); err != nil {
+		t.Fatal(err)
+	}
+	signature := pushUntaggedReferrer(t, s, child, "a signature over one platform")
+
 	if err := s.GC(ctx); err != nil {
 		t.Fatalf("gc: %v", err)
 	}
-	for name, d := range map[string]ocispec.Descriptor{
-		"the model": model, "the signature on it": middle, "the referrer on the signature": outer,
-	} {
-		if _, err := s.BlobPath(d.Digest); err != nil {
-			t.Errorf("collection removed %s, whose chain reaches a tag: %v", name, err)
-		}
+	if _, err := s.BlobPath(signature.Digest); err != nil {
+		t.Errorf("collection removed a signature over a child of a tagged index: %v", err)
+	}
+	if _, err := s.BlobPath(child.Digest); err != nil {
+		t.Errorf("collection removed a child of a tagged index: %v", err)
+	}
+}
+
+// TestRemoveDeletesTheReferrerManifest: untagging a referrer leaves the
+// manifest in the layout, where it still names its subject and so still
+// holds that subject's blobs, and where the collector spins on it. Removal
+// has to take the manifest, not just the name, and nothing asserted that.
+func TestRemoveDeletesTheReferrerManifest(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/signed:v1", []byte("weights with a signature"))
+	referrer := pushUntaggedReferrer(t, s, model, "a signature to be removed by name")
+	const sigRef = "registry.internal/llm/signed:sha256-deadbeef.sig"
+	if err := s.Tag(ctx, referrer, sigRef); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Remove(ctx, sigRef); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := s.BlobPath(referrer.Digest); err == nil {
+		t.Fatal("removal untagged the referrer and left its manifest in the store")
+	}
+	// The model it described is untouched, and its blobs wait for
+	// collection the way everything else does.
+	if _, err := s.Resolve(ctx, "registry.internal/llm/signed:v1"); err != nil {
+		t.Errorf("removing a signature took the model with it: %v", err)
+	}
+	if _, err := s.BlobPath(model.Digest); err != nil {
+		t.Errorf("removing a signature reclaimed the model's blobs early: %v", err)
 	}
 }
 
