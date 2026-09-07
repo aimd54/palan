@@ -115,10 +115,16 @@ func localLink(rc residentCopy) link {
 // authenticated it for a keyless one.
 func signatureLink(by verifiedBy) link {
 	if by.keyless != nil {
+		// The subject and the issuer come off a certificate, and a
+		// certificate authority can be made to mint a name carrying a
+		// newline. This is a column layout, so that draws a row, and a row
+		// can be made to read proven. Same forging vector as a layer
+		// annotation, one field over.
 		return link{
 			Name:   linkSignature,
 			Proven: true,
-			Detail: fmt.Sprintf("signed by %s, authenticated by %s", by.keyless.Subject, by.keyless.Issuer),
+			Detail: fmt.Sprintf("signed by %s, authenticated by %s",
+				displaySafe(by.keyless.Subject), displaySafe(by.keyless.Issuer)),
 		}
 	}
 	return link{

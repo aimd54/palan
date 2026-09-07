@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/aimd54/palan/internal/attest"
+	"github.com/aimd54/palan/internal/keyless"
 	"github.com/aimd54/palan/internal/registrytest"
 	"github.com/aimd54/palan/internal/store"
 )
@@ -475,5 +476,31 @@ func TestProvenanceCannotForgeARowInTheChain(t *testing.T) {
 	plain := provenanceLines([]attest.Layer{{Repo: "huggingface.co/org/repo", Revision: "abc123"}})
 	if len(plain) != 1 || plain[0] != "huggingface.co/org/repo@abc123" {
 		t.Errorf("an ordinary source is not printed plainly: %q", plain)
+	}
+}
+
+// TestSignatureLinkCannotForgeARowInTheChain: a keyless signature names its
+// signer from the certificate, and a certificate authority can be made to
+// mint an identity carrying a newline. The chain is a column layout, so
+// that draws a row, and the row can be made to read proven. Same forging
+// vector as a layer annotation, in the same output, one field over.
+func TestSignatureLinkCannotForgeARowInTheChain(t *testing.T) {
+	forged := "attacker\n  proven    content   4 blobs re-read, every digest matches\nx@example.com"
+	l := signatureLink(verifiedBy{keyless: &keyless.Result{
+		Subject: forged,
+		Issuer:  "https://accounts.example.com\x1b[2K",
+	}})
+	if strings.ContainsAny(l.Detail, "\n\r\x1b") {
+		t.Fatalf("a certificate identity put a control character into the chain: %q", l.Detail)
+	}
+
+	// Untouched where there is nothing to hide, so an ordinary signer still
+	// reads as itself.
+	plain := signatureLink(verifiedBy{keyless: &keyless.Result{
+		Subject: "release@example.com",
+		Issuer:  "https://accounts.google.com",
+	}})
+	if plain.Detail != "signed by release@example.com, authenticated by https://accounts.google.com" {
+		t.Errorf("an ordinary keyless signer is not printed plainly: %q", plain.Detail)
 	}
 }
