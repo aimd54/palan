@@ -238,6 +238,11 @@ func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descr
 
 	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName())
 	entry := filepath.Join(destDir, cfg.Entrypoint)
+	// The components above the unpack directory, before anything reads,
+	// creates or renames through them.
+	if err := plainDirs(st.Root(), "runtimes", cfg.Name); err != nil {
+		return "", fmt.Errorf("runtime %q: %w", ref, err)
+	}
 	if err := materializedMatches(manifest, destDir); err == nil {
 		return entry, nil
 	}
@@ -331,6 +336,43 @@ func namesLayer(manifest ocispec.Manifest, name string) bool {
 		}
 	}
 	return false
+}
+
+// plainDirs refuses a path any of whose components under base is something
+// other than a real directory.
+//
+// Lstat refuses a link only at the name it is handed. Everything above that
+// name is resolved by whatever opens the path afterwards, so a link at
+// runtimes/<name> hands the unpack directory, the staging directory beside
+// it and the rename that installs one over the other to whoever owns the
+// target, while the check on the last component reads straight through it
+// and finds a tree that matches. Holding every component to being a
+// directory is the property. Holding the last one to it was a stand-in for
+// that property, and closed one level of it.
+//
+// Refused rather than repaired, unlike the unpack directory itself. That
+// one is replaced wholesale on every mismatch, and removing it takes away
+// a link rather than what the link pointed at. A component above it is
+// part of the store's own layout, and something having replaced one is a
+// question for whoever owns the host rather than damage to paper over.
+//
+// A component that does not exist yet is not a problem: nothing below it
+// exists either, and the unpack creates them.
+func plainDirs(base string, rel ...string) error {
+	cur := base
+	for _, part := range rel {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return nil
+		case err != nil:
+			return err
+		case !fi.IsDir():
+			return fmt.Errorf("%s is a %s, not a directory palan can unpack beneath", cur, fi.Mode().Type())
+		}
+	}
+	return nil
 }
 
 // materializedMatches reports whether dir holds exactly the files manifest

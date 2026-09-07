@@ -75,13 +75,19 @@ loader at that directory, so a library added beside the binary is loaded
 without any packed file being touched. Anything that is not a regular file
 is refused rather than followed, since a symlink to a file holding the right
 bytes satisfies a check that reads through it and leaves whoever owns the
-target deciding what runs afterwards. The directory is held to being a
-directory for that reason too, and it is the more dangerous of the two:
-reading a directory follows a link at its name, so a tree somebody else
-owns can be checked file by file and found perfect. Tampering inside a real
-directory is caught and repaired by the next unpack, which is why it
+target deciding what runs afterwards. Every directory on the way is held to
+being a directory for that reason too, and that is the more dangerous of
+the two: reading a directory follows a link at its name, so a tree somebody
+else owns can be checked file by file and found perfect. Tampering inside a
+real directory is caught and repaired by the next unpack, which is why it
 survives nothing; a link makes the check pass on every load, so the repair
-never runs again. The unpack that installs the
+never runs again. Checking only the unpack directory is not enough either,
+since a name is resolved one component at a time and a link above it is
+followed before that check is reached. The unpack directory is replaced
+when it is not a directory, because removing it takes away a link rather
+than what the link pointed at; a component above it is refused, because
+that is the store's own layout and something having replaced one is a
+question for whoever owns the host. The unpack that installs the
 replacement holds each blob to its digest as it copies, because a store blob
 is addressed by its file name and by nothing else, so reading one back is a
 plain file open. That last check takes no flag: it is the object that
