@@ -983,3 +983,79 @@ func TestEnsureMaterializesTheArtifactItWasGiven(t *testing.T) {
 		t.Fatalf("the engine on disk is not the one that was checked, it holds %q", got)
 	}
 }
+
+// TestEnsureRefusesAnUnpackDirectoryThatIsALink: reading a directory
+// follows a link at its name, so a tree somebody else owns can be checked
+// file by file and found perfect, and the entrypoint handed back resolves
+// through the link.
+//
+// The link holds byte-identical copies, which is the whole point. Files
+// that differ are caught by the per-file check and repaired, so they
+// survive nothing. Identical ones pass every check there is, the repair
+// never runs, and the owner of the target can rewrite the binary
+// afterwards for every load from then on.
+func TestEnsureRefusesAnUnpackDirectoryThatIsALink(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	const ref = "registry.example/runtimes/llama-server:b9-cpu"
+	cfg := Config{
+		Name: "llama-server", Build: "b9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+	packed := []byte("#!/bin/sh\n# the engine the manifest records\nexit 0\n")
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": packed}, ref)
+	desc, err := st.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := Ensure(ctx, st, ref, desc)
+	if err != nil {
+		t.Fatalf("first unpack: %v", err)
+	}
+	destDir := filepath.Dir(entry)
+
+	// A tree the attacker owns, carrying byte-identical copies of every
+	// file the manifest names, with the real directory replaced by a link
+	// to it.
+	shadow := filepath.Join(t.TempDir(), "shadow")
+	if err := os.MkdirAll(shadow, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shadow, "llama-server"), packed, 0o700); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(destDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shadow, destDir); err != nil {
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+
+	entry2, err := Ensure(ctx, st, ref, desc)
+	if err != nil {
+		t.Fatalf("a linked unpack directory must be repaired, not refused outright: %v", err)
+	}
+	fi, err := os.Lstat(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the unpack directory is still a link, so every later load checks somebody else's tree")
+	}
+
+	// What that buys, stated as the outcome rather than as the mechanism:
+	// the owner of the linked tree rewrites the binary once the check has
+	// passed, and the path palan hands to the supervisor must not follow
+	// them there.
+	substitute := []byte("#!/bin/sh\n# an engine nothing packed\nexit 7\n")
+	if err := os.WriteFile(filepath.Join(shadow, "llama-server"), substitute, 0o700); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(entry2) // #nosec G304 -- path returned by the code under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(packed) {
+		t.Fatalf("the engine palan would execute holds %q", got)
+	}
+}

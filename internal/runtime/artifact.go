@@ -344,6 +344,21 @@ func materializedMatches(manifest ocispec.Manifest, dir string) error {
 	for _, l := range manifest.Layers {
 		want[l.Annotations[ocispec.AnnotationTitle]] = l
 	}
+	// The directory itself, before its contents. Reading a directory
+	// follows a link at its name, so a symlink here would have every file
+	// inside it checked and found perfect while the tree being checked is
+	// one somebody else owns, and the entrypoint handed back resolves
+	// through the link. Each file is held to being a regular file for the
+	// same reason one level down; leaving the container out meant the
+	// check passed on every load and the unpack that repairs tampering
+	// never ran again.
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is a %s, not the directory palan unpacked", dir, fi.Mode().Type())
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -453,7 +468,11 @@ func copyBlob(st *store.Store, desc ocispec.Descriptor, dest string, mode os.Fil
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) // #nosec G304 -- dest under the store's runtimes dir
+	// Created, not opened. The staging directory is fresh and unpredictable
+	// so no name in it can already be taken, which is exactly why refusing
+	// to write through one costs nothing and keeps the rule the same on
+	// both paths that copy bytes out of the store.
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) // #nosec G304 -- dest under the store's runtimes dir
 	if err != nil {
 		return err
 	}
