@@ -53,12 +53,12 @@ func runRm(t *testing.T, home string, refs ...string) error {
 // pull a signed model, remove it, collect. It used to sit there with no
 // output and no error until it was interrupted.
 //
-// It covers the command sequence and nothing finer. Removal now takes the
-// signature away with its tag, so by the time collection runs there is no
-// orphan left for it to find and the weights are already gone; asserting
-// that they went would be asserting what rm did one line earlier. The sweep
-// that recovers a store which reached that state by some other route is
-// covered in internal/store, where the state can be built directly.
+// It covers the command sequence and nothing finer. Removal takes the
+// signature's manifest away with its tag, so by the time collection runs
+// there is no orphan left for it to find, and collection is what reclaims
+// the blobs. The sweep that recovers a store which reached the orphaned
+// state by some other route is covered in internal/store, where that state
+// can be built directly.
 func TestGCReturnsAfterRemovingASignedModel(t *testing.T) {
 	home := t.TempDir()
 	ref, _, weight, _ := signedModelIn(t, home, "llm/tiny")
@@ -85,8 +85,7 @@ func TestGCReturnsAfterRemovingASignedModel(t *testing.T) {
 	}
 
 	// The weights are gone by the end of the sequence, which is what the
-	// person who ran it wanted. Which of the two commands freed them is not
-	// this test's claim.
+	// person who ran it wanted.
 	st, err := store.Open(context.Background(), home)
 	if err != nil {
 		t.Fatal(err)
