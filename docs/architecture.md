@@ -37,6 +37,17 @@ to the rest of that ecosystem.
 └────────────────────┘  └────────────────────┘  └────────────────────┘
 ```
 
+The chain of custody across those pieces, and the points at which palan
+refuses, is drawn in
+[custody-chain.svg](assets/custody-chain.svg) (source:
+[custody-chain.d2](diagrams/custody-chain.d2)).
+
+![Files and the digests a repository publishes are checked at import; the
+artifact is signed and pushed; it travels to a consuming host through a
+registry, a mirror or an air-gap bundle; a pull is refused before bytes move
+unless the signature verifies, and the check runs again each time a model is
+loaded to be served.](assets/custody-chain.svg)
+
 Three planes make up the system:
 
 1. **Registry plane**: any OCI 1.1 registry; zot is the reference
@@ -147,6 +158,17 @@ storage.
   }
 }
 ```
+
+What that shape looks like as a whole, and which fact is recorded where,
+is drawn in [artifact-shape.svg](assets/artifact-shape.svg) (source:
+[artifact-shape.d2](diagrams/artifact-shape.d2)). Note that
+`io.palan.origin.sha256` appears at two scopes: on the manifest for the
+model's weights, and on each layer for the file that layer was built from.
+
+![A manifest carrying annotations about the model as a whole, pointing at a
+config blob, the raw weight layers, and the companion and documentation
+layers. A cosign signature over the manifest digest is both tagged and
+indexed as a referrer.](assets/artifact-shape.svg)
 
 The config blob (`vnd.cncf.model.config.v1+json`) carries structured
 metadata per the spec: family, parameter count, quantization, context
@@ -300,6 +322,15 @@ the request's `model` field:
 - Streaming responses are a transparent reverse proxy to the child process;
   the router adds only routing, optional bearer auth, and Prometheus
   metrics (`/metrics`: loads, evictions, time-to-first-token, tokens/s).
+
+The states a model passes through, and the refusal a client sees at each
+point, are drawn in [router-lifecycle.svg](assets/router-lifecycle.svg)
+(source: [router-lifecycle.d2](diagrams/router-lifecycle.d2)).
+
+![A request is loaded one at a time per model, checked before loading,
+checked against the memory budget, then served. A loaded model is stopped by
+the idle sweep, by its child exiting, or by eviction when another model needs
+room.](assets/router-lifecycle.svg)
 
 ## Kubernetes integration
 

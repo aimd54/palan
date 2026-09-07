@@ -1,0 +1,88 @@
+# The custody chain: what is checked, and where.
+#
+# Source for docs/assets/custody-chain.svg. Regenerate with `make diagrams`;
+# `make check` fails when the rendered file no longer matches this source.
+#
+# Only shipped behaviour appears here. A step drawn in red refuses, and it
+# refuses before the bytes it guards are stored or served.
+
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    theme-id: 0
+  }
+}
+
+classes: {
+  gate: {
+    style: {
+      stroke: "#b3261e"
+      stroke-width: 2
+      font-color: "#b3261e"
+      fill: "#fdf3f2"
+    }
+  }
+  upstream: {
+    style: {
+      fill: "#f4f4f4"
+      stroke: "#8a8a8a"
+    }
+  }
+  local: {
+    style: {
+      fill: "#eef4fb"
+      stroke: "#5b7fa6"
+    }
+  }
+}
+
+files: "Model repository\nweights, config, tokenizer" {
+  class: upstream
+  shape: page
+}
+
+evidence: "What the publisher states\na digest per LFS file, and\nmodel.sig over every file" {
+  class: upstream
+  shape: document
+}
+
+gate_in: "Checked at import\ndigests, and the signature\nwhen --oms-key is given" {
+  class: gate
+}
+
+artifact: "ModelPack artifact\nraw layers, the origin digest\non each layer, the verifying\nkey on the manifest" {
+  class: local
+}
+
+moved: "Registry, mirror, or air gap\npush, cp, save and load\nthe signature travels on all three" {
+  class: upstream
+  shape: cylinder
+}
+
+gate_pull: "Checked on the way in\npull --verify" {
+  class: gate
+}
+
+store: "Local store\nOCI layout" {
+  class: local
+  shape: cylinder
+}
+
+gate_load: "Checked again on use\nrun, serve" {
+  class: gate
+}
+
+runtime: "llama-server, or the runtime\nalready serving this format" {
+  class: local
+}
+
+files -> gate_in: fetch
+evidence -> gate_in
+gate_in -> artifact: refused unless covered
+artifact -> moved: sign, then push
+moved -> gate_pull
+gate_pull -> store: refused before bytes move
+store -> gate_load
+gate_load -> runtime: refused unless signed

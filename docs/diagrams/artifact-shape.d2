@@ -1,0 +1,70 @@
+# What a packed model looks like in a registry, and where each fact is
+# recorded.
+#
+# Source for docs/assets/artifact-shape.svg. Regenerate with `make diagrams`;
+# the Docs workflow fails when the rendered file no longer matches this source.
+
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    theme-id: 0
+  }
+}
+
+classes: {
+  local: {
+    style: {
+      fill: "#eef4fb"
+      stroke: "#5b7fa6"
+    }
+  }
+  blob: {
+    style: {
+      fill: "#f4f4f4"
+      stroke: "#8a8a8a"
+    }
+  }
+  sig: {
+    style: {
+      fill: "#f3f7f0"
+      stroke: "#4c7a34"
+    }
+  }
+}
+
+manifest: "Manifest\nartifactType:\napplication/vnd.cncf.model.manifest.v1+json\n\nAnnotations about the model as a whole:\n\norg.opencontainers.image.source, .licenses\nio.palan.origin.sha256, for the weights\nio.palan.origin.signer, the key checked\n  at import\nio.palan.serve.defaults\nio.palan.model.context_length" {
+  class: local
+}
+
+config: "Config blob\napplication/vnd.cncf.model.config.v1+json\n\nfamily, parameters, quantization, format,\narchitecture, context length. Read to answer\nls and describe without touching a weight." {
+  class: blob
+}
+
+weights: "Weight layers\napplication/vnd.cncf.model.weight.v1.raw\n\nOne per published file, raw and uncompressed,\nso the blob in the store is the file a runtime opens.\norg.cncf.model.filepath names it.\nio.palan.origin.sha256 records the digest the\npublisher released that file under." {
+  class: blob
+}
+
+extras: "Companion and documentation layers\nweight.config.v1.raw, doc.v1.raw\n\ntokenizer, chat template, licence, notes" {
+  class: blob
+}
+
+signature: "Signature\ncosign payload over the manifest digest" {
+  class: sig
+}
+
+tag: "Tagged sha256-<digest>.sig\nwhat cosign verify reads" {
+  class: sig
+}
+
+referrer: "Indexed as a referrer\nsubject is the manifest, so a registry\nlists it against the model" {
+  class: sig
+}
+
+manifest -> config: config descriptor
+manifest -> weights: layers
+manifest -> extras: layers
+signature -> manifest: signs the digest
+signature -> tag
+signature -> referrer
