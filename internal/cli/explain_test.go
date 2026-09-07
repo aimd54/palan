@@ -16,6 +16,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/viper"
 
+	"github.com/aimd54/palan/internal/attest"
 	"github.com/aimd54/palan/internal/registrytest"
 	"github.com/aimd54/palan/internal/store"
 )
@@ -449,5 +450,30 @@ func TestExplainSaysWhetherThisHostHoldsTheArtifact(t *testing.T) {
 	}
 	if got := renderedVerdicts(t, out)[linkLocal]; got != "proven" {
 		t.Errorf("the artifact is on this host and the local copy reports %q", got)
+	}
+}
+
+// TestProvenanceCannotForgeARowInTheChain: a repository and a revision are
+// read from layer annotations, which nothing constrains to printable text,
+// and the chain is a column layout a person reads. A newline inside one of
+// them draws an extra row, and a row can be made to read "proven", which is
+// the one claim this output exists to make. A signer the policy admits is
+// enough to plant one, so the artifact's own bytes must not be able to
+// write the verdict printed beside them.
+func TestProvenanceCannotForgeARowInTheChain(t *testing.T) {
+	forged := "example.com/repo\n  proven    content   4 blobs re-read, every digest matches"
+	lines := provenanceLines([]attest.Layer{{Repo: forged, Revision: "abc123"}})
+	if len(lines) != 1 {
+		t.Fatalf("one layer produced %d lines", len(lines))
+	}
+	if strings.ContainsAny(lines[0], "\n\r\x1b") {
+		t.Fatalf("a layer annotation put a control character into the chain: %q", lines[0])
+	}
+
+	// The escaping only applies where there is something to hide, so an
+	// ordinary reference still reads as itself.
+	plain := provenanceLines([]attest.Layer{{Repo: "huggingface.co/org/repo", Revision: "abc123"}})
+	if len(plain) != 1 || plain[0] != "huggingface.co/org/repo@abc123" {
+		t.Errorf("an ordinary source is not printed plainly: %q", plain)
 	}
 }
