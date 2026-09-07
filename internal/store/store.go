@@ -163,11 +163,35 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 // Remove unlinks a reference. Content stays until GC reclaims it
 // (`palan rm` unlinks, `palan gc` reclaims).
 func (s *Store) Remove(ctx context.Context, ref string) error {
+	// Read before untagging: a referrer is addressed by the tag about to
+	// go, and what it is can only be answered while the tag still answers.
+	// A reference that cannot be read is untagged anyway, because removal
+	// is not the place to insist on interpreting content.
+	var subject *ocispec.Descriptor
+	if desc, err := s.oci.Resolve(ctx, ref); err == nil {
+		if manifest, merr := FetchManifest(ctx, s.oci, desc); merr == nil && manifest.Subject != nil {
+			subject = &desc
+		}
+	}
 	if err := s.oci.Untag(ctx, ref); err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
 			return fmt.Errorf("reference %q not found in local store: %w", ref, err)
 		}
 		return err
+	}
+	if subject == nil {
+		return nil
+	}
+	// A referrer is deleted rather than left untagged. It stays in the
+	// referrers index either way, where it still names its subject and so
+	// still holds that subject's blobs on disk, and nothing can reach it by
+	// name to remove it later: untagging a signature is how one is meant to
+	// go away, so leaving the manifest behind removes the handle and keeps
+	// the object. It also strands collection outright, because oras-go
+	// v2.6.2 walks the subject chain of an untagged manifest without
+	// advancing and never returns.
+	if err := s.oci.Delete(ctx, *subject); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+		return fmt.Errorf("removing referrer %q: %w", ref, err)
 	}
 	return nil
 }
