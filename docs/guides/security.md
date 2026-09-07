@@ -300,7 +300,10 @@ there, so its presence says nothing about its bytes, and the dynamic loader is
 pointed at that directory. Before the engine is spawned, every file in it is
 held to the digest the manifest records, and a directory that has been altered,
 has gained a file, or has had one replaced by a symlink is discarded and
-unpacked again. The unpack itself checks each blob as it copies, so the
+unpacked again. The directory itself is held to being a directory, for the
+same reason: reading one follows a link at its name, so a tree somebody else
+owns could otherwise be checked file by file and found perfect, and the check
+would go on passing while its owner rewrote the binary underneath. The unpack itself checks each blob as it copies, so the
 replacement is trustworthy as well as the tree it replaces. What gets unpacked
 is the artifact the check admitted, named by digest rather than looked up by
 tag a second time, so a tag that moves in between cannot put a different engine
@@ -370,6 +373,7 @@ Verified registry.internal/llm/qwen3:8b-q4@sha256:1a2b3c...
   proven    signature   a signature over this digest verifies under the configured key
   proven    policy      this signer is allowed to sign it by verify.policy rule registry.internal/llm/*
   proven    provenance  packed from huggingface.co/org/repo@a1b2c3d
+  proven    local copy  this host holds sha256:1a2b3c... under this reference, which is the artifact that verified
   unproven  content     the blobs were not read back; --rehash holds them to the digests the manifest records
 ```
 
@@ -378,6 +382,13 @@ for an artifact palan did not produce, because a chain shown with its gaps
 removed reads as a chain with no gaps. An artifact packed from local disk
 says so on the provenance line rather than leaving it blank, so a model that
 names no upstream can be told from one whose statement is missing.
+
+The local copy line is where a result stops being about a registry and
+starts being about this host. Verifying a reference nothing has pulled is
+an ordinary thing to do, and there the line reads unproven and says every
+link above it describes the registry's copy. A host holding a different
+artifact under that reference is refused outright rather than reported,
+because that is a link disproven rather than missing.
 
 `--json` prints the same chain for a program, and nothing else goes to the
 stream, so the output parses whole:
