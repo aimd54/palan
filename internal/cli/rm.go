@@ -4,13 +4,16 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/opencontainers/go-digest"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/aimd54/palan/internal/refname"
 	"github.com/aimd54/palan/internal/signing"
+	"github.com/aimd54/palan/internal/store"
 )
 
 func newRmCmd(v *viper.Viper) *cobra.Command {
@@ -54,7 +57,7 @@ func newRmCmd(v *viper.Viper) *cobra.Command {
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", ref)
 
-				// A signature left behind would pin its blobs forever, since
+				// Anything left attached would pin its blobs forever, since
 				// gc reclaims only what no tag references.
 				if resolveErr != nil {
 					continue
@@ -63,13 +66,50 @@ func newRmCmd(v *viper.Viper) *cobra.Command {
 				if err != nil {
 					continue
 				}
-				sigRef := signing.SigRef(parsed, desc.Digest)
-				if err := st.Remove(ctx, sigRef); err == nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", sigRef)
+				// A signature and an attestation are addressed by the
+				// model's digest rather than by its tag, so they belong to
+				// every reference that resolves to it. Another tag still
+				// naming this digest means the model is here under a
+				// different name, and taking away what vouches for it would
+				// leave that name unverifiable.
+				held, err := digestStillTagged(ctx, st, desc.Digest)
+				if err != nil {
+					return err
+				}
+				if held {
+					continue
+				}
+				// The attestation goes the same way as the signature. Both
+				// are manifests naming the model as their subject, and one
+				// left behind holds the model's blobs on disk just as the
+				// other would.
+				for _, attached := range []string{
+					signing.SigRef(parsed, desc.Digest),
+					signing.AttRef(parsed, desc.Digest),
+				} {
+					if err := st.Remove(ctx, attached); err == nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", attached)
+					}
 				}
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Run `palan gc` to reclaim disk space.")
 			return nil
 		},
 	}
+}
+
+// digestStillTagged reports whether any reference in the store resolves to
+// d. A signature and an attestation carry their own digests, so neither
+// answers this about the model they are attached to.
+func digestStillTagged(ctx context.Context, st *store.Store, d digest.Digest) (bool, error) {
+	entries, err := st.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		if e.Descriptor.Digest == d {
+			return true, nil
+		}
+	}
+	return false, nil
 }
