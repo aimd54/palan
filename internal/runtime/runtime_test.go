@@ -1059,3 +1059,64 @@ func TestEnsureRefusesAnUnpackDirectoryThatIsALink(t *testing.T) {
 		t.Fatalf("the engine palan would execute holds %q", got)
 	}
 }
+
+// TestEnsureRefusesALinkAboveTheUnpackDirectory: Lstat refuses a link only
+// at the last component of a path. Every component above the unpack
+// directory is still resolved by whatever opens it, so a link at
+// runtimes/<name> hands the whole tree, staging directory included, to
+// whoever owns the target, and the check one level down reads that tree
+// and finds it perfect.
+func TestEnsureRefusesALinkAboveTheUnpackDirectory(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	const ref = "registry.example/runtimes/llama-server:b9-cpu"
+	cfg := Config{
+		Name: "llama-server", Build: "b9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+	packed := []byte("#!/bin/sh\n# the engine the manifest records\nexit 0\n")
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": packed}, ref)
+	desc, err := st.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A tree the attacker owns, laid out exactly as the store's would be
+	// and carrying byte-identical copies, with the name above the unpack
+	// directory replaced by a link to it.
+	shadow := filepath.Join(t.TempDir(), "shadow")
+	if err := os.MkdirAll(filepath.Join(shadow, "b9-cpu"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shadow, "b9-cpu", "llama-server"), packed, 0o700); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	parent := filepath.Join(st.Root(), "runtimes", "llama-server")
+	if err := os.MkdirAll(filepath.Dir(parent), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shadow, parent); err != nil {
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+
+	entry, err := Ensure(ctx, st, ref, desc)
+	if err != nil {
+		return // refused, which is the outcome this is about
+	}
+	// Accepted. That is only sound if what it accepted is not the linked
+	// tree, so the owner of that tree must not be able to change what runs.
+	substitute := []byte("#!/bin/sh\n# an engine nothing packed\nexit 7\n")
+	if err := os.WriteFile(filepath.Join(shadow, "b9-cpu", "llama-server"), substitute, 0o700); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(entry) // #nosec G304 -- path returned by the code under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(packed) {
+		t.Fatalf("a link above the unpack directory decides what palan executes; it now holds %q", got)
+	}
+}

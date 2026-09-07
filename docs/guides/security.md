@@ -300,10 +300,13 @@ there, so its presence says nothing about its bytes, and the dynamic loader is
 pointed at that directory. Before the engine is spawned, every file in it is
 held to the digest the manifest records, and a directory that has been altered,
 has gained a file, or has had one replaced by a symlink is discarded and
-unpacked again. The directory itself is held to being a directory, for the
-same reason: reading one follows a link at its name, so a tree somebody else
-owns could otherwise be checked file by file and found perfect, and the check
-would go on passing while its owner rewrote the binary underneath. The unpack itself checks each blob as it copies, so the
+unpacked again. Every directory on the way is held to being a directory, for
+the same reason: reading one follows a link at its name, so a tree somebody
+else owns could otherwise be checked file by file and found perfect, and the
+check would go on passing while its owner rewrote the binary underneath. The
+unpack directory is replaced when it is not one; a name above it is refused
+instead, since that is the store's own layout rather than a tree palan
+rebuilds. The unpack itself checks each blob as it copies, so the
 replacement is trustworthy as well as the tree it replaces. What gets unpacked
 is the artifact the check admitted, named by digest rather than looked up by
 tag a second time, so a tag that moves in between cannot put a different engine
