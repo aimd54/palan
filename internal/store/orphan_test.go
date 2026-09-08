@@ -337,3 +337,194 @@ func TestGCKeepsAReferrerOnATaggedReferrer(t *testing.T) {
 		t.Errorf("collection removed a tagged signature over a tagged model: %v", err)
 	}
 }
+
+// pushIndexOver tags an index naming children, so a store can hold a
+// manifest that only a tagged index reaches.
+func pushIndexOver(t *testing.T, s *Store, children []ocispec.Descriptor, tag string) ocispec.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := json.Marshal(ocispec.Index{MediaType: ocispec.MediaTypeImageIndex, Manifests: children})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageIndex, raw)
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if tag != "" {
+		if err := s.Tag(ctx, desc, tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return desc
+}
+
+// returnsWithin runs collection and reports whether it came back at all.
+func returnsWithin(t *testing.T, s *Store, d time.Duration) bool {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- s.GC(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("gc: %v", err)
+		}
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// TestGCReturnsWhenAnIndexNamesAManifestTheStoreDoesNotHold: a node is only
+// reachable once the layout is known to hold it. Recording it first and
+// discovering the absence afterwards left the digest marked, so a referrer
+// naming it was kept, and a subject the collector cannot find is what it
+// reads over and over instead of dropping.
+func TestGCReturnsWhenAnIndexNamesAManifestTheStoreDoesNotHold(t *testing.T) {
+	s := openTestStore(t)
+	absent := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.FromString("a child this store never received"),
+		Size:      321,
+	}
+	pushIndexOver(t, s, []ocispec.Descriptor{absent}, "registry.internal/llm/partial:v1")
+	orphan := pushUntaggedReferrer(t, s, absent, "a signature over the missing child")
+
+	if !returnsWithin(t, s, 30*time.Second) {
+		t.Fatal("gc did not return with a referrer naming a manifest the store does not hold")
+	}
+	if _, err := s.BlobPath(orphan.Digest); err == nil {
+		t.Error("a referrer whose subject the store does not hold survived collection")
+	}
+}
+
+// TestGCReturnsWithAnOrphanPastTheParseBound: the sweep reads a manifest
+// only to find its subject, and the collector reads the same one with no
+// limit. Any size refused here is a manifest the collector still reads and
+// this cannot see, which is the referrer it then spins on.
+func TestGCReturnsWithAnOrphanPastTheParseBound(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const ref = "registry.internal/llm/huge:v1"
+	model := pushTestModel(t, s, ref, []byte("weights held by a very large orphan"))
+	blob := []byte("{}")
+	if err := s.OCI().Push(ctx, content.NewDescriptorFromBytes("application/octet-stream", blob), bytes.NewReader(blob)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(ocispec.Manifest{
+		MediaType:   ocispec.MediaTypeImageManifest,
+		Config:      content.NewDescriptorFromBytes("application/octet-stream", blob),
+		Subject:     &model,
+		Annotations: map[string]string{"io.palan.test.padding": strings.Repeat("p", 8*maxJSONBlobSize)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, raw)
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OCI().Untag(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+
+	if !returnsWithin(t, s, 30*time.Second) {
+		t.Fatalf("gc did not return with a %d-byte orphaned referrer", len(raw))
+	}
+	if _, err := s.BlobPath(desc.Digest); err == nil {
+		t.Error("the oversized orphan survived collection")
+	}
+}
+
+// TestGCKeepsATaggedReferrerOnATaggedReferrer: an attestation over a
+// signature over a model is the ordinary shape. Measuring from the
+// artifacts and taking one hop called it orphaned and deleted it while
+// nothing beneath it had gone anywhere.
+func TestGCKeepsATaggedReferrerOnATaggedReferrer(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/layered:v1", []byte("weights under two tagged referrers"))
+	signature := pushUntaggedReferrer(t, s, model, "a tagged signature")
+	if err := s.Tag(ctx, signature, "registry.internal/llm/layered:sha256-aa.sig"); err != nil {
+		t.Fatal(err)
+	}
+	attestation := pushUntaggedReferrer(t, s, signature, "a tagged attestation over the signature")
+	if err := s.Tag(ctx, attestation, "registry.internal/llm/layered:sha256-aa.att"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	for name, d := range map[string]ocispec.Descriptor{
+		"the model": model, "the signature": signature, "the attestation over the signature": attestation,
+	} {
+		if _, err := s.BlobPath(d.Digest); err != nil {
+			t.Errorf("collection removed %s, which nothing had orphaned: %v", name, err)
+		}
+	}
+}
+
+// TestGCReturnsWhenAnUntaggedReferrerSitsOnAnOrphanedTaggedOne holds the
+// order of the two passes. Unlinking orphaned tagged referrers has to run
+// first: the other pass treats what is still tagged as reachable, so run
+// the other way round it keeps the outer referrer on the strength of a
+// signature the first pass is about to remove, and leaves the collector
+// reading it forever.
+func TestGCReturnsWhenAnUntaggedReferrerSitsOnAnOrphanedTaggedOne(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const ref = "registry.internal/llm/ordered:v1"
+	model := pushTestModel(t, s, ref, []byte("weights whose model tag goes away"))
+	signature := pushUntaggedReferrer(t, s, model, "a signature left tagged behind")
+	if err := s.Tag(ctx, signature, "registry.internal/llm/ordered:sha256-bb.sig"); err != nil {
+		t.Fatal(err)
+	}
+	outer := pushUntaggedReferrer(t, s, signature, "an untagged referrer on that signature")
+	if err := s.OCI().Untag(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+
+	if !returnsWithin(t, s, 30*time.Second) {
+		t.Fatal("gc did not return with an untagged referrer on an orphaned tagged one")
+	}
+	for name, d := range map[string]ocispec.Descriptor{
+		"the model": model, "the orphaned signature": signature, "the referrer on it": outer,
+	} {
+		if _, err := s.BlobPath(d.Digest); err == nil {
+			t.Errorf("%s survived collection though nothing tagged reaches it", name)
+		}
+	}
+}
+
+// TestGCRunsTwice: collection rebuilds the layout's own view without
+// writing it back, so index.json was left naming manifests whose blobs it
+// had just removed, and every later process refused to collect at all. A
+// command that works once and then never again is worse than one that
+// never worked.
+func TestGCRunsTwice(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	first, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ref = "registry.internal/llm/twice:v1"
+	pushTestModel(t, first, ref, []byte("weights of a model that is removed"))
+	if err := first.Remove(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.GC(ctx); err != nil {
+		t.Fatalf("first collection: %v", err)
+	}
+	// A later run is a new process, so a store reading the index off disk.
+	for i := 2; i <= 3; i++ {
+		later, oerr := Open(ctx, dir)
+		if oerr != nil {
+			t.Fatalf("opening the store for run %d: %v", i, oerr)
+		}
+		if err := later.GC(ctx); err != nil {
+			t.Fatalf("collection run %d: %v", i, err)
+		}
+	}
+}
