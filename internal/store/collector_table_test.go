@@ -4,7 +4,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +15,9 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/errdef"
 )
 
 // This table records what the layout's own collector does with each shape a
@@ -103,6 +108,13 @@ func collectorAlone(t *testing.T, dir string, within time.Duration) (returned, c
 }
 
 func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
+	// How many names the table actually held to the collector's answer.
+	// A row where the collector hangs or errors has no answer to compare
+	// against, and a row that declares every name it exposes compares
+	// nothing either. Both are legitimate and both are silent, so the
+	// count is reported and floored: a change that quietly turns the table
+	// into a list of shapes nobody checks fails here instead of passing.
+	compared := 0
 	for _, sh := range collectorShapes() {
 		t.Run(sh.name, func(t *testing.T) {
 			// The reference: what the collector does on its own, on a
@@ -133,7 +145,13 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 			if kept != nil {
 				got := survivors(dir, named)
 				for name, wasKept := range kept {
-					if !wasKept || got[name] {
+					if !wasKept {
+						continue
+					}
+					if _, declared := sh.mayRemove[name]; !declared {
+						compared++
+					}
+					if got[name] {
 						continue
 					}
 					if why, allowed := sh.mayRemove[name]; allowed {
@@ -162,6 +180,77 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 			}
 		})
 	}
+	// The floor is a fraction of the shapes, not a fixed number, so adding
+	// a shape whose collector hangs does not quietly lower the bar.
+	if min := len(collectorShapes()); compared < min {
+		t.Errorf("the table held only %d names to the collector's answer across %d shapes; "+
+			"below one apiece it is a list of stores nobody is checking", compared, min)
+	}
+	t.Logf("held %d names to the collector's answer across %d shapes", compared, len(collectorShapes()))
+}
+
+// pushManifestOver stores a manifest carrying one layer and tags it, so a
+// digest can be reached as a layer rather than as a manifest.
+func pushManifestOver(t *testing.T, s *Store, layer ocispec.Descriptor, tagRef string) ocispec.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+	cfg := content.NewDescriptorFromBytes("application/octet-stream", []byte("{}"))
+	if err := s.OCI().Push(ctx, cfg, bytes.NewReader([]byte("{}"))); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(ocispec.Manifest{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    cfg,
+		Layers:    []ocispec.Descriptor{layer},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, raw)
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Tag(ctx, desc, tagRef); err != nil {
+		t.Fatal(err)
+	}
+	return desc
+}
+
+// nameEntryAfterItsOwnDigest gives one index entry a reference name equal
+// to its digest, which is how the layout records a manifest with no tag and
+// what the collector tests for.
+func nameEntryAfterItsOwnDigest(t *testing.T, root string, d digest.Digest) {
+	t.Helper()
+	path := filepath.Join(root, "index.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- the store's own layout file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx ocispec.Index
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i := range idx.Manifests {
+		if idx.Manifests[i].Digest != d {
+			continue
+		}
+		if idx.Manifests[i].Annotations == nil {
+			idx.Manifests[i].Annotations = map[string]string{}
+		}
+		idx.Manifests[i].Annotations[ocispec.AnnotationRefName] = d.String()
+		found = true
+	}
+	if !found {
+		t.Fatalf("the layout does not list %s", d)
+	}
+	out, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // collectorShapes is the list. Each entry is a store somebody could hand
@@ -186,6 +275,16 @@ func collectorShapes() []shape {
 	tag := func(t *testing.T, s *Store, d ocispec.Descriptor, ref string) {
 		t.Helper()
 		if err := s.Tag(context.Background(), d, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dropBlob := func(t *testing.T, s *Store, d ocispec.Descriptor) {
+		t.Helper()
+		path, err := s.BlobPath(d.Digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -293,6 +392,111 @@ func collectorShapes() []shape {
 			tag(t, s, sig, "registry.internal/llm/shape:sha256-e.sig")
 			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "outer": pushUntaggedReferrer(t, s, sig, "outer")}
 		}, nil},
+		{"a tagged signature over a model whose blob is gone", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("blobless-model"))
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-f.sig")
+			dropBlob(t, s, m)
+			return map[string]ocispec.Descriptor{"sig": sig}
+		}, nil},
+		{"a tagged attestation over a tagged signature over a model whose blob is gone", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("blobless-chain"))
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-g.sig")
+			att := pushUntaggedReferrer(t, s, sig, "att")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-g.att")
+			dropBlob(t, s, m)
+			return map[string]ocispec.Descriptor{"sig": sig, "att": att}
+		}, nil},
+		{"a tagged signature over a blob-less model a tagged index still names", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, "registry.internal/llm/shape:child", []byte("blobless-indexed"))
+			untag(t, s, "registry.internal/llm/shape:child")
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{m}, ref)
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-h.sig")
+			dropBlob(t, s, m)
+			return map[string]ocispec.Descriptor{"index": idx, "sig": sig}
+		}, nil},
+		{"a tagged signature named as a child of a tagged index, over an absent subject", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			absent := ocispec.Descriptor{
+				MediaType: ocispec.MediaTypeImageManifest,
+				Digest:    digest.FromString("a subject never received"),
+				Size:      77,
+			}
+			sig := pushUntaggedReferrer(t, s, absent, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-i.sig")
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{sig}, ref)
+			return map[string]ocispec.Descriptor{"index": idx, "sig": sig}
+		}, nil},
+		{"a tagged signature over the weight layer of an untagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("sig-over-layer"))
+			man, err := FetchManifest(context.Background(), s.OCI(), m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sig := pushUntaggedReferrer(t, s, man.Layers[0], "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-j.sig")
+			untag(t, s, ref)
+			return map[string]ocispec.Descriptor{"sig": sig}
+		}, map[string]string{
+			"sig": "the layer it describes belongs to a model nothing tags any more, so this is the same signature-outlived-its-model case one hop over, and its tag would hold that layer forever",
+		}},
+		{"a tagged signature a tagged index names, over a model that was removed", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("indexed-sig-live-subject"))
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-k.sig")
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{sig}, "registry.internal/llm/shape:holder")
+			untag(t, s, ref)
+			return map[string]ocispec.Descriptor{"index": idx, "sig": sig}
+		}, nil},
+		{"an entry whose reference records its own digest", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			absent := ocispec.Descriptor{
+				MediaType: ocispec.MediaTypeImageManifest,
+				Digest:    digest.FromString("a subject for the self-named entry"),
+				Size:      55,
+			}
+			sig := pushUntaggedReferrer(t, s, absent, "sig")
+			// Written into the index directly: tagging refuses to record a
+			// digest as a reference name, and this shape is what a layout
+			// from other tooling can hold.
+			nameEntryAfterItsOwnDigest(t, s.Root(), sig.Digest)
+			return map[string]ocispec.Descriptor{"sig": sig}
+		}, nil},
+		{"a tagged index naming a tagged signature as an ordinary blob", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("named-as-a-blob"))
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-l.sig")
+			// The child records the signature's digest under a media type
+			// that names no successors, so walking the index reaches the
+			// digest without ever reading the manifest behind it.
+			asBlob := sig
+			asBlob.MediaType = "application/octet-stream"
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{asBlob}, "registry.internal/llm/shape:holder")
+			untag(t, s, ref)
+			return map[string]ocispec.Descriptor{"index": idx, "sig": sig}
+		}, nil},
+		{"a tagged model whose layer is also a tagged signature", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			base := tagged(t, s, ref, []byte("collision-base"))
+			sig := pushUntaggedReferrer(t, s, base, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-m.sig")
+			// A layer is arbitrary bytes, so a manifest may legitimately
+			// carry another manifest's digest as one of its layers.
+			asLayer := sig
+			asLayer.MediaType = "application/octet-stream"
+			carrier := pushManifestOver(t, s, asLayer, "registry.internal/llm/shape:carrier")
+			untag(t, s, ref)
+			return map[string]ocispec.Descriptor{"carrier": carrier, "sig": sig}
+		}, nil},
+		{"a self-named referrer over a subject that is present and unreached", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("self-named-live-subject"))
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			untag(t, s, ref)
+			nameEntryAfterItsOwnDigest(t, s.Root(), sig.Digest)
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig}
+		}, map[string]string{
+			"model": "the model is untagged and only this signature reached it, so both go once the signature does",
+			"sig":   "a signature that outlived its model, reached here through an entry the layout records as untagged",
+		}},
 		{"an index naming a manifest whose blob is gone", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
 			m := tagged(t, s, ref, []byte("half-swept"))
 			untag(t, s, ref)
