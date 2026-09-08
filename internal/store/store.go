@@ -222,19 +222,25 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 // behind by a removed model would hold the whole model on disk and GC would
 // report success having reclaimed nothing.
 func (s *Store) GC(ctx context.Context) error {
-	if err := s.unlinkOrphanedReferrers(ctx); err != nil {
+	if err := s.dropIndexEntriesWithoutBlobs(ctx); err != nil {
 		return err
 	}
-	if err := s.oci.GC(ctx); err != nil {
+	if err := s.unlinkOrphanedReferrers(ctx); err != nil {
 		return err
 	}
 	// Collection rebuilds the layout's own view and does not write it back,
 	// so index.json is left naming manifests whose blobs it just removed.
 	// The next process reads that index, tries to fetch what it names, and
-	// refuses to collect anything ever again. Saving it here is what makes
-	// a second run possible.
-	if err := s.oci.SaveIndex(); err != nil {
-		return fmt.Errorf("saving the store index after collection: %w", err)
+	// refuses to collect anything ever again. Saving it is what makes a
+	// second run possible, and it is saved whether or not collection
+	// finished: the view is rebuilt before the blobs are swept, so a sweep
+	// that stops halfway has already made the old index wrong.
+	gcErr := s.oci.GC(ctx)
+	if err := s.oci.SaveIndex(); err != nil && gcErr == nil {
+		gcErr = fmt.Errorf("saving the store index after collection: %w", err)
+	}
+	if gcErr != nil {
+		return gcErr
 	}
 	ingest := filepath.Join(s.root, "ingest")
 	entries, err := os.ReadDir(ingest)
@@ -247,6 +253,36 @@ func (s *Store) GC(ctx context.Context) error {
 	for _, e := range entries {
 		if err := os.Remove(filepath.Join(ingest, e.Name())); err != nil {
 			return fmt.Errorf("removing stale partial %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// dropIndexEntriesWithoutBlobs removes index entries naming a manifest the
+// layout no longer holds.
+//
+// This is the repair for a collection that did not finish. The view is
+// rebuilt before the blobs are swept, so a sweep interrupted partway leaves
+// index.json naming manifests whose blobs are gone, and every later process
+// fails reloading it before it can do anything about it. Running first means
+// the command that would repair the store is not the command that refuses
+// to start.
+func (s *Store) dropIndexEntriesWithoutBlobs(ctx context.Context) error {
+	all, err := s.indexManifests()
+	if err != nil {
+		return err
+	}
+	for _, desc := range all {
+		present, eerr := s.oci.Exists(ctx, desc)
+		if eerr != nil || present {
+			continue
+		}
+		switch err := s.oci.Delete(ctx, desc); {
+		case err == nil,
+			errors.Is(err, errdef.ErrNotFound),
+			errors.Is(err, os.ErrNotExist):
+		default:
+			return fmt.Errorf("dropping the index entry for the missing manifest %s: %w", desc.Digest, err)
 		}
 	}
 	return nil
@@ -308,7 +344,13 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 	for _, desc := range all {
 		subject, serr := s.subjectOf(ctx, desc)
 		if serr != nil {
-			continue
+			// Recorded with no subject rather than dropped. Both passes
+			// only ever remove an entry that names one, so this is never
+			// deleted, and leaving it out entirely stopped it anchoring
+			// anything: a tagged artifact whose manifest would not read
+			// ceased to be a root, and everything attached to it looked
+			// orphaned.
+			subject = nil
 		}
 		entries = append(entries, entry{
 			desc:    desc,
@@ -336,17 +378,26 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// A tagged referrer whose subject is alive is alive itself, and so is
-	// anything tagged that describes it in turn. An attestation over a
-	// signature over a model is the ordinary case, and taking one hop from
-	// the artifacts would have called it orphaned and deleted it while
-	// nothing beneath it had gone anywhere. Repeated until nothing more is
-	// admitted, which is at most once per tagged referrer.
+	// A referrer whose subject is alive is alive itself, and so is anything
+	// describing it in turn. An attestation over a signature over a model
+	// is the ordinary case, and taking one hop from the artifacts would
+	// have called it orphaned and deleted it while nothing beneath it had
+	// gone anywhere.
+	//
+	// Untagged referrers take part in this even though only tagged ones are
+	// ever removed here. A signature that carries no tag still survives
+	// collection when its subject is reachable, so it is a live link in the
+	// chain, and skipping it broke the chain there: a tagged attestation
+	// over an untagged signature over a tagged model was deleted while the
+	// signature under it was kept.
+	//
+	// Repeated until nothing more is admitted, which is at most once per
+	// referrer.
 	admitted := make(map[digest.Digest]bool, len(entries))
 	for {
 		grew := false
 		for _, e := range entries {
-			if e.ref == "" || e.subject == nil || admitted[e.desc.Digest] {
+			if e.subject == nil || admitted[e.desc.Digest] {
 				continue
 			}
 			if !reachable[e.subject.Digest] {
@@ -446,11 +497,24 @@ func (s *Store) successorClosure(
 		// over instead of dropping.
 		successors, err := content.Successors(ctx, s.oci, node)
 		if err != nil {
-			// Not fatal. Refusing to collect anything because one manifest
-			// somewhere is unreadable leaves a store that can never be
-			// tidied, and the answer for this node is simply that nothing
-			// was established: it is not reachable, and nothing under it
-			// is either.
+			// Absent and unreadable are different answers, and only one of
+			// them is a reason to drop what points here.
+			//
+			// The collector never makes an absent manifest a graph node, and
+			// a subject missing from that graph is what it reads over and
+			// over, so anything naming one has to go. A manifest that is
+			// present but cannot be read makes the collector fail instead,
+			// which is safe, so what is attached to it stays: treating the
+			// two alike deleted signatures over a model whose blob was
+			// briefly unreadable, where the collector would have deleted
+			// nothing at all.
+			//
+			// Not fatal either way. Refusing to collect because one manifest
+			// somewhere cannot be read leaves a store nothing can tidy.
+			if present, eerr := s.oci.Exists(ctx, node); eerr != nil || !present {
+				continue
+			}
+			reachable[node.Digest] = true
 			continue
 		}
 		reachable[node.Digest] = true

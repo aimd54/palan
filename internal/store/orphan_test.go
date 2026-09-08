@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -412,10 +413,14 @@ func TestGCReturnsWithAnOrphanPastTheParseBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, err := json.Marshal(ocispec.Manifest{
-		MediaType:   ocispec.MediaTypeImageManifest,
-		Config:      content.NewDescriptorFromBytes("application/octet-stream", blob),
-		Subject:     &model,
-		Annotations: map[string]string{"io.palan.test.padding": strings.Repeat("p", 8*maxJSONBlobSize)},
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    content.NewDescriptorFromBytes("application/octet-stream", blob),
+		Subject:   &model,
+		// Past 64 MiB, which is the bound this read used to carry. Padding
+		// to a multiple of the parse bound tested a size the read already
+		// accepted, so it stood in for the limit that actually excluded
+		// rather than crossing it.
+		Annotations: map[string]string{"io.palan.test.padding": strings.Repeat("p", 17*maxJSONBlobSize)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -526,5 +531,109 @@ func TestGCRunsTwice(t *testing.T) {
 		if err := later.GC(ctx); err != nil {
 			t.Fatalf("collection run %d: %v", i, err)
 		}
+	}
+}
+
+// TestGCKeepsATaggedReferrerOverAnUntaggedOne: a signature that carries no
+// tag still survives collection when its subject is reachable, so it is a
+// live link in the chain. Admitting only tagged links broke the chain
+// there, and a tagged attestation over an untagged signature over a tagged
+// model was deleted while the signature under it was kept. Nothing had been
+// removed, and the collector on the same store keeps all three.
+func TestGCKeepsATaggedReferrerOverAnUntaggedOne(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/mixed:v1", []byte("weights under a mixed chain"))
+	signature := pushUntaggedReferrer(t, s, model, "an untagged signature")
+	attestation := pushUntaggedReferrer(t, s, signature, "a tagged attestation over it")
+	if err := s.Tag(ctx, attestation, "registry.internal/llm/mixed:sha256-dd.att"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	for name, d := range map[string]ocispec.Descriptor{
+		"the model": model, "the untagged signature": signature, "the tagged attestation": attestation,
+	} {
+		if _, err := s.BlobPath(d.Digest); err != nil {
+			t.Errorf("collection removed %s, on a chain where nothing was removed: %v", name, err)
+		}
+	}
+}
+
+// TestGCKeepsWhatHangsOffAManifestItCannotRead: absent and unreadable are
+// different answers and only one is a reason to drop what points at it. A
+// manifest that is present but will not read makes the collector fail,
+// which loses nothing; treating it as absent made collection delete every
+// signature over a model whose blob was briefly unreadable, and then report
+// an error, so the operator believes nothing happened.
+func TestGCKeepsWhatHangsOffAManifestItCannotRead(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const ref = "registry.internal/llm/unreadable:v1"
+	model := pushTestModel(t, s, ref, []byte("weights whose manifest stops reading"))
+	signature := pushUntaggedReferrer(t, s, model, "a signature over it")
+
+	path, err := s.BlobPath(model.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Skipf("this filesystem does not enforce mode bits: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, rerr := os.ReadFile(path); rerr == nil { // #nosec G304 -- test fixture under a temp dir
+		t.Skip("running as a user that reads regardless of mode")
+	}
+
+	// Collection may fail here, which is fine and is what the collector
+	// does. What it may not do is take the signature with it.
+	_ = s.GC(ctx)
+	if _, err := s.BlobPath(signature.Digest); err != nil {
+		t.Errorf("collection removed a signature over a model it merely could not read: %v", err)
+	}
+}
+
+// TestGCRepairsAnIndexLeftNamingAMissingManifest: collection rebuilds the
+// layout's view before it sweeps blobs, so a sweep that stops halfway
+// leaves index.json naming manifests whose blobs are gone, and every later
+// process fails reloading it. The command that would repair that state must
+// not be the command that refuses to start.
+func TestGCRepairsAnIndexLeftNamingAMissingManifest(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ref = "registry.internal/llm/halfswept:v1"
+	model := pushTestModel(t, s, ref, []byte("weights whose manifest blob is removed under it"))
+	if err := s.OCI().Untag(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	// The blob goes while index.json still names it, which is exactly what
+	// an interrupted sweep leaves behind.
+	path, err := s.BlobPath(model.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	later, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("opening a store left in that state: %v", err)
+	}
+	if err := later.GC(ctx); err != nil {
+		t.Fatalf("collection could not repair a half-swept store: %v", err)
+	}
+	again, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.GC(ctx); err != nil {
+		t.Fatalf("collection still fails after the repair: %v", err)
 	}
 }
