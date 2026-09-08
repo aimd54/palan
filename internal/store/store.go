@@ -263,58 +263,115 @@ func (s *Store) GC(ctx context.Context) error {
 // A manifest that cannot be read is left alone. GC reclaims storage; it is not
 // the place to act on content it cannot interpret.
 func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
+	// Two passes, because two different questions are being asked and only
+	// one of them is the collector's.
+	//
+	// The first is this store's own policy: a signature whose model has
+	// been removed is not worth keeping, and while its tag stands it holds
+	// the model's blobs on disk, so collection would report success having
+	// reclaimed nothing. The collector would keep it, because it is tagged.
+	// Reachability here is therefore measured from tagged artifacts only,
+	// meaning tagged manifests that describe something rather than
+	// describing another manifest.
+	if err := s.unlinkOrphanedTagged(ctx); err != nil {
+		return err
+	}
+	// The second is the collector's question, asked of what is left. It
+	// tests one hop, against a graph built from every tagged descriptor,
+	// referrers included, and a subject it cannot place makes it read the
+	// same manifest forever rather than drop it. So anything untagged whose
+	// subject is outside that graph has to go, and anything inside it has
+	// to stay: deleting one the collector would have kept is silent content
+	// loss, and keeping one it cannot place is the hang.
+	return s.deleteUnreachableUntagged(ctx)
+}
+
+// entry is one manifest the layout records, with what it is named and what
+// it describes.
+type entry struct {
+	desc    ocispec.Descriptor
+	ref     string
+	subject *ocispec.Descriptor
+}
+
+// readIndex classifies every manifest the layout records. A manifest whose
+// subject cannot be read is left out: nothing was established about it, and
+// the collector reading it will fail rather than loop.
+func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 	all, err := s.indexManifests()
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]entry, 0, len(all))
+	for _, desc := range all {
+		subject, serr := s.subjectOf(ctx, desc)
+		if serr != nil {
+			continue
+		}
+		entries = append(entries, entry{
+			desc:    desc,
+			ref:     desc.Annotations[ocispec.AnnotationRefName],
+			subject: subject,
+		})
+	}
+	return entries, nil
+}
+
+// unlinkOrphanedTagged removes a tagged referrer that no tagged artifact
+// reaches, so the blobs it was holding can be collected.
+func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
+	entries, err := s.readIndex(ctx)
 	if err != nil {
 		return err
 	}
-
-	named := make(map[digest.Digest][]string, len(all))
 	var roots []ocispec.Descriptor
-	type attached struct {
-		desc    ocispec.Descriptor
-		subject ocispec.Descriptor
+	for _, e := range entries {
+		if e.ref != "" && e.subject == nil {
+			roots = append(roots, e.desc)
+		}
 	}
-	var candidates []attached
-	for _, desc := range all {
-		ref := desc.Annotations[ocispec.AnnotationRefName]
-		if ref != "" {
-			named[desc.Digest] = append(named[desc.Digest], ref)
-		}
-		subject, serr := s.subjectOf(ctx, desc)
-		if serr != nil {
-			// Nothing was established about it either way, and a manifest
-			// this cannot read is one the collector cannot read either, so
-			// it fails rather than looping. Collection reclaims storage; it
-			// is not the place to act on content it could not interpret.
-			continue
-		}
-		if subject == nil {
-			// An artifact in its own right, and a root of what is reachable
-			// only when a tag names it.
-			if ref != "" {
-				roots = append(roots, desc)
-			}
-			continue
-		}
-		candidates = append(candidates, attached{desc: desc, subject: *subject})
-	}
-
 	reachable, err := s.successorClosure(ctx, roots)
 	if err != nil {
 		return err
 	}
-
-	for _, c := range candidates {
-		if reachable[c.subject.Digest] {
+	for _, e := range entries {
+		if e.ref == "" || e.subject == nil || reachable[e.subject.Digest] {
 			continue
 		}
-		for _, ref := range named[c.desc.Digest] {
-			if err := s.oci.Untag(ctx, ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-				return fmt.Errorf("unlinking orphaned referrer %q: %w", ref, err)
-			}
+		if err := s.oci.Untag(ctx, e.ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.ref, err)
 		}
-		if err := s.oci.Delete(ctx, c.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("removing orphaned referrer %s: %w", c.desc.Digest, err)
+		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing orphaned referrer %q: %w", e.ref, err)
+		}
+	}
+	return nil
+}
+
+// deleteUnreachableUntagged removes an untagged manifest whose subject is
+// outside the graph the collector builds, which is the input it spins on.
+// The index is read again, because the pass before this one changed it.
+func (s *Store) deleteUnreachableUntagged(ctx context.Context) error {
+	entries, err := s.readIndex(ctx)
+	if err != nil {
+		return err
+	}
+	var roots []ocispec.Descriptor
+	for _, e := range entries {
+		if e.ref != "" {
+			roots = append(roots, e.desc)
+		}
+	}
+	reachable, err := s.successorClosure(ctx, roots)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.ref != "" || e.subject == nil || reachable[e.subject.Digest] {
+			continue
+		}
+		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing unreachable referrer %s: %w", e.desc.Digest, err)
 		}
 	}
 	return nil

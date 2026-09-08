@@ -307,3 +307,33 @@ func TestGCRemovesAReferrerWhoseSubjectIsGone(t *testing.T) {
 		t.Error("a referrer naming a subject the store does not hold survived collection")
 	}
 }
+
+// TestGCKeepsAReferrerOnATaggedReferrer: the collector builds its graph from
+// every tagged descriptor, referrers included, so a signature that is itself
+// tagged is in that graph and something naming it is reachable. Measuring
+// reachability from tagged artifacts alone answers a different question,
+// which is the right one for deciding whether a signature has outlived its
+// model and the wrong one for deciding what the collector can place. Using
+// the first answer for the second deleted content the collector would have
+// kept, silently.
+func TestGCKeepsAReferrerOnATaggedReferrer(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/attested:v1", []byte("weights with a tagged signature"))
+	signature := pushUntaggedReferrer(t, s, model, "a signature that carries a tag")
+	const sigRef = "registry.internal/llm/attested:sha256-cafe.sig"
+	if err := s.Tag(ctx, signature, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	outer := pushUntaggedReferrer(t, s, signature, "something describing the signature")
+
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	if _, err := s.BlobPath(outer.Digest); err != nil {
+		t.Errorf("collection removed a referrer on a tagged signature, which the collector reaches: %v", err)
+	}
+	if _, err := s.BlobPath(signature.Digest); err != nil {
+		t.Errorf("collection removed a tagged signature over a tagged model: %v", err)
+	}
+}
