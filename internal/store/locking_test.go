@@ -145,3 +145,44 @@ func TestAFailedReloadReleasesTheLock(t *testing.T) {
 	}
 	unlock()
 }
+
+// TestAFailedReloadReleasesTheSharedLock is the same guarantee on the read
+// side, and it matters more there. A command holds one store for as long as
+// it runs, so a shared lock leaked by a re-read that failed blocks every
+// pull, collection and removal on the host until that process is killed.
+func TestAFailedReloadReleasesTheSharedLock(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushTestModel(t, s, "registry.internal/llm/shared-wedge:v1", []byte("weights"))
+
+	index := filepath.Join(dir, "index.json")
+	if err := os.WriteFile(index, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, rerr := s.RLock(ctx); rerr == nil {
+		t.Fatal("the shared lock was granted over a layout that cannot be read")
+	}
+
+	if err := os.WriteFile(index, []byte(`{"schemaVersion":2,"manifests":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An exclusive lock, because that is what a shared one left behind
+	// would refuse. Bounded, since a lock still held makes this wait rather
+	// than fail, and a test that hangs says the same thing as one that
+	// never ran.
+	next, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	unlock, err := next.Lock(waiting)
+	if err != nil {
+		t.Fatalf("a shared lock was left held by a command that failed to start: %v", err)
+	}
+	unlock()
+}
