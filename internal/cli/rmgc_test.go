@@ -72,7 +72,10 @@ func TestGCReturnsAfterRemovingASignedModel(t *testing.T) {
 		cmd := newGCCmd()
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
-		cmd.SetArgs(nil)
+		// Not nil: cobra reads os.Args[1:] when the slice is nil, so the
+		// test binary's own flags reach the command and it fails on an
+		// unknown argument instead of running.
+		cmd.SetArgs([]string{})
 		done <- cmd.Execute()
 	}()
 	select {
