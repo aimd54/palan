@@ -36,12 +36,6 @@ const EnvHome = "PALAN_HOME"
 // this limit is malformed or hostile.
 const maxJSONBlobSize = 4 * 1024 * 1024
 
-// maxWalkedManifestSize bounds a manifest read only to find its subject.
-// Larger than the parse bound on purpose: a manifest past that bound still
-// takes part in the subject chain collection has to walk, and refusing to
-// look at one leaves it behind for the collector to hang on.
-const maxWalkedManifestSize = 64 * 1024 * 1024
-
 // mediaTypeArtifactManifest is the OCI 1.1 artifact manifest. oras-go keeps
 // its own copy in an internal package, and the collector's subject reader
 // accepts it alongside the two image types, so this has to as well or the
@@ -234,6 +228,14 @@ func (s *Store) GC(ctx context.Context) error {
 	if err := s.oci.GC(ctx); err != nil {
 		return err
 	}
+	// Collection rebuilds the layout's own view and does not write it back,
+	// so index.json is left naming manifests whose blobs it just removed.
+	// The next process reads that index, tries to fetch what it names, and
+	// refuses to collect anything ever again. Saving it here is what makes
+	// a second run possible.
+	if err := s.oci.SaveIndex(); err != nil {
+		return fmt.Errorf("saving the store index after collection: %w", err)
+	}
 	ingest := filepath.Join(s.root, "ingest")
 	entries, err := os.ReadDir(ingest)
 	if err != nil {
@@ -334,8 +336,38 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A tagged referrer whose subject is alive is alive itself, and so is
+	// anything tagged that describes it in turn. An attestation over a
+	// signature over a model is the ordinary case, and taking one hop from
+	// the artifacts would have called it orphaned and deleted it while
+	// nothing beneath it had gone anywhere. Repeated until nothing more is
+	// admitted, which is at most once per tagged referrer.
+	admitted := make(map[digest.Digest]bool, len(entries))
+	for {
+		grew := false
+		for _, e := range entries {
+			if e.ref == "" || e.subject == nil || admitted[e.desc.Digest] {
+				continue
+			}
+			if !reachable[e.subject.Digest] {
+				continue
+			}
+			admitted[e.desc.Digest] = true
+			grew = true
+			under, cerr := s.successorClosure(ctx, []ocispec.Descriptor{e.desc})
+			if cerr != nil {
+				return cerr
+			}
+			for d := range under {
+				reachable[d] = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
 	for _, e := range entries {
-		if e.ref == "" || e.subject == nil || reachable[e.subject.Digest] {
+		if e.ref == "" || e.subject == nil || admitted[e.desc.Digest] {
 			continue
 		}
 		if err := s.oci.Untag(ctx, e.ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
@@ -395,21 +427,33 @@ func (s *Store) successorClosure(
 	ctx context.Context, roots []ocispec.Descriptor,
 ) (map[digest.Digest]bool, error) {
 	reachable := make(map[digest.Digest]bool, len(roots))
+	visited := make(map[digest.Digest]bool, len(roots))
 	queue := append([]ocispec.Descriptor(nil), roots...)
 	for len(queue) > 0 {
 		node := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
-		if reachable[node.Digest] {
+		if visited[node.Digest] {
+			continue
+		}
+		visited[node.Digest] = true
+		// Read before recording, and record only on success. The collector
+		// builds its graph the same way round: it asks for a node's
+		// successors first and returns without adding the node when that
+		// fails, so a manifest the layout does not hold is never in the
+		// graph. Recording first and discovering the absence afterwards
+		// left the digest marked, so a referrer naming it was kept, and a
+		// subject the collector cannot find is the thing it reads over and
+		// over instead of dropping.
+		successors, err := content.Successors(ctx, s.oci, node)
+		if err != nil {
+			// Not fatal. Refusing to collect anything because one manifest
+			// somewhere is unreadable leaves a store that can never be
+			// tidied, and the answer for this node is simply that nothing
+			// was established: it is not reachable, and nothing under it
+			// is either.
 			continue
 		}
 		reachable[node.Digest] = true
-		successors, err := content.Successors(ctx, s.oci, node)
-		switch {
-		case errors.Is(err, errdef.ErrNotFound) || errors.Is(err, os.ErrNotExist):
-			continue
-		case err != nil:
-			return nil, fmt.Errorf("walking what %s names: %w", node.Digest, err)
-		}
 		queue = append(queue, successors...)
 	}
 	return reachable, nil
@@ -419,11 +463,11 @@ func (s *Store) successorClosure(
 //
 // Deciding what is still attached to a live artifact is not the same as
 // parsing a manifest in order to act on its contents, so this does not
-// share the bound that protects the latter. A manifest too large for that
-// bound still names a subject, and skipping it here would leave behind
-// exactly the referrer the collector then spins on: the guard would once
-// again exclude the broken case. It is still bounded, because the point of
-// a bound is not to read something arbitrary into memory.
+// share the bound that protects the latter, and it carries no bound of its
+// own either. The collector reads the same manifest with no limit, so any
+// size this refused would be a manifest it still reads and this cannot
+// see, which is the referrer it then spins on. Refusing to look is not
+// caution here; it is the defect.
 //
 // Otherwise it answers exactly as the collector's own reader does: the same
 // media types carry a subject, the bytes are verified against the digest
@@ -435,10 +479,6 @@ func (s *Store) subjectOf(ctx context.Context, desc ocispec.Descriptor) (*ocispe
 	case ocispec.MediaTypeImageManifest, ocispec.MediaTypeImageIndex, mediaTypeArtifactManifest:
 	default:
 		return nil, nil
-	}
-	if desc.Size <= 0 || desc.Size > maxWalkedManifestSize {
-		return nil, fmt.Errorf("refusing to walk a %s manifest of size %d (limit %d)",
-			desc.MediaType, desc.Size, maxWalkedManifestSize)
 	}
 	raw, err := content.FetchAll(ctx, s.oci, desc)
 	if err != nil {
