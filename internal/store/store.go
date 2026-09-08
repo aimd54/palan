@@ -80,6 +80,19 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("creating store root: %w", err)
 	}
+	ociStore, err := openLayout(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{
+		root: root,
+		oci:  ociStore,
+		lk:   flock.New(filepath.Join(root, ".palan.lock")),
+	}, nil
+}
+
+// openLayout reads the OCI layout at root into memory.
+func openLayout(ctx context.Context, root string) (*oci.Store, error) {
 	ociStore, err := oci.NewWithContext(ctx, root)
 	if err != nil {
 		return nil, fmt.Errorf("opening OCI layout at %s: %w", root, err)
@@ -93,11 +106,28 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	// `palan gc` are documented to divide between them: unlinking is one
 	// command and reclaiming is the other.
 	ociStore.AutoGC = false
-	return &Store{
-		root: root,
-		oci:  ociStore,
-		lk:   flock.New(filepath.Join(root, ".palan.lock")),
-	}, nil
+	return ociStore, nil
+}
+
+// reload re-reads the layout, and is called once a lock is held.
+//
+// Opening a store reads what the layout holds; the lock is what makes that
+// answer stay true. Everything written between the two is invisible to
+// whoever opened first, and a collector that waited behind a pull walked a
+// view from before it, found the arriving model's blobs unreferenced and
+// removed them. Both commands reported success.
+//
+// Re-reading here rather than at each caller because the property wanted is
+// that holding the lock and holding a stale view cannot happen together,
+// and a rule kept in twelve places is a rule somebody adds a thirteenth
+// place without.
+func (s *Store) reload(ctx context.Context) error {
+	ociStore, err := openLayout(ctx, s.root)
+	if err != nil {
+		return err
+	}
+	s.oci = ociStore
+	return nil
 }
 
 // Root returns the store directory.
@@ -115,6 +145,12 @@ func (s *Store) Lock(ctx context.Context) (func(), error) {
 	if err != nil || !ok {
 		return nil, fmt.Errorf("acquiring exclusive store lock at %s (another palan process may be running): %w", s.lk.Path(), err)
 	}
+	if err := s.reload(ctx); err != nil {
+		// Released, or the lock outlives the command that took it and
+		// every later one waits on a holder that has gone.
+		_ = s.lk.Unlock()
+		return nil, err
+	}
 	return func() { _ = s.lk.Unlock() }, nil
 }
 
@@ -123,6 +159,10 @@ func (s *Store) RLock(ctx context.Context) (func(), error) {
 	ok, err := s.lk.TryRLockContext(ctx, lockRetryInterval)
 	if err != nil || !ok {
 		return nil, fmt.Errorf("acquiring shared store lock at %s: %w", s.lk.Path(), err)
+	}
+	if err := s.reload(ctx); err != nil {
+		_ = s.lk.Unlock()
+		return nil, err
 	}
 	return func() { _ = s.lk.Unlock() }, nil
 }
