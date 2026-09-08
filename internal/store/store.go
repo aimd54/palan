@@ -352,11 +352,18 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 			// orphaned.
 			subject = nil
 		}
-		entries = append(entries, entry{
-			desc:    desc,
-			ref:     desc.Annotations[ocispec.AnnotationRefName],
-			subject: subject,
-		})
+		// A reference equal to the digest is how the layout records a
+		// manifest with no tag, and it is the collector's own test for
+		// one. Reading the annotation as a tag instead treated such an
+		// entry as tagged, and untagging it fails with a different error
+		// than the one tolerated below, so collection returned that error
+		// forever on a store the collector merely hung on: the command
+		// that exists to rescue the state refused to run at all.
+		ref := desc.Annotations[ocispec.AnnotationRefName]
+		if ref == desc.Digest.String() {
+			ref = ""
+		}
+		entries = append(entries, entry{desc: desc, ref: ref, subject: subject})
 	}
 	return entries, nil
 }
@@ -400,7 +407,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 			if e.subject == nil || admitted[e.desc.Digest] {
 				continue
 			}
-			if !reachable[e.subject.Digest] {
+			if !s.staysFor(ctx, e, reachable) {
 				continue
 			}
 			admitted[e.desc.Digest] = true
@@ -421,7 +428,9 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 		if e.ref == "" || e.subject == nil || admitted[e.desc.Digest] {
 			continue
 		}
-		if err := s.oci.Untag(ctx, e.ref); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+		switch err := s.oci.Untag(ctx, e.ref); {
+		case err == nil, errors.Is(err, errdef.ErrNotFound), errors.Is(err, errdef.ErrInvalidReference):
+		default:
 			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.ref, err)
 		}
 		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
@@ -429,6 +438,47 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// staysFor reports whether a referrer keeps its place, which is what the
+// admission loop grows the reachable set from.
+//
+// Three reasons, and a referrer admitted for any of them carries what
+// describes it in turn, which is why this feeds the loop rather than
+// filtering its result: a signature kept for one reason and an attestation
+// over it condemned for want of that reason is the same content loss with
+// an extra step.
+//
+// Its subject is reachable, which is the ordinary case. Or it is tagged and
+// something reaches it. Or it is tagged and its subject's blob is gone,
+// since this pass exists to release the blobs an orphaned signature pins
+// and a missing subject pins none, so unlinking would destroy the
+// description and reclaim nothing.
+//
+// The last two are for tagged referrers only. An untagged one over a
+// subject nothing reaches is exactly what the collector reads forever.
+//
+// The middle reason decides more than it looks like it should, because
+// being reachable does not mean having been walked. The closure marks a
+// digest the moment it is reached, and asks for successors by the media
+// type the descriptor claims, so a manifest named as an ordinary blob, or
+// one whose digest also appears as some other manifest's layer, is marked
+// without ever being read and its subject is never queued. Its subject can
+// therefore be present and unreachable at once. The collector keeps such a
+// referrer, because a tagged manifest never enters the pass that spins, so
+// deleting it is loss with nothing bought.
+func (s *Store) staysFor(ctx context.Context, e entry, reachable map[digest.Digest]bool) bool {
+	if reachable[e.subject.Digest] {
+		return true
+	}
+	if e.ref == "" {
+		return false
+	}
+	if reachable[e.desc.Digest] {
+		return true
+	}
+	present, err := s.oci.Exists(ctx, *e.subject)
+	return err == nil && !present
 }
 
 // deleteUnreachableUntagged removes an untagged manifest whose subject is
