@@ -42,6 +42,12 @@ const DefaultIdleTimeout = 10 * time.Minute
 // backend and out of this package.
 var ErrUnverified = errors.New("model failed signature verification")
 
+// ErrUnavailable marks a model that could not be loaded yet, because what
+// holds it was busy for longer than the request waited. A Backend wraps it so
+// the router answers 503, which a client retries, rather than 404, which says
+// the model is not there.
+var ErrUnavailable = errors.New("model store busy")
+
 // Backend supplies servable models to the router.
 type Backend interface {
 	// List returns the servable model references.
@@ -234,6 +240,9 @@ func (rt *Router) ensure(ctx context.Context, ref string) (*instance, int, error
 			// A model that is present but unverified is refused, not missing.
 			if errors.Is(err, ErrUnverified) {
 				return nil, &httpError{http.StatusForbidden, fmt.Sprintf("model %q refused: %v", ref, err)}
+			}
+			if errors.Is(err, ErrUnavailable) {
+				return nil, &httpError{http.StatusServiceUnavailable, fmt.Sprintf("model %q not loadable yet: %v", ref, err)}
 			}
 			return nil, &httpError{http.StatusNotFound, fmt.Sprintf("model %q not servable: %v", ref, err)}
 		}

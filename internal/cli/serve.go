@@ -124,11 +124,13 @@ to no offload will serve from CPU on a GPU host.`,
 			reg := prometheus.NewRegistry()
 			rt, err := router.New(router.Options{
 				Backend: &storeBackend{
-					st:     st,
+					root:   st.Root(),
 					bin:    bin,
 					refs:   refs,
 					logDir: filepath.Join(st.Root(), "state", "logs"),
-					gate:   gate,
+					gateFor: func(s *store.Store) func(context.Context, string) (ocispec.Descriptor, error) {
+						return verifyGate(v, s, doVerify, verifyKey)
+					},
 					rehash: rehash,
 				},
 				MemoryBudget: budget,
@@ -179,33 +181,78 @@ to no offload will serve from CPU on a GPU host.`,
 
 // storeBackend adapts the local store to the router's Backend interface.
 type storeBackend struct {
-	st     *store.Store
+	// root is where the store lives. Each load and each listing opens it
+	// afresh rather than sharing one Store across requests, because a
+	// Store is not safe for concurrent use and serve is the one command
+	// that would use it that way: two loads run at once, and the model
+	// list is read alongside them. A store opened per load has its own
+	// lock descriptor, so one load releasing never drops what another
+	// still holds, and its own view of the layout, so nothing is swapped
+	// underneath a load that is halfway through reading.
+	root   string
 	bin    string
 	refs   []string // non-empty restricts the served set
 	logDir string
-	// gate, when set, must accept a model before it is loaded. It runs once
-	// per load rather than once per request, and re-runs after an eviction,
-	// which is the point: it re-reads a store that may have changed since the
+	// gateFor builds the check that must accept a model before it is
+	// loaded, for the store a load has just opened. It runs once per load
+	// rather than once per request, and re-runs after an eviction, which
+	// is the point: it re-reads a store that may have changed since the
 	// model was imported. It answers with the artifact the signature
-	// covered, which the copy on disk is then held against.
-	gate func(ctx context.Context, ref string) (ocispec.Descriptor, error)
+	// covered, which the copy on disk is then held against. Built per load
+	// so that it reads the same store the load does, and nil when nothing
+	// asked for verification.
+	gateFor func(*store.Store) func(ctx context.Context, ref string) (ocispec.Descriptor, error)
 	// rehash asks for the loaded model's blobs to be read back on every
 	// load, closing the gap between a manifest that verifies and the bytes
 	// beneath it. Off by default: it re-reads whole weight files.
 	rehash bool
 }
 
+// open reads the store for one load, under a shared lock held until release
+// is called.
+//
+// The lock is taken for the length of one load, not for the life of the
+// process. serve runs for hours and an exclusive hold would block every pull
+// for all of them, but a pull tags a model before it fetches the model's
+// signature, so a load reading between the two finds the model and not the
+// signature, and on a host with no registry refuses it. Taking the lock also
+// reads the layout as it stands, so a model pulled since serve started is
+// visible rather than a view from startup being served forever.
+//
+// A load waits for a pull, pack, import or collection in progress, and a
+// wait the request gave up on is reported as the store being busy rather
+// than the model being missing.
+func (b *storeBackend) open(ctx context.Context) (*store.Store, func(), error) {
+	st, release, err := store.OpenShared(ctx, b.root)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, fmt.Errorf("%w: %w", router.ErrUnavailable, err)
+		}
+		return nil, nil, err
+	}
+	return st, release, nil
+}
+
+// List reads the store afresh on every call, so a model pulled since serve
+// started is listed, and takes no lock. The list verifies nothing, so what
+// a lock would buy it is a store at rest, and what it would cost is
+// /v1/models answering nothing for as long as a pull runs, since a pull
+// holds the store for its whole transfer.
 func (b *storeBackend) List(ctx context.Context) ([]string, error) {
 	if len(b.refs) > 0 {
 		return b.refs, nil
 	}
-	entries, err := b.st.List(ctx)
+	st, err := store.Open(ctx, b.root)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := st.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out []string
 	for _, e := range entries {
-		manifest, err := store.FetchManifest(ctx, b.st.OCI(), e.Descriptor)
+		manifest, err := store.FetchManifest(ctx, st.OCI(), e.Descriptor)
 		if err != nil {
 			continue
 		}
@@ -230,16 +277,32 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 			return palanruntime.Spec{}, 0, errors.New("not among the served references")
 		}
 	}
+	// One store, one lock and one view for the whole load, so the gate,
+	// the comparison against the resident copy and the parse below all
+	// describe the same artifact rather than three readings of a moving
+	// one. The lock spans the gate, which can reach the registry, and the
+	// re-read, which can stream every weight layer when it is asked for;
+	// a pull on the same host waits that long, and that is the guarantee
+	// being bought.
+	st, release, err := b.open(ctx)
+	if err != nil {
+		return palanruntime.Spec{}, 0, err
+	}
+	defer release()
+	var gate func(context.Context, string) (ocispec.Descriptor, error)
+	if b.gateFor != nil {
+		gate = b.gateFor(st)
+	}
+
 	var verified ocispec.Descriptor
-	if b.gate != nil {
-		var err error
-		if verified, err = b.gate(ctx, ref); err != nil {
+	if gate != nil {
+		if verified, err = gate(ctx, ref); err != nil {
 			// Wrapped so the router answers 403: the model is present and
 			// refused, which is a different answer from missing.
 			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
 		}
 	}
-	desc, err := b.st.Resolve(ctx, ref)
+	desc, err := st.Resolve(ctx, ref)
 	if err != nil {
 		return palanruntime.Spec{}, 0, err
 	}
@@ -247,12 +310,12 @@ func (b *storeBackend) Spec(ctx context.Context, ref string) (palanruntime.Spec,
 	// copy that is not the one that verified must be refused rather than
 	// read. Re-reading the blobs is asked for on its own as well, so this
 	// runs for it too rather than only behind a signature check.
-	if b.gate != nil || b.rehash {
-		if err := checkLoadedContent(ctx, b.st, ref, desc, verified, b.rehash); err != nil {
+	if gate != nil || b.rehash {
+		if err := checkLoadedContent(ctx, st, ref, desc, verified, b.rehash); err != nil {
 			return palanruntime.Spec{}, 0, fmt.Errorf("%w: %w", router.ErrUnverified, err)
 		}
 	}
-	info, err := loadModelInfo(ctx, b.st, ref, desc)
+	info, err := loadModelInfo(ctx, st, ref, desc)
 	if err != nil {
 		return palanruntime.Spec{}, 0, err
 	}
