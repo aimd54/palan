@@ -201,8 +201,11 @@ func TestServeRefusesSubstitutedWeightsAsUnverifiedRatherThanMissing(t *testing.
 
 	// Without re-hashing the model loads: the spec names the blob the
 	// runtime would mmap, which is the substituted file.
-	loading := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(),
-		gate: verifyGate(v, st, false, "")}
+	gateFor := func(s *store.Store) func(context.Context, string) (ocispec.Descriptor, error) {
+		return verifyGate(v, s, false, "")
+	}
+	loading := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gateFor: gateFor}
 	spec, _, err := loading.Spec(ctx, ref)
 	if err != nil {
 		t.Fatalf("the signature must still admit substituted weights: %v", err)
@@ -211,8 +214,8 @@ func TestServeRefusesSubstitutedWeightsAsUnverifiedRatherThanMissing(t *testing.
 		t.Fatal("the backend returned a spec with no model path")
 	}
 
-	refusing := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(),
-		gate: verifyGate(v, st, false, ""), rehash: true}
+	refusing := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gateFor: gateFor, rehash: true}
 	_, _, err = refusing.Spec(ctx, ref)
 	if err == nil {
 		t.Fatal("the backend loaded substituted weights with re-hashing on")
@@ -227,7 +230,7 @@ func TestServeRefusesSubstitutedWeightsAsUnverifiedRatherThanMissing(t *testing.
 	// Re-reading asked for on its own, with no signature check beside it.
 	// serve reaches this through a different branch from run's, so it gets
 	// its own assertion rather than inheriting run's.
-	rehashOnly := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(), rehash: true}
+	rehashOnly := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(), rehash: true}
 	if _, _, err := rehashOnly.Spec(ctx, ref); err == nil {
 		t.Fatal("re-reading on its own loaded substituted weights")
 	} else if !strings.Contains(err.Error(), layer.Digest.String()) {
@@ -378,8 +381,10 @@ func TestServeRefusesAResidentCopyTheSignatureDoesNotCover(t *testing.T) {
 	v.Set(keyVerifyRequired, true)
 	v.Set(keyVerifyKey, pubFile)
 
-	b := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(),
-		gate: verifyGate(v, st, false, "")}
+	b := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gateFor: func(s *store.Store) func(context.Context, string) (ocispec.Descriptor, error) {
+			return verifyGate(v, s, false, "")
+		}}
 	if _, _, err := b.Spec(ctx, ref); err == nil {
 		t.Fatal("the backend loaded a resident copy the signature does not cover")
 	} else {

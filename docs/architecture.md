@@ -263,6 +263,12 @@ Because weight layers are stored raw, `llama-server -m
 "servable" are the same state. The layout itself stays readable by any
 OCI-aware tool.
 
+Several palan processes can share one store, coordinated through a lock
+file in its root. A command that changes the store (`pull`, `pack`, `load`,
+`rm`, `gc`) holds it exclusively while it runs, and for a transfer that is
+the whole download. Taking the lock re-reads the layout, so a command acts
+on the store as it stands, not as it stood when the command started.
+
 Transfers go through [oras-go v2](https://github.com/oras-project/oras-go):
 resumable (via HTTP Range requests, including across process restarts),
 concurrent, and digest-verified against any conformant registry, with
@@ -297,6 +303,12 @@ the request's `model` field:
 - **Resource guard**: single-flight loading with a memory-budget check
   against the config blob's size metadata. Loading a model that would
   exceed the budget evicts the least-recently-used model.
+- **Store reads**: each load reads the store afresh under a shared lock,
+  so a model pulled after `palan serve` started is served without a
+  restart. A load therefore waits for a pull, pack, import or collection in
+  progress, and one abandoned while it waits answers `503`, which a client
+  retries, rather than `404`. `/v1/models` reads the store without the lock
+  and answers during a pull.
 - Streaming responses are a transparent reverse proxy to the child process;
   the router adds only routing, optional bearer auth, and Prometheus
   metrics (`/metrics`: loads, evictions, time-to-first-token, tokens/s).

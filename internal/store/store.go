@@ -72,6 +72,38 @@ func DefaultRoot() (string, error) {
 // Open opens (creating if necessary) the store at root; an empty root means
 // DefaultRoot.
 func Open(ctx context.Context, root string) (*Store, error) {
+	s, err := newStore(root)
+	if err != nil {
+		return nil, err
+	}
+	if s.oci, err = openLayout(ctx, s.root); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// OpenShared opens the store at root under a shared lock, held until release
+// is called, and reads the layout only once the lock is held.
+//
+// Open reads the layout at once and a lock taken afterwards reads it again,
+// so the first read is made with no lock, and a save in progress elsewhere
+// can be caught halfway. A caller that is going to lock anyway loses nothing
+// by reading once, after it has.
+func OpenShared(ctx context.Context, root string) (*Store, func(), error) {
+	s, err := newStore(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	release, err := s.RLock(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, release, nil
+}
+
+// newStore resolves root and creates it if necessary, without reading the
+// layout inside it.
+func newStore(root string) (*Store, error) {
 	if root == "" {
 		var err error
 		if root, err = DefaultRoot(); err != nil {
@@ -81,15 +113,7 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("creating store root: %w", err)
 	}
-	ociStore, err := openLayout(ctx, root)
-	if err != nil {
-		return nil, err
-	}
-	return &Store{
-		root: root,
-		oci:  ociStore,
-		lk:   flock.New(filepath.Join(root, ".palan.lock")),
-	}, nil
+	return &Store{root: root, lk: flock.New(filepath.Join(root, ".palan.lock"))}, nil
 }
 
 // Bounds on waiting out an index.json caught halfway through a save.

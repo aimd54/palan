@@ -737,7 +737,10 @@ func TestServeRefusesAModelAlreadyInTheStoreUnderPolicy(t *testing.T) {
 	matching.Set(keyVerifyPolicy, []map[string]any{
 		{"pattern": reg.Host() + "/llm/*", "keys": []string{pubFile}},
 	})
-	matchBackend := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(), gate: verifyGate(matching, st, false, "")}
+	matchBackend := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gateFor: func(s *store.Store) func(context.Context, string) (ocispec.Descriptor, error) {
+			return verifyGate(matching, s, false, "")
+		}}
 	spec, _, err := matchBackend.Spec(ctx, ref)
 	if err != nil {
 		t.Fatalf("the policy names this key for this reference and serve refused: %v", err)
@@ -756,7 +759,10 @@ func TestServeRefusesAModelAlreadyInTheStoreUnderPolicy(t *testing.T) {
 	refusing.Set(keyVerifyPolicy, []map[string]any{
 		{"pattern": reg.Host() + "/other/*", "keys": []string{pubFile}},
 	})
-	refuseBackend := &storeBackend{st: st, bin: "irrelevant-to-this-test", logDir: t.TempDir(), gate: verifyGate(refusing, st, false, "")}
+	refuseBackend := &storeBackend{root: st.Root(), bin: "irrelevant-to-this-test", logDir: t.TempDir(),
+		gateFor: func(s *store.Store) func(context.Context, string) (ocispec.Descriptor, error) {
+			return verifyGate(refusing, s, false, "")
+		}}
 	spec, _, err = refuseBackend.Spec(ctx, ref)
 	if err == nil {
 		t.Fatal("a reference no rule names must refuse, not hand back a loadable spec")

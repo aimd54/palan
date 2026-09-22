@@ -393,6 +393,48 @@ func TestUnverifiedModelIs403(t *testing.T) {
 	}
 }
 
+// busyBackend cannot load one model yet, the way a store held by a pull
+// cannot, and serves the rest normally.
+type busyBackend struct {
+	inner *fakeBackend
+	busy  string
+}
+
+func (b *busyBackend) List(ctx context.Context) ([]string, error) { return b.inner.List(ctx) }
+
+func (b *busyBackend) Spec(ctx context.Context, ref string) (runtime.Spec, int64, error) {
+	if ref == b.busy {
+		return runtime.Spec{}, 0, fmt.Errorf("%w: waiting for the store: context canceled", ErrUnavailable)
+	}
+	return b.inner.Spec(ctx, ref)
+}
+
+// TestBusyStoreIs503: a model that could not be loaded yet is neither
+// missing nor refused. 503 is the answer a client retries; 404 tells it the
+// model is not there.
+func TestBusyStoreIs503(t *testing.T) {
+	backend := &busyBackend{
+		inner: &fakeBackend{models: map[string]int64{"llm/ok:1": 100, "llm/later:1": 100}},
+		busy:  "llm/later:1",
+	}
+	_, srv := newTestRouter(t, Options{Backend: backend, MemoryBudget: 1000, IdleTimeout: time.Hour})
+
+	code, body := chat(t, srv.URL, "llm/later:1", "x", false, nil)
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("busy store: got %d, want %d (%s)", code, http.StatusServiceUnavailable, body)
+	}
+	if !strings.Contains(body, "store busy") {
+		t.Errorf("the answer should say why: %s", body)
+	}
+	code, body = chat(t, srv.URL, "llm/absent:1", "x", false, nil)
+	if code != http.StatusNotFound {
+		t.Errorf("missing model should still be 404: %d %s", code, body)
+	}
+	if code, body := chat(t, srv.URL, "llm/ok:1", "x", false, nil); code != http.StatusOK {
+		t.Errorf("an unaffected model must still serve: %d %s", code, body)
+	}
+}
+
 // TestUnverifiedModelStillListed: /v1/models reports what the store holds.
 // Verifying every model on every listing would be wasteful and would let one
 // bad artifact break an endpoint that only reports existence.

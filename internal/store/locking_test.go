@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // tornIndexes are the states a reader holding no lock can find index.json
@@ -106,6 +108,76 @@ func TestOpeningReportsAnIndexThatStaysBroken(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("opening a truncated index never gave up")
 	}
+}
+
+// TestOpenSharedReadsTheLayoutOnlyOnceLocked: a writer holding the store
+// can leave index.json halfway through a save for as long as it likes, and
+// a reader that locks first never sees it. One that reads before locking
+// finds it torn however long it retries.
+func TestOpenSharedReadsTheLayoutOnlyOnceLocked(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	writer, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushTestModel(t, writer, "registry.internal/llm/held:v1", []byte("weights"))
+	unlock, err := writer.Lock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(dir, "index.json")
+	whole, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(index, tornIndexes(whole)["cut short"], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	type opened struct {
+		s       *Store
+		release func()
+		err     error
+	}
+	got := make(chan opened, 1)
+	go func() {
+		s, release, err := OpenShared(ctx, dir)
+		got <- opened{s, release, err}
+	}()
+	select {
+	case o := <-got:
+		t.Fatalf("opening returned while another process held the store (%v)", o.err)
+	case <-time.After(2 * indexReadAttempts * indexReadBackoff):
+	}
+
+	if err := os.WriteFile(index, whole, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	var o opened
+	select {
+	case o = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening did not proceed once the store was released")
+	}
+	if o.err != nil {
+		t.Fatalf("opening once the save had finished: %v", o.err)
+	}
+	if _, err := o.s.Resolve(ctx, "registry.internal/llm/held:v1"); err != nil {
+		t.Fatalf("the store opened does not hold what was saved: %v", err)
+	}
+
+	// The shared lock is held until released, and not after.
+	rival := flock.New(filepath.Join(dir, ".palan.lock"))
+	if ok, err := rival.TryLock(); err != nil || ok {
+		t.Fatalf("an exclusive lock was granted while the opened store held its shared one (ok=%v, err=%v)", ok, err)
+	}
+	o.release()
+	if ok, err := rival.TryLock(); err != nil || !ok {
+		t.Fatalf("the store stayed locked after release (ok=%v, err=%v)", ok, err)
+	}
+	_ = rival.Unlock()
 }
 
 // TestCollectionSeesWhatArrivedWhileItWaited: opening a store reads what the
