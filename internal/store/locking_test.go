@@ -4,12 +4,109 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// tornIndexes are the states a reader holding no lock can find index.json
+// in while another process saves it: the save truncates the file and then
+// writes it, and a read of more than one chunk can straddle two saves.
+func tornIndexes(whole []byte) map[string][]byte {
+	spliced := append(append([]byte{}, whole[:len(whole)/2]...), whole[len(whole)/4:]...)
+	return map[string][]byte{
+		"empty":     {},
+		"cut short": whole[:len(whole)/2],
+		"spliced":   spliced,
+	}
+}
+
+// TestOpeningWaitsOutAnIndexCaughtMidSave: a command reads the layout before
+// it takes the lock, and the save it can land in the middle of lasts one
+// write. Failing there reported a store that was fine as unreadable.
+func TestOpeningWaitsOutAnIndexCaughtMidSave(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"empty", "cut short", "spliced"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(ctx, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pushTestModel(t, s, "registry.internal/llm/saved:v1", []byte("weights"))
+			index := filepath.Join(dir, "index.json")
+			whole, err := os.ReadFile(index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			torn := tornIndexes(whole)[name]
+			var probe map[string]any
+			if err := json.NewDecoder(bytes.NewReader(torn)).Decode(&probe); err == nil {
+				t.Fatalf("the %s index decodes, so this case tests nothing", name)
+			}
+			if err := os.WriteFile(index, torn, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			saved := make(chan error, 1)
+			go func() {
+				time.Sleep(2 * indexReadBackoff) // the save completes
+				saved <- os.WriteFile(index, whole, 0o600)
+			}()
+			reader, err := Open(ctx, dir)
+			if serr := <-saved; serr != nil {
+				t.Fatal(serr)
+			}
+			if err != nil {
+				t.Fatalf("a read that caught a save halfway failed instead of waiting it out: %v", err)
+			}
+			if _, err := reader.Resolve(ctx, "registry.internal/llm/saved:v1"); err != nil {
+				t.Fatalf("the store read after the save does not hold what was saved: %v", err)
+			}
+		})
+	}
+}
+
+// TestOpeningReportsAnIndexThatStaysBroken: waiting out a save has to end.
+// An index that is still cut short once no save could still be running is
+// broken, and says so rather than holding the command.
+func TestOpeningReportsAnIndexThatStaysBroken(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushTestModel(t, s, "registry.internal/llm/broken:v1", []byte("weights"))
+	index := filepath.Join(dir, "index.json")
+	whole, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(index, tornIndexes(whole)["cut short"], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(ctx, dir)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("opening a truncated index: got %v, want it reported as cut short", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a truncated index never gave up")
+	}
+}
 
 // TestCollectionSeesWhatArrivedWhileItWaited: opening a store reads what the
 // layout holds, and the lock is what makes that answer stay true. Everything
