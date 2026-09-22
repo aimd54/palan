@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -91,11 +92,34 @@ func Open(ctx context.Context, root string) (*Store, error) {
 	}, nil
 }
 
+// Bounds on waiting out an index.json caught halfway through a save.
+const (
+	indexReadAttempts = 10
+	indexReadBackoff  = 25 * time.Millisecond
+)
+
 // openLayout reads the OCI layout at root into memory.
+//
+// The layout library saves index.json by truncating the file and writing it
+// again, so a reader holding no lock can find it empty, cut short, or
+// holding the start of one save and the end of the next. That lasts as long
+// as one write, so a read that fails to decode is retried briefly, and an
+// index still unreadable after that is reported as broken.
 func openLayout(ctx context.Context, root string) (*oci.Store, error) {
-	ociStore, err := oci.NewWithContext(ctx, root)
-	if err != nil {
-		return nil, fmt.Errorf("opening OCI layout at %s: %w", root, err)
+	var ociStore *oci.Store
+	var err error
+	for attempt := 1; ; attempt++ {
+		if ociStore, err = oci.NewWithContext(ctx, root); err == nil {
+			break
+		}
+		if !caughtMidSave(err) || attempt == indexReadAttempts {
+			return nil, fmt.Errorf("opening OCI layout at %s: %w", root, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("opening OCI layout at %s: %w", root, err)
+		case <-time.After(indexReadBackoff):
+		}
 	}
 	// Deleting a manifest deletes that manifest. By default the layout also
 	// walks what the delete leaves dangling and removes that too, and a
@@ -107,6 +131,14 @@ func openLayout(ctx context.Context, root string) (*oci.Store, error) {
 	// command and reclaiming is the other.
 	ociStore.AutoGC = false
 	return ociStore, nil
+}
+
+// caughtMidSave reports whether err is what decoding a JSON file partway
+// through being rewritten produces: nothing, a document cut short, or the
+// start of one save joined to the end of another.
+func caughtMidSave(err error) bool {
+	var syntax *json.SyntaxError
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &syntax)
 }
 
 // reload re-reads the layout, and is called once a lock is held.
