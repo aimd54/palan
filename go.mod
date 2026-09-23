@@ -2,7 +2,7 @@ module github.com/aimd54/palan
 
 // Minor only, no patch: setup-go installs exactly what this names, so a
 // pinned patch builds every release on that patch until someone notices.
-go 1.27
+go 1.27.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -16,14 +16,14 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1
-	github.com/sigstore/protobuf-specs v0.5.1
-	github.com/sigstore/sigstore v1.10.9
+	github.com/sigstore/protobuf-specs v0.5.2
+	github.com/sigstore/sigstore v1.11.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/vbauerster/mpb/v8 v8.16.1
-	golang.org/x/sync v0.22.0
-	golang.org/x/term v0.45.0
-	google.golang.org/protobuf v1.36.11
+	golang.org/x/sync v0.23.0
+	golang.org/x/term v0.46.0
+	google.golang.org/protobuf v1.36.12
 	oras.land/oras-go/v2 v2.6.2
 )
 
@@ -49,7 +49,7 @@ require (
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/google/go-containerregistry v0.21.7 // indirect
+	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
@@ -82,7 +82,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772 // indirect
 )
