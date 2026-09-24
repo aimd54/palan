@@ -1,6 +1,9 @@
 # Copyright The palan Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Pinned so a re-render is reproducible; bump here and re-run make diagrams.
+D2_VERSION ?= v0.8.1
+
 SHELL := /usr/bin/env bash
 
 BINARY  ?= palan
@@ -71,6 +74,36 @@ check: fmt-check vet lint lint-docs-available tidy-check notice-check test ## Al
 .PHONY: docs
 docs: ## Regenerate the CLI reference under docs/reference
 	go run ./hack/gendocs
+
+.PHONY: print-d2-version
+print-d2-version: ## Print the pinned diagram renderer version
+	@echo $(D2_VERSION)
+
+.PHONY: diagrams
+diagrams: ## Re-render docs/assets from the D2 sources in docs/diagrams
+	@command -v d2 >/dev/null || { \
+	  echo "d2 not found: go install github.com/d2lang/d2@$(D2_VERSION)"; exit 1; }
+	@for src in docs/diagrams/*.d2; do \
+	  out="docs/assets/$$(basename $$src .d2).svg"; \
+	  d2 --pad 20 "$$src" "$$out" >/dev/null || exit 1; \
+	  printf 'rendered %s\n' "$$out"; \
+	done
+
+.PHONY: diagrams-check
+diagrams-check: ## Fail if a rendered diagram no longer matches its D2 source
+	@command -v d2 >/dev/null || { \
+	  echo "d2 not found: go install github.com/d2lang/d2@$(D2_VERSION)"; exit 1; }
+	@status=0; tmp=$$(mktemp -d); \
+	for src in docs/diagrams/*.d2; do \
+	  out="docs/assets/$$(basename $$src .d2).svg"; \
+	  d2 --pad 20 "$$src" "$$tmp/rendered.svg" >/dev/null || { status=1; continue; }; \
+	  if ! cmp -s "$$tmp/rendered.svg" "$$out"; then \
+	    printf '%s is stale: re-run make diagrams\n' "$$out"; status=1; \
+	  fi; \
+	done; \
+	rm -rf "$$tmp"; \
+	if [ $$status -eq 0 ]; then echo "diagrams match their sources"; fi; \
+	exit $$status
 
 .PHONY: demo
 demo: build ## Re-record docs/assets/demo.gif (requires vhs, ttyd, ffmpeg, gifsicle)
