@@ -76,9 +76,10 @@ itself like a complete model and then fail to load.
 
 A safetensors model is published as a directory, so naming the directory
 packs it. The shard index (model.safetensors.index.json) states which shards
-the model is made of: all of them are packed, along with config.json and any
-tokenizer files beside them, and a shard the index names that the directory
-does not hold is an error. Naming one shard packs the same set.
+the model is made of: all of them are packed, along with config.json, the
+tokenizer files, the chat template and any processor configs beside them,
+and a shard the index names that the directory does not hold is an error.
+Naming one shard packs the same set.
 
 That artifact is for distribution and verification. It pushes, pulls, signs,
 verifies and travels through an air gap on the same code path a GGUF one
@@ -100,11 +101,12 @@ invented. Where a digest exists it becomes io.palan.origin.sha256, and the
 repository page becomes the source annotation. Split parts and a licence
 file in the repository travel with the weights. Naming a safetensors
 repository without a file resolves the whole model through its shard
-index: the shards it names, config.json, the tokenizer files, and any
-documentation files beside them, each held against its own published
-digest where the repository publishes one. A GGUF repository named
-without a file lists what it publishes instead, since more than one
-quantisation usually lives there. Gated repositories read HF_TOKEN.
+index: the shards it names, config.json, the tokenizer files, the chat
+template, any processor configs and documentation files beside them, each
+held against its own published digest where the repository publishes one.
+A GGUF repository named without a file lists what it publishes instead,
+since more than one quantisation usually lives there. Gated repositories
+read HF_TOKEN.
 
 When --oms-key names a public key, the repository's own signature over the
 files it publishes is fetched and checked against it, and every downloaded
@@ -386,9 +388,8 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 
 		// A key was supplied, so every file this loop downloads must be
 		// held against what the repository's own signature covers. The
-		// signature is fetched now, before anything downloads, so an
-		// unsigned repository is refused up front rather than after
-		// spending the transfer.
+		// signature is fetched once the index has been read and before any
+		// other file downloads, so an unsigned repository costs no weights.
 		//
 		// Settled across the whole list above, so it is the same key for
 		// every reference here, and empty when nothing named one.
@@ -423,6 +424,13 @@ func resolveSources(ctx context.Context, cmd *cobra.Command, args []string) ([]p
 				return nil, info, fmt.Errorf("%s: %w", ref.Repo, err)
 			}
 			info.signer = stmt.KeyID
+			// A file the signature does not list is refused before the files
+			// download; whether its bytes match is checked as each lands.
+			for _, f := range res.Files {
+				if _, listed := stmt.Digests[f.Path]; !listed && f.Path != omsig.FileName {
+					return nil, info, fmt.Errorf("%s: %s is %w", ref.Repo, f.Path, omsig.ErrNotCovered)
+				}
+			}
 		}
 
 		// Tracks, within this reference, the repository path that claimed

@@ -177,13 +177,17 @@ one. See [ADR-0012](adr/0012-distribution-is-format-neutral.md).
 A safetensors model is packed from its directory, since that is the shape a
 repository publishes it in. The shard index
 (`model.safetensors.index.json`) states which shards the model consists of;
-all of them are packed, together with `config.json` and any tokenizer files
-beside them, and a set the index says is short is refused. What each format
-publishes decides what the artifact can record: a GGUF header states
-quantization, context length and a license, while a safetensors repository
-states architecture and context length in `config.json`, publishes a dtype
-that lands in the config's `precision` field, and leaves `--license` as the
-only source of a license.
+all of them are packed, together with `config.json`, the tokenizer files, the
+chat template, any processor configs and an NVIDIA ModelOpt
+`hf_quant_config.json` beside them, and a set the index says is short is
+refused. What each format publishes decides what the artifact can record. A
+GGUF header states quantization, context length and a license. A safetensors
+repository states architecture, context length, the dtype the model computes
+in and any quantization scheme, in `config.json` or, for a ModelOpt
+checkpoint, in `hf_quant_config.json`; these land in the config's `precision`
+and `quantization` fields. When `config.json` states no dtype, the shard
+headers supply the precision, from their float tensors alone when the model
+is quantized. `--license` is a safetensors model's only source of a license.
 
 A repository can also be named directly, `hf://<org>/<repo>` with no file,
 which packs from Hugging Face rather than disk. The same shard index decides

@@ -771,3 +771,61 @@ func TestResolveURLEscapesThePathItIsGiven(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveWholeRepositoryTakesARecentlySavedModel: an index stating its
+// size with a fraction, and a chat template and processor configs in files
+// of their own, all of which the model needs to be served.
+func TestResolveWholeRepositoryTakesARecentlySavedModel(t *testing.T) {
+	hub := newFakeHub(t, map[string][]byte{
+		"model.safetensors.index.json":     []byte(`{"metadata":{"total_size":18.0},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}`),
+		"model-00001-of-00002.safetensors": []byte("shard-one"),
+		"model-00002-of-00002.safetensors": []byte("shard-two"),
+		"config.json":                      []byte(`{"model_type":"vlm","text_config":{"dtype":"bfloat16"}}`),
+		"tokenizer_config.json":            []byte(`{}`),
+		"chat_template.jinja":              []byte("{{ messages }}"),
+		"chat_template.json":               []byte(`{"chat_template":"{{ messages }}"}`),
+		"preprocessor_config.json":         []byte(`{}`),
+		"processor_config.json":            []byte(`{}`),
+		"video_preprocessor_config.json":   []byte(`{}`),
+		"added_tokens.json":                []byte(`{}`),
+		"tiktoken.model":                   []byte("tokens"),
+		"hf_quant_config.json":             []byte(`{"quantization":{"quant_algo":"FP8"}}`),
+	})
+	res, err := testClient(hub).Resolve(t.Context(), Ref{Repo: "org/repo"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range res.Files {
+		got[f.Path] = true
+	}
+	for _, want := range []string{
+		"model.safetensors.index.json", "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors",
+		"config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json",
+		"preprocessor_config.json", "processor_config.json", "video_preprocessor_config.json",
+		"added_tokens.json", "tiktoken.model", "hf_quant_config.json",
+	} {
+		if !got[want] {
+			t.Errorf("Resolve did not select %q", want)
+		}
+	}
+}
+
+// TestFetchSmallRefusesWhatItWouldHaveCutShort: a file past the limit is
+// refused by name rather than handed on cut short.
+func TestFetchSmallRefusesWhatItWouldHaveCutShort(t *testing.T) {
+	defer func(old int64) { smallFileLimit = old }(smallFileLimit)
+	smallFileLimit = 16
+	hub := newFakeHub(t, map[string][]byte{
+		"exactly.json": []byte(`{"sixteen":"xx"}`),
+		"over.json":    []byte(`{"seventeen":"xx"}`),
+	})
+	c := testClient(hub)
+	if got, err := c.FetchSmall(t.Context(), Ref{Repo: "org/repo"}, "", "exactly.json"); err != nil || len(got) != 16 {
+		t.Fatalf("a file at the limit: %q, %v", got, err)
+	}
+	_, err := c.FetchSmall(t.Context(), Ref{Repo: "org/repo"}, "", "over.json")
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("a file past the limit: %v, want it refused as too large", err)
+	}
+}

@@ -56,6 +56,8 @@ type Hub struct {
 	// test can prove the bytes came from the commit that was resolved
 	// rather than from a branch that may have moved since.
 	Fetched []string
+	// FetchedPaths records the repository path of every download request.
+	FetchedPaths []string
 
 	srv *httptest.Server
 }
@@ -158,6 +160,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.Fetched = append(h.Fetched, rev)
+		h.FetchedPaths = append(h.FetchedPaths, name)
 		files := h.filesFor(repo)
 		b, found := files[name]
 		if !found {

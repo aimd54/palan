@@ -80,11 +80,55 @@ func TestFromSafetensorsFallsBackWhenTheConfigIsSparse(t *testing.T) {
 	if got.Architecture != "MistralForCausalLM" {
 		t.Errorf("Architecture = %q, want MistralForCausalLM", got.Architecture)
 	}
-	if got.Precision != "F16" {
-		t.Errorf("Precision = %q, want the dominant shard dtype F16", got.Precision)
+	// Spelled as a config spells it, so one precision reads one way
+	// whichever source it came from.
+	if got.Precision != "float16" {
+		t.Errorf("Precision = %q, want the dominant shard dtype as float16", got.Precision)
 	}
 	if got.ContextLength != 0 {
 		t.Errorf("ContextLength = %d; an unstated context length must stay unset", got.ContextLength)
+	}
+}
+
+// TestFromSafetensorsRecordsAQuantizedModel: precision is the dtype the model
+// computes in and quantization the scheme, as the ModelPack spec pairs them.
+// The shard headers answer only when the config states no dtype, and then
+// only their float tensors do. Packed weights give no parameter count.
+func TestFromSafetensorsRecordsAQuantizedModel(t *testing.T) {
+	tensors := func(packed string) *safetensors.Header {
+		return &safetensors.Header{Tensors: map[string]safetensors.TensorInfo{
+			"experts": {DType: packed, Shape: []int64{3000, 1000}},
+			"norm":    {DType: "BF16", Shape: []int64{1000, 10}},
+			"router":  {DType: "F32", Shape: []int64{10, 10}},
+		}}
+	}
+	for _, c := range []struct {
+		name       string
+		cfg        safetensors.Config
+		shards     *safetensors.Header
+		prec, quan string
+		size       string
+	}{
+		{"dtype stated", safetensors.Config{TorchDType: "bfloat16", QuantMethod: "fp8"}, tensors("F8_E4M3"), "bfloat16", "fp8", "3M"},
+		{"no dtype stated", safetensors.Config{QuantMethod: "fp8"}, tensors("F8_E4M3"), "bfloat16", "fp8", "3M"},
+		{"one byte a weight", safetensors.Config{QuantMethod: "compressed-tensors"}, tensors("I8"), "bfloat16", "compressed-tensors", "3M"},
+		{"one byte a weight, beside a byte flag", safetensors.Config{QuantMethod: "bitsandbytes"}, &safetensors.Header{Tensors: map[string]safetensors.TensorInfo{
+			"w":             {DType: "I8", Shape: []int64{3000, 1000}},
+			"weight_format": {DType: "U8", Shape: []int64{1}},
+			"scb":           {DType: "F32", Shape: []int64{3000}},
+			"norm":          {DType: "BF16", Shape: []int64{1000, 10}},
+		}}, "bfloat16", "bitsandbytes", "3M"},
+		{"packed into bytes", safetensors.Config{QuantMethod: "mxfp4"}, tensors("U8"), "bfloat16", "mxfp4", ""},
+		{"packed into words", safetensors.Config{QuantMethod: "awq"}, tensors("I32"), "bfloat16", "awq", ""},
+		{"no float tensor", safetensors.Config{QuantMethod: "bitnet"}, &safetensors.Header{Tensors: map[string]safetensors.TensorInfo{
+			"w": {DType: "U8", Shape: []int64{10, 10}},
+		}}, "", "bitnet", ""},
+	} {
+		got := FromSafetensors(&c.cfg, c.shards, "quantized")
+		if got.Precision != c.prec || got.Quantization != c.quan || got.SizeLabel != c.size {
+			t.Errorf("%s: precision %q, quantization %q, size %q; want %q, %q and %q",
+				c.name, got.Precision, got.Quantization, got.SizeLabel, c.prec, c.quan, c.size)
+		}
 	}
 }
 

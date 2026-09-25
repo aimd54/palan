@@ -530,8 +530,19 @@ func (c *Client) FetchSmall(ctx context.Context, ref Ref, rev, name string) ([]b
 	default:
 		return nil, fmt.Errorf("fetching %s: unexpected status %q", name, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, smallFileLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", name, err)
+	}
+	if int64(len(data)) > smallFileLimit {
+		return nil, fmt.Errorf("%s in %s is larger than the %d bytes read whole", name, ref.Repo, smallFileLimit)
+	}
+	return data, nil
 }
+
+// smallFileLimit bounds what FetchSmall reads. The index of a model with a
+// trillion parameters runs to about 14 MB, since it names every tensor.
+var smallFileLimit int64 = 64 << 20
 
 // suggestFiles turns "which quantisation did you mean" into an answer rather
 // than a guess.

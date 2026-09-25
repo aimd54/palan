@@ -50,8 +50,9 @@ places where no container engine exists and no internet ever will.
 - **Reproducible packing**: the same weights in ⇒ the same digest out.
   Metadata goes into the ModelPack config from wherever the format publishes
   it: a GGUF header states architecture, quantization, context length and
-  license; a safetensors model states architecture and context length in
-  `config.json`, and its parameter count comes from the shard headers.
+  license; a safetensors model states architecture, context length,
+  precision and quantization in `config.json`, and its parameter count comes
+  from the shard headers unless its weights are packed several to an element.
 - **Serving**: `palan run` for a REPL; `palan serve` for an OpenAI-compatible
   router on `:11500`: lazy load, idle unload, memory-budget LRU eviction that
   frees device memory rather than overcommitting it, SSE streaming, Prometheus
@@ -138,9 +139,9 @@ palan pack qwen3-8b-instruct-q4_k_m.gguf -t localhost:5000/llm/qwen3:8b-q4 \
   --plain-http --ctx 8192 --push
 
 # Or pack a safetensors model, which is published as a directory. Naming the
-# directory packs every shard the index lists, plus config.json and the
-# tokenizer files. These travel and verify like any other artifact; serving
-# them is another runtime's job.
+# directory packs every shard the index lists, plus config.json, the
+# tokenizer files and the chat template. These travel and verify like any
+# other artifact; serving them is another runtime's job.
 palan pack ./Qwen3-8B/ -t localhost:5000/llm/qwen3:8b-bf16 \
   --plain-http --license Apache-2.0 --push
 
