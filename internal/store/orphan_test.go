@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,6 +248,250 @@ func TestRemoveDeletesTheReferrerManifest(t *testing.T) {
 	}
 	if _, err := s.BlobPath(model.Digest); err != nil {
 		t.Errorf("removing a signature reclaimed the model's blobs early: %v", err)
+	}
+}
+
+// TestRemoveRefusesAHeldSignatureUntilItsHolderGoes: a signature a tagged
+// index lists keeps its tag when asked to go. Untagged, it would be a
+// referrer collection keeps for as long as its model lives, with nothing
+// to name it by. Once the index is removed, so can the signature be.
+func TestRemoveRefusesAHeldSignatureUntilItsHolderGoes(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/bundled:v1", []byte("weights listed beside their signature"))
+	sig := pushUntaggedReferrer(t, s, model, "a signature an index lists")
+	const sigRef = "registry.internal/llm/bundled:sha256-feed.sig"
+	if err := s.Tag(ctx, sig, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	const indexRef = "registry.internal/llm/bundle:v1"
+	pushIndexOver(t, s, []ocispec.Descriptor{model, sig}, indexRef)
+
+	var held *HeldError
+	if err := s.Remove(ctx, sigRef); !errors.As(err, &held) || held.Holder != indexRef {
+		t.Fatalf("removing a signature an index lists returned %v, not a refusal naming %s", err, indexRef)
+	}
+	if got, err := s.Resolve(ctx, sigRef); err != nil || got.Digest != sig.Digest {
+		t.Fatalf("the refused removal took the signature's tag: %v", err)
+	}
+
+	if err := s.Remove(ctx, indexRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(ctx, sigRef); err != nil {
+		t.Fatalf("removing the signature once nothing lists it: %v", err)
+	}
+	for round := 1; round <= 2; round++ {
+		if !returnsWithin(t, s, 30*time.Second) {
+			t.Fatalf("collection round %d did not return", round)
+		}
+	}
+	if _, err := s.BlobPath(sig.Digest); err == nil {
+		t.Error("the signature is still in the store with nothing listing it")
+	}
+	if _, err := content.FetchAll(ctx, s.OCI(), model); err != nil {
+		t.Errorf("the model it signed lost its manifest: %v", err)
+	}
+}
+
+// TestRemoveRefusalNamesTheTagKeepingAnUntaggedHolder: an untagged artifact
+// cannot be removed by name, so a refusal on its account names the tag that
+// keeps it, and says it is attached there.
+func TestRemoveRefusalNamesTheTagKeepingAnUntaggedHolder(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const modelRef = "registry.internal/llm/attached:v1"
+	model := pushTestModel(t, s, modelRef, []byte("a model with an index attached"))
+	sig := pushUntaggedReferrer(t, s, model, "a signature the attached index lists")
+	const sigRef = "registry.internal/llm/attached:sha256-cafe.sig"
+	if err := s.Tag(ctx, sig, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	pushIndexWithSubject(t, s, []ocispec.Descriptor{sig}, &model, "")
+
+	var held *HeldError
+	if err := s.Remove(ctx, sigRef); !errors.As(err, &held) || held.Holder != modelRef || !held.Attached {
+		t.Fatalf("removing the signature returned %v, not a refusal naming %s as what it is attached to", err, modelRef)
+	}
+}
+
+// TestRemoveRefusalNamesTheModelRatherThanItsSignature: a signature reaches
+// its model through its subject, so it could be named as what keeps an
+// artifact attached to the model, though removing it frees nothing. The
+// layout's order changes with each save, so the choice is asked repeatedly.
+func TestRemoveRefusalNamesTheModelRatherThanItsSignature(t *testing.T) {
+	ctx := context.Background()
+	for range 20 {
+		s := openTestStore(t)
+		const modelRef = "registry.internal/llm/attested:v1"
+		model := pushTestModel(t, s, modelRef, []byte("a model signed, attested and indexed"))
+		sig := pushUntaggedReferrer(t, s, model, "its signature")
+		if err := s.Tag(ctx, sig, "registry.internal/llm/attested:sha256-0001.sig"); err != nil {
+			t.Fatal(err)
+		}
+		att := pushReferrerOfType(t, s, model, "its attestation", "application/vnd.dsse.envelope.v1+json")
+		const attRef = "registry.internal/llm/attested:sha256-0001.att"
+		if err := s.Tag(ctx, att, attRef); err != nil {
+			t.Fatal(err)
+		}
+		pushIndexWithSubject(t, s, []ocispec.Descriptor{att}, &model, "")
+
+		var held *HeldError
+		if err := s.Remove(ctx, attRef); !errors.As(err, &held) || held.Holder != modelRef {
+			t.Fatalf("removing the attestation returned %v, not a refusal naming %s", err, modelRef)
+		}
+	}
+}
+
+// chainedStore holds a signature under a branching chain of tagged
+// descriptions, returning the store, the signature's reference and the refs
+// of the chain.
+func chainedStore(t *testing.T) (*Store, string, []string) {
+	t.Helper()
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/chained:v1", []byte("a model under a branching chain"))
+	tagOver := func(subject ocispec.Descriptor, payload, ref string) ocispec.Descriptor {
+		d := pushReferrerOfType(t, s, subject, payload, "application/vnd.dsse.envelope.v1+json")
+		if err := s.Tag(ctx, d, ref); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	const sigRef = "registry.internal/llm/chained:sha256-1.sig"
+	sig := tagOver(model, "sig", sigRef)
+	x1 := tagOver(sig, "x1", "registry.internal/llm/chained:x1")
+	x2 := tagOver(sig, "x2", "registry.internal/llm/chained:x2")
+	y1 := tagOver(x1, "y1", "registry.internal/llm/chained:y1")
+	tagOver(y1, "z", "registry.internal/llm/chained:z")
+	tagOver(x2, "y2", "registry.internal/llm/chained:y2")
+	return s, sigRef, []string{"x1", "x2", "y1", "z", "y2"}
+}
+
+// TestRemoveDeletesDescriptionsDeepestFirst: each description taken along is
+// deleted before what it describes and the named one last, so a removal
+// that stops partway never leaves one describing something already gone.
+func TestRemoveDeletesDescriptionsDeepestFirst(t *testing.T) {
+	ctx := context.Background()
+	s, sigRef, _ := chainedStore(t)
+	entries, err := s.readIndex(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectOf := map[digest.Digest]digest.Digest{}
+	for _, e := range entries {
+		if e.subject != nil {
+			subjectOf[e.desc.Digest] = e.subject.Digest
+		}
+	}
+	sig, err := s.Resolve(ctx, sigRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []digest.Digest
+	beforeDelete = func(d digest.Digest) error { order = append(order, d); return nil }
+	defer func() { beforeDelete = nil }()
+
+	if _, err := s.RemoveReporting(ctx, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 6 || order[5] != sig.Digest {
+		t.Fatalf("deleted %d manifests, the signature last=%v; want six, the signature last", len(order), len(order) > 0 && order[len(order)-1] == sig.Digest)
+	}
+	at := map[digest.Digest]int{}
+	for i, d := range order {
+		at[d] = i
+	}
+	for _, d := range order {
+		if i, ok := at[subjectOf[d]]; ok && i < at[d] {
+			t.Errorf("%s was deleted after %s, which it describes", d, subjectOf[d])
+		}
+	}
+}
+
+// TestRemoveReportsWhatWentBeforeAFailure: a removal that fails partway
+// returns exactly the references that no longer resolve.
+func TestRemoveReportsWhatWentBeforeAFailure(t *testing.T) {
+	ctx := context.Background()
+	s, sigRef, chain := chainedStore(t)
+	deletes := 0
+	beforeDelete = func(digest.Digest) error {
+		if deletes++; deletes == 3 {
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	defer func() { beforeDelete = nil }()
+
+	reported, err := s.RemoveReporting(ctx, sigRef)
+	if err == nil {
+		t.Fatal("the injected failure was not returned")
+	}
+	after, err := Open(ctx, s.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gone []string
+	for _, name := range chain {
+		ref := "registry.internal/llm/chained:" + name
+		if _, err := after.Resolve(ctx, ref); err != nil {
+			gone = append(gone, ref)
+		}
+	}
+	slices.Sort(gone)
+	slices.Sort(reported)
+	if len(gone) != 2 || !slices.Equal(gone, reported) {
+		t.Errorf("after two of the chain's deletes, reported %v while %v no longer resolve", reported, gone)
+	}
+}
+
+// TestRemoveRefusalNamesTheFirstOfSeveralHolders: with two untagged indexes,
+// each attached to its own model, listing the signature, the refusal names
+// the same model whatever order the layout saved them in.
+func TestRemoveRefusalNamesTheFirstOfSeveralHolders(t *testing.T) {
+	ctx := context.Background()
+	for range 20 {
+		s := openTestStore(t)
+		signed := pushTestModel(t, s, "registry.internal/llm/signed:v1", []byte("the signed model"))
+		sig := pushUntaggedReferrer(t, s, signed, "its signature")
+		const sigRef = "registry.internal/llm/signed:sha256-0002.sig"
+		if err := s.Tag(ctx, sig, sigRef); err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range []string{"registry.internal/llm/i2:v1", "registry.internal/llm/i1:v1"} {
+			m := pushTestModel(t, s, ref, []byte("a model with an index attached, "+ref))
+			pushIndexWithSubject(t, s, []ocispec.Descriptor{sig}, &m, "")
+		}
+		var held *HeldError
+		if err := s.Remove(ctx, sigRef); !errors.As(err, &held) || held.Holder != "registry.internal/llm/i1:v1" {
+			t.Fatalf("removing the signature returned %v, not a refusal naming registry.internal/llm/i1:v1", err)
+		}
+	}
+}
+
+// TestRemoveRefusalSaysWhichDescriptionIsHeld: when only an attestation the
+// removal would take is held, here as a layer, the refusal names it.
+func TestRemoveRefusalSaysWhichDescriptionIsHeld(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	model := pushTestModel(t, s, "registry.internal/llm/carried:v1", []byte("a model whose attestation is carried"))
+	sig := pushUntaggedReferrer(t, s, model, "its signature")
+	const sigRef = "registry.internal/llm/carried:sha256-0003.sig"
+	if err := s.Tag(ctx, sig, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	att := pushReferrerOfType(t, s, sig, "an attestation over it", "application/vnd.dsse.envelope.v1+json")
+	const attRef = "registry.internal/llm/carried:sha256-0003.sig.att"
+	if err := s.Tag(ctx, att, attRef); err != nil {
+		t.Fatal(err)
+	}
+	asLayer := att
+	asLayer.MediaType = "application/octet-stream"
+	pushManifestOver(t, s, asLayer, "registry.internal/llm/carrier:v1")
+
+	var held *HeldError
+	if err := s.Remove(ctx, sigRef); !errors.As(err, &held) || held.Through != attRef {
+		t.Fatalf("removing the signature returned %v, not a refusal through %s", err, attRef)
 	}
 }
 
