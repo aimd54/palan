@@ -18,6 +18,7 @@ import (
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
 
+	"github.com/aimd54/palan/internal/signing"
 	"github.com/aimd54/palan/pkg/modelspec"
 )
 
@@ -196,10 +197,10 @@ func TestRemoveThenGC(t *testing.T) {
 	}
 }
 
-// pushTestReferrer attaches a manifest naming subject, the shape a signature
-// takes, and tags it. It carries no layers of its own: what matters is the
-// subject edge, which makes everything under the subject reachable from this
-// tag.
+// pushTestReferrer attaches a signature naming subject, typed the way palan
+// and cosign type one, and tags it. It carries no layers of its own: what
+// matters is the subject edge, which makes everything under the subject
+// reachable from this tag.
 func pushTestReferrer(t *testing.T, s *Store, ref string, subject ocispec.Descriptor) ocispec.Descriptor {
 	t.Helper()
 	ctx := context.Background()
@@ -209,10 +210,11 @@ func pushTestReferrer(t *testing.T, s *Store, ref string, subject ocispec.Descri
 		t.Fatalf("push config: %v", err)
 	}
 	manifest := ocispec.Manifest{
-		MediaType: ocispec.MediaTypeImageManifest,
-		Config:    cfg,
-		Layers:    []ocispec.Descriptor{},
-		Subject:   &subject,
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: signing.ArtifactTypeSignature,
+		Config:       cfg,
+		Layers:       []ocispec.Descriptor{},
+		Subject:      &subject,
 	}
 	manifest.SchemaVersion = 2
 	raw, err := json.Marshal(manifest)

@@ -17,11 +17,18 @@ func newGCCmd() *cobra.Command {
 		Short: "Reclaim disk space from unreferenced blobs",
 		Example: `  # Reclaim what nothing refers to any more
   palan gc`,
-		Long: `Gc reclaims blobs no tagged manifest refers to.
+		Long: `Gc reclaims blobs no tagged manifest refers to. An untagged artifact
+that names a tagged one as its subject, such as one added with oras attach,
+is kept with it. So is a model derived from a tagged base once its own tag
+is removed, until nothing tagged reaches the base.
 
 A signature left behind by a removed model is unlinked first. A signature
 names its model as its subject, which keeps the model and all its weights
-reachable, so an orphaned one would otherwise hold the whole model on disk.`,
+reachable, so an orphaned one would otherwise hold the whole model on disk.
+Attestations and bills of materials go the same way.
+
+Any other tagged artifact that names a subject is kept, such as a model
+recording the base it was derived from, and so is the subject it names.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
