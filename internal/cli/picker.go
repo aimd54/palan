@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"charm.land/bubbles/v2/list"
@@ -82,7 +83,7 @@ func pickModel(ctx context.Context, title string) (string, error) {
 		return "", errPickerCancelled
 	}
 
-	items, err := storeItems(ctx)
+	items, err := storeItems(ctx, os.Stderr)
 	if err != nil {
 		return "", err
 	}
@@ -139,30 +140,27 @@ func refOrPick(ctx context.Context, cmd *cobra.Command, args []string, title str
 
 // storeItems lists the local store as picker entries, leaving out signatures
 // and attestations for the same reason `ls` does: they are attached to a
-// model rather than being one.
-func storeItems(ctx context.Context) ([]list.Item, error) {
-	st, err := openStore(ctx)
+// model rather than being one. A wait for the store is announced on w.
+func storeItems(ctx context.Context, w io.Writer) ([]list.Item, error) {
+	st, err := store.OpenDeferred("")
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := st.RLock(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
-	entries, err := st.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]list.Item, 0, len(entries))
-	for _, e := range entries {
-		if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) || signing.IsBundleTag(e.Ref) {
-			continue
+	var items []list.Item
+	err = withSharedLock(ctx, st, w, func() error {
+		entries, err := st.List(ctx)
+		if err != nil {
+			return err
 		}
-		items = append(items, modelItem{ref: e.Ref, desc: pickerDescription(ctx, st, e)})
-	}
-	return items, nil
+		for _, e := range entries {
+			if signing.IsSigTag(e.Ref) || signing.IsAttTag(e.Ref) || signing.IsBundleTag(e.Ref) {
+				continue
+			}
+			items = append(items, modelItem{ref: e.Ref, desc: pickerDescription(ctx, st, e)})
+		}
+		return nil
+	})
+	return items, err
 }
 
 // pickerDescription is the second line of an entry: enough to tell two

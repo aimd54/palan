@@ -70,70 +70,90 @@ opens an interactive chat. With --prompt it answers once and exits; with
 			if err != nil {
 				return err
 			}
-			st, err := openStore(ctx)
+			st, err := store.OpenDeferred("")
 			if err != nil {
 				return err
 			}
-
-			// Check the policy before anything is fetched or spawned: when
-			// the model is absent, resolveVerifySource answers from the
-			// registry, so an unsigned model is refused without downloading
-			// it first.
-			var verified ocispec.Descriptor
 			gate := verifyGate(v, st, doVerify, verifyKey)
-			if gate != nil {
-				if verified, err = gate(ctx, ref.String()); err != nil {
-					return err
-				}
-			}
-
-			// Once the copy to be loaded is on disk, hold it to the
-			// artifact that verified, before anything reads it. The gate
-			// may have answered from the registry, and a fetch reuses
-			// whatever blobs are already here.
-			//
-			// Asked for on its own, re-reading the blobs runs with no
-			// signature check beside it. Tying it to the gate would make
-			// --rehash exit 0 having read nothing on a host that had not
-			// also configured verification.
 			rehash := rehashRequested(v, doRehash)
-			var check func(context.Context, ocispec.Descriptor) error
-			if gate != nil || rehash {
-				check = func(ctx context.Context, local ocispec.Descriptor) error {
-					return checkLoadedContent(ctx, st, ref.String(), local, verified, rehash)
-				}
-			}
-			model, err := ensureModel(ctx, cmd, v, st, ref.String(), verified.Digest, check)
-			if err != nil {
-				return err
-			}
-
-			// Serve parameters: pack-time defaults, overridden by flags.
-			spec := palanruntime.Spec{
-				ModelPath: model.blobPath,
-				Alias:     ref.String(),
-				CtxSize:   model.defaults.Ctx,
-				NGL:       model.defaults.NGL,
-				ExtraArgs: model.defaults.Flags,
-				LogDir:    filepath.Join(st.Root(), "state", "logs"),
-			}
-			if ctxSize > 0 {
-				spec.CtxSize = ctxSize
-			}
-			if ngl > 0 {
-				spec.NGL = ngl
-			}
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
-			// The engine is held to the same policy as the weights it is
-			// about to read.
-			var runtimeDesc ocispec.Descriptor
-			runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
-			if err != nil {
+
+			// The store is read under a shared lock, released before the engine
+			// starts, so a pull that has tagged a model and not yet fetched
+			// its signature is waited for rather than read halfway.
+			var verified ocispec.Descriptor
+			var spec palanruntime.Spec
+			prepare := func() error {
+				desc, err := st.Resolve(ctx, ref.String())
+				if err != nil {
+					return err
+				}
+				// Held to the artifact that verified before loadModelInfo parses
+				// it, since the gate may have answered from the registry;
+				// --rehash re-reads the blobs with or without a signature check.
+				if gate != nil || rehash {
+					if err := checkLoadedContent(ctx, st, ref.String(), desc, verified, rehash); err != nil {
+						return err
+					}
+				}
+				model, err := loadModelInfo(ctx, st, ref.String(), desc)
+				if err != nil {
+					return err
+				}
+
+				// Serve parameters: pack-time defaults, overridden by flags.
+				spec = palanruntime.Spec{
+					ModelPath: model.blobPath,
+					Alias:     ref.String(),
+					CtxSize:   model.defaults.Ctx,
+					NGL:       model.defaults.NGL,
+					ExtraArgs: model.defaults.Flags,
+					LogDir:    filepath.Join(st.Root(), "state", "logs"),
+				}
+				if ctxSize > 0 {
+					spec.CtxSize = ctxSize
+				}
+				if ngl > 0 {
+					spec.NGL = ngl
+				}
+				// The engine is held to the same policy as the weights it is
+				// about to read.
+				var runtimeDesc ocispec.Descriptor
+				runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
+				if err != nil {
+					return err
+				}
+				spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc)
 				return err
 			}
-			if spec.Bin, err = palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc); err != nil {
+			err = withSharedLock(ctx, st, cmd.ErrOrStderr(), func() error {
+				// The policy is checked before anything is fetched, so an
+				// unsigned model is refused without being downloaded.
+				if gate != nil {
+					var gerr error
+					if verified, gerr = gate(ctx, ref.String()); gerr != nil {
+						return gerr
+					}
+				}
+				if _, rerr := st.Resolve(ctx, ref.String()); rerr != nil {
+					return errNotResident
+				}
+				return prepare()
+			})
+			if errors.Is(err, errNotResident) {
+				// Fetched under the exclusive lock, then read again under a
+				// shared one, so what is checked and loaded is what the
+				// store holds once the fetch is complete.
+				if err = pullModel(ctx, cmd, v, st, ref.String(), verified.Digest); err == nil {
+					if afterPull != nil {
+						afterPull()
+					}
+					err = withSharedLock(ctx, st, cmd.ErrOrStderr(), prepare)
+				}
+			}
+			if err != nil {
 				return err
 			}
 
@@ -179,55 +199,43 @@ type modelInfo struct {
 	defaults modelspec.ServeDefaults
 }
 
-// ensureModel resolves ref locally, pulling it first when absent, and
-// returns the weight blob path plus pack-time serve defaults.
-// check, when set, is run once the artifact is resident and before
-// anything reads it. That ordering is the point rather than a detail:
-// loadModelInfo parses the artifact's own bytes to decide whether it can be
-// served, so a check placed after it would report a parse failure over
-// content that should never have been opened.
+// errNotResident reports that the model to run could not be found in the
+// local store, which is taken as a reason to pull it.
+var errNotResident = errors.New("not in the local store")
+
+// afterPull, when a test sets it, runs between run's fetch and the reads that
+// follow it.
+var afterPull func()
+
+// pullModel fetches ref into the store under the exclusive lock.
 //
 // expected is the digest a signature was checked against, empty when
 // nothing was checked. It bounds the fetch rather than the load. The check
-// above would catch a substitution either way, but only after the whole
+// after it would catch a substitution either way, but only after the whole
 // substituted artifact had been downloaded, written into the store and
 // tagged under this reference, leaving a refusal that wrote gigabytes and
 // left the tag pointing at what it just refused. Naming the digest up front
 // means the fetch either brings back the artifact that verified or brings
 // back nothing.
-func ensureModel(
-	ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string,
-	expected digest.Digest, check func(context.Context, ocispec.Descriptor) error,
-) (*modelInfo, error) {
-	desc, err := st.Resolve(ctx, ref)
+func pullModel(ctx context.Context, cmd *cobra.Command, v *viper.Viper, st *store.Store, ref string, expected digest.Digest) error {
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s not in local store; pulling...\n", ref)
+	parsed, err := refname.Parse(ref, v.GetString(keyRegistryDefault))
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%s not in local store; pulling...\n", ref)
-		parsed, perr := refname.Parse(ref, v.GetString(keyRegistryDefault))
-		if perr != nil {
-			return nil, perr
-		}
-		client, cerr := newTransferClient(v)
-		if cerr != nil {
-			return nil, cerr
-		}
-		unlock, lerr := st.Lock(ctx)
-		if lerr != nil {
-			return nil, lerr
-		}
-		pr := newProgress(v.GetBool("quiet"))
-		desc, err = client.Pull(ctx, st, parsed, expected, pr.events())
-		pr.close(err)
-		unlock()
-		if err != nil {
-			return nil, err
-		}
+		return err
 	}
-	if check != nil {
-		if err := check(ctx, desc); err != nil {
-			return nil, err
-		}
+	client, err := newTransferClient(v)
+	if err != nil {
+		return err
 	}
-	return loadModelInfo(ctx, st, ref, desc)
+	unlock, err := lockAnnounced(ctx, st, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	pr := newProgress(v.GetBool("quiet"))
+	_, err = client.Pull(ctx, st, parsed, expected, pr.events())
+	pr.close(err)
+	return err
 }
 
 // loadModelInfo extracts the weight blob path and serve defaults.

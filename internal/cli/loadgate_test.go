@@ -22,11 +22,9 @@ import (
 	"github.com/aimd54/palan/internal/store"
 )
 
-// bogusRuntimeRef is a runtime that does not exist. Pointing run and serve
-// at it turns "the gate let this through" into an observable event: the
-// command gets as far as resolving a runtime and fails there by name,
-// which no refusal in front of it would produce.
-const bogusRuntimeRef = "llm/no-such-runtime:v1"
+// bogusRuntimeRef is a runtime the store does not hold, so a command that gets
+// past its gate fails looking it up, by name, where no refusal would.
+const bogusRuntimeRef = "registry.invalid/llm/no-such-runtime:v1"
 
 // seedGGUF puts a servable GGUF model on reg under repo:tag and returns its
 // reference and weight layer.
@@ -69,6 +67,14 @@ func substituteTail(t *testing.T, st *store.Store, d ocispec.Descriptor) {
 // required, returning what it wrote to stderr alongside the error.
 func runRunCmd(t *testing.T, home, ref, pubFile, runtimeRef string, rehash bool) (string, error) {
 	t.Helper()
+	var errOut bytes.Buffer
+	err := runRunCmdTo(t, home, ref, pubFile, runtimeRef, rehash, &errOut)
+	return errOut.String(), err
+}
+
+// runRunCmdTo is runRunCmd writing stderr to errOut as it goes.
+func runRunCmdTo(t *testing.T, home, ref, pubFile, runtimeRef string, rehash bool, errOut io.Writer) error {
+	t.Helper()
 	t.Setenv("PALAN_HOME", home)
 	v := viper.New()
 	v.Set(keyRegistryPlainHTTP, true)
@@ -81,12 +87,10 @@ func runRunCmd(t *testing.T, home, ref, pubFile, runtimeRef string, rehash bool)
 		v.Set(keyVerifyRehash, true)
 	}
 	cmd := newRunCmd(v)
-	var errOut bytes.Buffer
 	cmd.SetOut(io.Discard)
-	cmd.SetErr(&errOut)
+	cmd.SetErr(errOut)
 	cmd.SetArgs([]string{ref})
-	err := cmd.Execute()
-	return errOut.String(), err
+	return cmd.Execute()
 }
 
 // TestRunRefusesAResidentCopyTheSignatureDoesNotCover is the hole a gate
