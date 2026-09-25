@@ -102,6 +102,13 @@ func OpenShared(ctx context.Context, root string) (*Store, func(), error) {
 	return s, release, nil
 }
 
+// OpenDeferred opens the store at root without reading its layout, which the
+// first lock taken on it reads. It suits a caller that reads the store only
+// under a lock, and leaves nothing read with no lock held.
+func OpenDeferred(root string) (*Store, error) {
+	return newStore(root)
+}
+
 // newStore resolves root and creates it if necessary, without reading the
 // layout inside it.
 func newStore(root string) (*Store, error) {
@@ -222,6 +229,34 @@ func (s *Store) RLock(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	return func() { _ = s.lk.Unlock() }, nil
+}
+
+// TryRLock takes a shared lock if no other process holds the store
+// exclusively, and reports false without waiting if one does.
+func (s *Store) TryRLock() (func(), bool, error) {
+	ok, err := s.lk.TryRLock()
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	if err := s.reload(context.Background()); err != nil {
+		_ = s.lk.Unlock()
+		return nil, false, err
+	}
+	return func() { _ = s.lk.Unlock() }, true, nil
+}
+
+// TryLock takes the exclusive lock if no other process holds the store,
+// and reports whether it did.
+func (s *Store) TryLock() (func(), bool, error) {
+	ok, err := s.lk.TryLock()
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	if err := s.reload(context.Background()); err != nil {
+		_ = s.lk.Unlock()
+		return nil, false, err
+	}
+	return func() { _ = s.lk.Unlock() }, true, nil
 }
 
 // BlobPath returns the filesystem path of a stored blob, verifying it

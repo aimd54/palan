@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
@@ -722,19 +723,23 @@ func mustResolve(t *testing.T, st *store.Store, ref string) ocispec.Descriptor {
 func TestEnsureRefusesADigestItCannotCompute(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
-	ref := packRuntime(t, st)
-
-	// A second artifact sharing the materialization directory, so the
-	// tree the first one unpacked is already there to be compared against.
 	hostile := "registry.example/runtimes/llama-server:b9-cpu-alt"
-	seedHostileRuntime(t, st, Config{
+	cfg := Config{
 		Name: "llama-server", Build: "b9", Flavor: "cpu",
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
-	}, map[string][]byte{"llama-server": []byte("an engine digested with an algorithm palan does not link")}, hostile)
-	if _, err := ensureTag(ctx, st, ref); err != nil {
-		t.Fatalf("unpacking the genuine runtime: %v", err)
 	}
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": []byte("an engine digested with an algorithm palan does not link")}, hostile)
 	retagWithDigestAlgorithm(t, st, hostile, "md5:900150983cd24fb0d6963f7d28e17f72")
+
+	// A tree already where this artifact unpacks, so there is a file on
+	// disk to be compared against the digest.
+	tree := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName()+"-"+mustResolve(t, st, hostile).Digest.Encoded())
+	if err := os.MkdirAll(tree, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "llama-server"), []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	// The refusal is the assertion: reaching this line at all means no
 	// panic, and the message has to name the algorithm rather than blame
@@ -784,37 +789,6 @@ func retagWithDigestAlgorithm(t *testing.T, st *store.Store, ref, layerDigest st
 	}
 	if err := st.Tag(ctx, desc, ref); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestEnsureKeepsRuntimesWhoseFlavourLooksLikeAStagingDirectory: a flavour
-// ending in the staging suffix used to resolve to exactly another
-// runtime's staging path, so unpacking either deleted the other's engine.
-func TestEnsureKeepsRuntimesWhoseFlavourLooksLikeAStagingDirectory(t *testing.T) {
-	ctx := context.Background()
-	st := openTestStore(t)
-	engine := []byte("an engine")
-	plain := "registry.example/runtimes/llama-server:b1-cpu"
-	colliding := "registry.example/runtimes/llama-server:b1-cpu-tmp"
-	seedHostileRuntime(t, st, Config{
-		Name: "llama-server", Build: "b1", Flavor: "cpu",
-		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
-	}, map[string][]byte{"llama-server": engine}, plain)
-	seedHostileRuntime(t, st, Config{
-		Name: "llama-server", Build: "b1", Flavor: "cpu.tmp",
-		OS: runtime.GOOS, Arch: runtime.GOARCH, Entrypoint: "llama-server",
-	}, map[string][]byte{"llama-server": engine}, colliding)
-
-	first, err := ensureTag(ctx, st, colliding)
-	if err != nil {
-		t.Fatalf("unpacking the runtime whose flavour ends in the staging suffix: %v", err)
-	}
-	if _, err := ensureTag(ctx, st, plain); err != nil {
-		t.Fatalf("unpacking the plain runtime: %v", err)
-	}
-	// Positive state: the first engine is still where it was put.
-	if _, err := os.Stat(first); err != nil {
-		t.Fatalf("unpacking one runtime deleted another's engine: %v", err)
 	}
 }
 
@@ -940,9 +914,8 @@ func TestPackRefusesTwoFilesWithOneName(t *testing.T) {
 // store can move the tag, and what gets unpacked and executed is then not
 // what was admitted.
 //
-// Both artifacts here declare the same name, build and flavour, so they
-// materialize to one directory and the only thing separating them is which
-// descriptor Ensure was handed.
+// Both artifacts here declare the same name, build and flavour, so the only
+// thing separating them is which descriptor Ensure was handed.
 func TestEnsureMaterializesTheArtifactItWasGiven(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
@@ -1085,10 +1058,11 @@ func TestEnsureRefusesALinkAboveTheUnpackDirectory(t *testing.T) {
 	// and carrying byte-identical copies, with the name above the unpack
 	// directory replaced by a link to it.
 	shadow := filepath.Join(t.TempDir(), "shadow")
-	if err := os.MkdirAll(filepath.Join(shadow, "b9-cpu"), 0o750); err != nil {
+	unpackDir := cfg.dirName() + "-" + desc.Digest.Encoded()
+	if err := os.MkdirAll(filepath.Join(shadow, unpackDir), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(shadow, "b9-cpu", "llama-server"), packed, 0o700); err != nil { // #nosec G306
+	if err := os.WriteFile(filepath.Join(shadow, unpackDir, "llama-server"), packed, 0o700); err != nil { // #nosec G306
 		t.Fatal(err)
 	}
 	parent := filepath.Join(st.Root(), "runtimes", "llama-server")
@@ -1104,12 +1078,16 @@ func TestEnsureRefusesALinkAboveTheUnpackDirectory(t *testing.T) {
 
 	entry, err := Ensure(ctx, st, ref, desc)
 	if err != nil {
-		return // refused, which is the outcome this is about
+		// Refused, which is the outcome this is about, and for the link.
+		if !strings.Contains(err.Error(), parent) {
+			t.Fatalf("refused, but not for the link at %s: %v", parent, err)
+		}
+		return
 	}
 	// Accepted. That is only sound if what it accepted is not the linked
 	// tree, so the owner of that tree must not be able to change what runs.
 	substitute := []byte("#!/bin/sh\n# an engine nothing packed\nexit 7\n")
-	if err := os.WriteFile(filepath.Join(shadow, "b9-cpu", "llama-server"), substitute, 0o700); err != nil { // #nosec G306
+	if err := os.WriteFile(filepath.Join(shadow, unpackDir, "llama-server"), substitute, 0o700); err != nil { // #nosec G306
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(entry) // #nosec G304 -- path returned by the code under test
@@ -1118,5 +1096,266 @@ func TestEnsureRefusesALinkAboveTheUnpackDirectory(t *testing.T) {
 	}
 	if string(got) != string(packed) {
 		t.Fatalf("a link above the unpack directory decides what palan executes; it now holds %q", got)
+	}
+}
+
+// TestEnsureWaitsForAnotherUnpack: deciding a tree needs replacing and
+// replacing it happen under one lock across processes.
+func TestEnsureWaitsForAnotherUnpack(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+
+	runtimes := filepath.Join(st.Root(), "runtimes")
+	if err := os.MkdirAll(runtimes, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	other := flock.New(filepath.Join(runtimes, unpackLockName))
+	if ok, err := other.TryLock(); err != nil || !ok {
+		t.Fatalf("taking the unpack lock as another process would: ok=%v err=%v", ok, err)
+	}
+
+	type ensured struct {
+		entry string
+		err   error
+	}
+	got := make(chan ensured, 1)
+	go func() {
+		entry, err := ensureTag(ctx, st, ref)
+		got <- ensured{entry, err}
+	}()
+	select {
+	case e := <-got:
+		_ = other.Unlock()
+		t.Fatalf("ensure went ahead while another unpack held the lock (%q, %v)", e.entry, e.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := other.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	var e ensured
+	select {
+	case e = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ensure did not proceed once the other unpack finished")
+	}
+	if e.err != nil {
+		t.Fatalf("ensure: %v", e.err)
+	}
+	packed, err := os.ReadFile(fakellamaBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpacked, err := os.ReadFile(e.entry) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatalf("the engine ensure reported is not there: %v", err)
+	}
+	if !bytes.Equal(packed, unpacked) {
+		t.Fatal("the engine ensure reported does not hold the packed bytes")
+	}
+}
+
+// TestEnsureNeverReplacesAnotherArtifactsTree: two builds published under one
+// name, build and flavour are different artifacts, and unpacking the second
+// must leave the first where an engine already started from it.
+func TestEnsureNeverReplacesAnotherArtifactsTree(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	cfg := Config{
+		Name: "llama-server", Build: "b9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+	packed := map[string][]byte{}
+	entries := map[string]string{}
+	for _, ref := range []string{"registry.example/runtimes/llama-server:first", "registry.example/runtimes/llama-server:second"} {
+		bin := filepath.Join(t.TempDir(), "llama-server")
+		body := []byte("#!/bin/sh\n# " + ref + "\n")
+		if err := os.WriteFile(bin, body, 0o755); err != nil { // #nosec G306 -- an executable fixture
+			t.Fatal(err)
+		}
+		if _, err := Pack(ctx, st, []PackFile{{Path: bin, Name: "llama-server"}}, cfg, ref); err != nil {
+			t.Fatalf("pack %s: %v", ref, err)
+		}
+		entry, err := ensureTag(ctx, st, ref)
+		if err != nil {
+			t.Fatalf("ensure %s: %v", ref, err)
+		}
+		packed[ref], entries[ref] = body, entry
+	}
+	if entries["registry.example/runtimes/llama-server:first"] == entries["registry.example/runtimes/llama-server:second"] {
+		t.Fatalf("two artifacts unpacked to one path: %s", entries["registry.example/runtimes/llama-server:first"])
+	}
+	for ref, entry := range entries {
+		got, err := os.ReadFile(entry) // #nosec G304 -- test fixture under a temp dir
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, packed[ref]) {
+			t.Errorf("the engine unpacked for %s no longer holds its own bytes", ref)
+		}
+	}
+}
+
+// TestEnsureHoldsTheUnpackLockUntilTheTreeIsInPlace: removing the old tree
+// and renaming the new one in are the steps the lock exists for, since two
+// unpacks interleaving there each remove the tree the other has placed.
+func TestEnsureHoldsTheUnpackLockUntilTheTreeIsInPlace(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+	var reached, held bool
+	afterRemove = func() {
+		reached = true
+		rival := flock.New(filepath.Join(st.Root(), "runtimes", unpackLockName))
+		ok, err := rival.TryLock()
+		if ok {
+			_ = rival.Unlock()
+		}
+		held = err == nil && !ok
+	}
+	defer func() { afterRemove = nil }()
+
+	if _, err := ensureTag(ctx, st, ref); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !reached {
+		t.Fatal("the unpack never came between removing a tree and renaming one in")
+	}
+	if !held {
+		t.Fatal("another unpack could take the lock between the old tree's removal and the new one's arrival")
+	}
+}
+
+// TestEnsureRefusesALinkAtItsLockFile: the lock file is opened without
+// following a link, so a link planted at its name creates nothing elsewhere.
+func TestEnsureRefusesALinkAtItsLockFile(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+	runtimes := filepath.Join(st.Root(), "runtimes")
+	if err := os.MkdirAll(runtimes, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "created-through-the-link")
+	if err := os.Symlink(target, filepath.Join(runtimes, unpackLockName)); err != nil {
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+	if _, err := ensureTag(ctx, st, ref); err == nil {
+		t.Fatal("ensure took a lock through a link at the lock file's name")
+	}
+	if _, err := os.Lstat(target); err == nil {
+		t.Fatal("opening the lock file created the link's target")
+	}
+}
+
+// TestEnsureChecksItsDirectoriesAgainOnceLocked: the directories above the
+// unpack directory are checked before the wait for the lock and again after
+// it, since the wait can last as long as another unpack does.
+func TestEnsureChecksItsDirectoriesAgainOnceLocked(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+	runtimes := filepath.Join(st.Root(), "runtimes")
+	if err := os.MkdirAll(runtimes, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	other := flock.New(filepath.Join(runtimes, unpackLockName))
+	if ok, err := other.TryLock(); err != nil || !ok {
+		t.Fatalf("taking the unpack lock: ok=%v err=%v", ok, err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ensureTag(ctx, st, ref)
+		done <- err
+	}()
+	parent := filepath.Join(runtimes, "llama-server")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(parent); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = other.Unlock()
+			t.Fatal("ensure never reached the lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// While it waits, the directory it checked becomes a link elsewhere.
+	shadow := t.TempDir()
+	if err := os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shadow, parent); err != nil {
+		_ = other.Unlock()
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+	_ = other.Unlock()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ensure unpacked through a link that appeared while it waited for the lock")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ensure did not return once the lock was free")
+	}
+	entries, err := os.ReadDir(shadow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ensure wrote %d entries through the link", len(entries))
+	}
+}
+
+// TestEnsureRefusesANameBeginningWithADot: runtimes/ holds the store's own
+// files beside each runtime's directory, the unpack lock among them.
+func TestEnsureRefusesANameBeginningWithADot(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	const ref = "registry.example/runtimes/dotted:b1-cpu"
+	cfg := Config{
+		Name: unpackLockName, Build: "b1", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Flavor: "cpu", Entrypoint: "llama-server",
+	}
+	seedHostileRuntime(t, st, cfg, map[string][]byte{"llama-server": []byte("#!/bin/sh\n")}, ref)
+	_, err := ensureTag(ctx, st, ref)
+	if err == nil || !strings.Contains(err.Error(), "begins with a dot") {
+		t.Fatalf("a runtime named %q: %v, want it refused for the dot", unpackLockName, err)
+	}
+	// Nothing was made under that name, so the next unpack takes its lock.
+	if fi, err := os.Lstat(filepath.Join(st.Root(), "runtimes", unpackLockName)); err == nil && fi.IsDir() {
+		t.Fatalf("the refusal left a directory where the unpack lock lives")
+	}
+	if _, err := ensureTag(ctx, st, packRuntime(t, st)); err != nil {
+		t.Fatalf("unpacking a runtime after the refusal: %v", err)
+	}
+}
+
+// TestEnsureRefusesALinkAtTheRuntimesDirectory: runtimes/ itself is a path
+// component the unpack creates, locks and renames beneath.
+func TestEnsureRefusesALinkAtTheRuntimesDirectory(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	ref := packRuntime(t, st)
+	shadow := t.TempDir()
+	runtimes := filepath.Join(st.Root(), "runtimes")
+	if err := os.RemoveAll(runtimes); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shadow, runtimes); err != nil {
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+	_, err := ensureTag(ctx, st, ref)
+	if err == nil || !strings.Contains(err.Error(), runtimes+" is a link") {
+		t.Fatalf("a link at %s: %v, want it refused for the link", runtimes, err)
+	}
+	entries, err := os.ReadDir(shadow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ensure wrote %d entries through the link", len(entries))
 	}
 }

@@ -23,7 +23,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
@@ -84,6 +86,11 @@ func (c Config) safePathFields() error {
 			return fmt.Errorf(
 				"the runtime config's %s %q is not a single path component", f.kind, f.value)
 		}
+	}
+	// A name beginning with a dot could be one of the store's own files
+	// beneath runtimes/, the unpack lock among them.
+	if strings.HasPrefix(c.Name, ".") {
+		return fmt.Errorf("the runtime config's name %q begins with a dot", c.Name)
 	}
 	return nil
 }
@@ -207,6 +214,8 @@ func Pack(ctx context.Context, st *store.Store, files []PackFile, cfg Config, re
 // extraction that went wrong and the answer to one that was tampered with,
 // and it restores the idempotence this function claims: the result depends
 // on what the store holds, not on what is already on disk.
+//
+// The caller holds the store's lock; the unpack lock is taken inside it.
 func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descriptor) (string, error) {
 	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
 	if err != nil {
@@ -236,10 +245,25 @@ func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descr
 		return "", fmt.Errorf("runtime %q: %w", ref, err)
 	}
 
-	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName())
+	// One directory per artifact, so unpacking a different build under the
+	// same name never replaces the tree an engine already verified runs from.
+	destDir := filepath.Join(st.Root(), "runtimes", cfg.Name, cfg.dirName()+"-"+desc.Digest.Encoded())
 	entry := filepath.Join(destDir, cfg.Entrypoint)
 	// The components above the unpack directory, before anything reads,
-	// creates or renames through them.
+	// creates or renames through them, and again once the lock is held.
+	if err := plainDirs(st.Root(), "runtimes", cfg.Name); err != nil {
+		return "", fmt.Errorf("runtime %q: %w", ref, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destDir), 0o750); err != nil {
+		return "", err
+	}
+	// Deciding to replace a tree and replacing it happen under one lock
+	// across processes, so an unpack never removes a tree another has placed.
+	unlock, err := lockUnpacking(ctx, filepath.Join(st.Root(), "runtimes"))
+	if err != nil {
+		return "", fmt.Errorf("runtime %q: %w", ref, err)
+	}
+	defer unlock()
 	if err := plainDirs(st.Root(), "runtimes", cfg.Name); err != nil {
 		return "", fmt.Errorf("runtime %q: %w", ref, err)
 	}
@@ -247,21 +271,9 @@ func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descr
 		return entry, nil
 	}
 
-	// The replacement is built whole before anything is taken away, so a
-	// host whose engine merely failed a check is not left with no engine
-	// at all when the unpack cannot finish.
-	if err := os.MkdirAll(filepath.Dir(destDir), 0o750); err != nil {
-		return "", err
-	}
-	// A unique staging directory rather than destDir+".tmp". That name is
-	// itself a legal destination: a runtime whose flavour ends in ".tmp"
-	// resolves to exactly the staging path of another one, so unpacking
-	// either would delete the other's engine. A unique name also keeps two
-	// unpacks running at once from staging into the same place, which is
-	// as far as it goes: they still install to one destination, and two
-	// that race there can leave one of them reporting a path that the
-	// other removed. Both would be unpacking a tree the store vouches for,
-	// so this is a failure to start rather than a wrong engine.
+	// The replacement is built whole, in a staging directory of its own,
+	// before anything is taken away, so a host whose engine merely failed a
+	// check is not left with no engine when the unpack cannot finish.
 	tmpDir, err := os.MkdirTemp(filepath.Dir(destDir), ".unpack-")
 	if err != nil {
 		return "", err
@@ -288,10 +300,37 @@ func Ensure(ctx context.Context, st *store.Store, ref string, desc ocispec.Descr
 	if err := os.RemoveAll(destDir); err != nil {
 		return "", err
 	}
+	if afterRemove != nil {
+		afterRemove()
+	}
 	if err := os.Rename(tmpDir, destDir); err != nil {
 		return "", err
 	}
 	return entry, nil
+}
+
+// unpackLockName is the file beneath the runtimes directory that one unpack
+// at a time holds.
+const unpackLockName = ".unpack.lock"
+
+// afterRemove, when a test sets it, runs between removing an unpacked tree
+// and renaming its replacement into place.
+var afterRemove func()
+
+// lockUnpacking takes the unpack lock in dir, waiting for whoever holds it.
+// The lock file is opened without following a link at its name.
+func lockUnpacking(ctx context.Context, dir string) (func(), error) {
+	lk := flock.New(filepath.Join(dir, unpackLockName), flock.SetFlag(os.O_CREATE|os.O_RDONLY|openNoFollow))
+	ok, err := lk.TryLockContext(ctx, 100*time.Millisecond)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return nil, fmt.Errorf("waiting for another unpack under %s: %w", dir, err)
+	case err != nil:
+		return nil, fmt.Errorf("taking the unpack lock %s: %w", lk.Path(), err)
+	case !ok:
+		return nil, fmt.Errorf("taking the unpack lock %s: not granted", lk.Path())
+	}
+	return func() { _ = lk.Unlock() }, nil
 }
 
 // validateLayers refuses a manifest whose layers this cannot safely act on,
@@ -368,8 +407,10 @@ func plainDirs(base string, rel ...string) error {
 			return nil
 		case err != nil:
 			return err
+		case fi.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("%s is a link, which palan does not unpack beneath", cur)
 		case !fi.IsDir():
-			return fmt.Errorf("%s is a %s, not a directory palan can unpack beneath", cur, fi.Mode().Type())
+			return fmt.Errorf("%s is not a directory palan can unpack beneath", cur)
 		}
 	}
 	return nil

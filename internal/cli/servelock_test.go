@@ -8,14 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gofrs/flock"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/spf13/viper"
 	"oras.land/oras-go/v2/content"
 
 	"github.com/aimd54/palan/internal/gguf/gguftest"
@@ -344,5 +347,41 @@ func TestServeLoadsRunConcurrently(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("a concurrent load failed: %v", err)
+	}
+}
+
+// TestServeStartUpWaitsForAWriter: serve's start-up reads wait for a writer,
+// here one halfway through saving the index, rather than read what it holds.
+func TestServeStartUpWaitsForAWriter(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	first, _ := twoServedModels(t, home)
+	t.Setenv("PALAN_HOME", home)
+	unlock := holdMidSave(t, home)
+
+	v := viper.New()
+	v.Set(keyRuntimeRef, bogusRuntimeRef)
+	cmd := newServeCmd(v)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{first, "--memory-budget", "1GiB", "--addr", "127.0.0.1:0"})
+	done := make(chan error, 1)
+	go func() { done <- cmd.ExecuteContext(ctx) }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("serve read the store while a pull held it: %v", err)
+	case <-time.After(time.Second):
+	}
+	unlock()
+
+	select {
+	case err := <-done:
+		// Past the lock, start-up looks its runtime up in the store.
+		if err == nil || !strings.Contains(err.Error(), bogusRuntimeRef) {
+			t.Fatalf("serve did not proceed to its runtime once the store was released: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve did not proceed once the store was released")
 	}
 }

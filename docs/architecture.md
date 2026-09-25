@@ -254,7 +254,7 @@ content-addressed blobs:
 ~/.local/share/palan/
 ├── blobs/sha256/<digest>        # GGUF blobs land here once, shared across tags
 ├── index.json                   # oci-layout index: refs → manifests
-├── runtimes/<name>/<version>/llama-server
+├── runtimes/<name>/<build>-<flavor>-<digest>/llama-server
 └── state/                       # router runtime state, ports, pids
 ```
 
@@ -266,8 +266,17 @@ OCI-aware tool.
 Several palan processes can share one store, coordinated through a lock
 file in its root. A command that changes the store (`pull`, `pack`, `load`,
 `rm`, `gc`) holds it exclusively while it runs, and for a transfer that is
-the whole download. Taking the lock re-reads the layout, so a command acts
-on the store as it stands, not as it stood when the command started.
+the whole download. `run` and `serve` hold it shared while they check a
+model and its runtime and unpack the runtime, and release it before the
+engine starts; when `run` has to fetch the model first, it takes the lock
+exclusively for the fetch and shared again afterwards. Taking the lock
+re-reads the layout, so a command acts on the store as it stands, not as it
+stood when the command started. Unpacking a runtime also takes a lock of its
+own beneath `runtimes/`, and each runtime artifact unpacks into a directory
+named for its build, flavour and digest, so unpacking one never replaces the
+files of another an engine is running from. A superseded runtime's
+directory, and one unpacked before directories carried the digest, stay
+until removed by hand; neither `gc` nor `rm` reclaims it.
 
 Transfers go through [oras-go v2](https://github.com/oras-project/oras-go):
 resumable (via HTTP Range requests, including across process restarts),

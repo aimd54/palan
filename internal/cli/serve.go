@@ -74,7 +74,7 @@ to no offload will serve from CPU on a GPU host.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			st, err := openStore(ctx)
+			st, err := store.OpenDeferred("")
 			if err != nil {
 				return err
 			}
@@ -87,27 +87,35 @@ to no offload will serve from CPU on a GPU host.`,
 			if runtimeRef == "" {
 				runtimeRef = v.GetString(keyRuntimeRef)
 			}
-			var runtimeDesc ocispec.Descriptor
-			runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
-			if err != nil {
-				return err
-			}
-			bin, err := palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc)
-			if err != nil {
-				return err
-			}
-
-			// Validate explicit refs up front (fail fast, not on request).
+			// Start-up reads the store under a shared lock, released before
+			// serving begins, for the reason each load does.
+			var bin string
 			refs := make([]string, 0, len(args))
-			for _, raw := range args {
-				ref, err := refname.Parse(raw, v.GetString(keyRegistryDefault))
+			err = withSharedLock(ctx, st, cmd.ErrOrStderr(), func() error {
+				var runtimeDesc ocispec.Descriptor
+				var err error
+				runtimeRef, runtimeDesc, err = checkRuntime(ctx, cmd.ErrOrStderr(), v, st, gate, runtimeRef, rehash)
 				if err != nil {
 					return err
 				}
-				if _, err := st.Resolve(ctx, ref.String()); err != nil {
-					return fmt.Errorf("%s is not in the local store (pull it first): %w", ref, err)
+				if bin, err = palanruntime.Resolve(ctx, st, runtimeRef, runtimeDesc); err != nil {
+					return err
 				}
-				refs = append(refs, ref.String())
+				// Validate explicit refs up front (fail fast, not on request).
+				for _, raw := range args {
+					ref, err := refname.Parse(raw, v.GetString(keyRegistryDefault))
+					if err != nil {
+						return err
+					}
+					if _, err := st.Resolve(ctx, ref.String()); err != nil {
+						return fmt.Errorf("%s is not in the local store (pull it first): %w", ref, err)
+					}
+					refs = append(refs, ref.String())
+				}
+				return nil
+			})
+			if err != nil {
+				return err
 			}
 
 			budget := int64(0)

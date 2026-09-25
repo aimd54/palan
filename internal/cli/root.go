@@ -196,3 +196,34 @@ func newTransferClient(v *viper.Viper) (*transfer.Client, error) {
 func openStore(ctx context.Context) (*store.Store, error) {
 	return store.Open(ctx, "")
 }
+
+// withSharedLock runs fn under a shared lock on st, which re-reads the
+// layout as it is taken, and releases it on every path out. A wait for
+// another process is announced on w, since it lasts as long as that process.
+func withSharedLock(ctx context.Context, st *store.Store, w io.Writer, fn func() error) error {
+	release, ok, err := st.TryRLock()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Fprintln(w, waitingForStore)
+		if release, err = st.RLock(ctx); err != nil {
+			return err
+		}
+	}
+	defer release()
+	return fn()
+}
+
+// lockAnnounced takes the store exclusively, saying so on w when it has to
+// wait for another process.
+func lockAnnounced(ctx context.Context, st *store.Store, w io.Writer) (func(), error) {
+	release, ok, err := st.TryLock()
+	if err != nil || ok {
+		return release, err
+	}
+	fmt.Fprintln(w, waitingForStore)
+	return st.Lock(ctx)
+}
+
+const waitingForStore = "Waiting for another palan process to finish with the store..."
