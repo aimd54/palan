@@ -263,6 +263,11 @@ func safetensorsMeta(dir string, shards []string) (*safetensors.Config, *safeten
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.QuantMethod == "" || safetensors.IsModelOpt(cfg.QuantMethod) {
+		if algo := safetensors.ReadQuantAlgo(dir); algo != "" {
+			cfg.QuantMethod = algo
+		}
+	}
 	if len(shards) == 0 {
 		return nil, nil, fmt.Errorf("%s: no .safetensors file", dir)
 	}

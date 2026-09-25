@@ -12,7 +12,14 @@ func TestFileSetNamesCoverWhatAModelIsPublishedWith(t *testing.T) {
 	// The tokenizer and the licence are what a redistributed model is
 	// unusable or unlawful without, so both lists are pinned here rather
 	// than left to whichever caller reads them first.
-	for _, want := range []string{"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"} {
+	for _, want := range []string{
+		"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+		"added_tokens.json", "tiktoken.model",
+		// The only copy of the chat template, for many models.
+		"chat_template.jinja", "chat_template.json",
+		// What a model that reads images or video needs to accept them.
+		"preprocessor_config.json", "processor_config.json", "video_preprocessor_config.json",
+	} {
 		if !slices.Contains(CompanionNames, want) {
 			t.Errorf("CompanionNames is missing %q", want)
 		}

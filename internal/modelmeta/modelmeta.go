@@ -9,6 +9,7 @@ package modelmeta
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -29,11 +30,10 @@ type Info struct {
 	Architecture string
 	Name         string
 	SizeLabel    string
-	// Precision is the numeric type the weights are stored in, bf16 or fp16
-	// for example, and Quantization names a quantization scheme such as awq
-	// or gptq. The ModelPack config keeps the two apart, so a value goes to
-	// the field its source describes: a GGUF file type is a quantization, a
-	// safetensors dtype is a precision.
+	// Precision is the numeric type the model computes in, bfloat16 or
+	// float16 for example, and Quantization names a quantization scheme such
+	// as awq or fp8. The ModelPack config keeps the two apart, and a
+	// quantized model states both.
 	Precision     string
 	Quantization  string
 	License       string
@@ -58,27 +58,49 @@ func FromGGUF(g *gguf.Info) Info {
 // the model name, which safetensors does not publish; callers pass the source
 // directory or repository name. License stays empty for the same reason: a
 // safetensors model carries no license field, so only a caller can supply one.
-// The dtype fills Precision, from config.json when it states one and from the
-// shard headers otherwise. Quantization stays empty, since weights that were
-// never quantized name no scheme.
+// Precision is the dtype config.json states, which is the one the model
+// computes in, or the shard headers' dominant one when it states none, and
+// Quantization names the scheme a quantized model's config records.
 func FromSafetensors(c *safetensors.Config, h *safetensors.Header, name string) Info {
 	arch := c.ModelType
 	if arch == "" && len(c.Architectures) > 0 {
 		arch = c.Architectures[0]
 	}
 	prec := c.TorchDType
-	if prec == "" {
-		prec = h.DominantDType()
+	switch {
+	case prec != "":
+	case c.QuantMethod == "":
+		prec = safetensors.DTypeName(h.DominantDType())
+	default:
+		// Quantized weights are packed into integer or 8-bit containers, so
+		// only the tensors left in a float type say what the model computes in.
+		prec = safetensors.DTypeName(h.DominantDType("BF16", "F16", "F32"))
+	}
+	// Packed weights hold several parameters to an element, a number that
+	// depends on the scheme, so no count is recorded rather than a wrong one.
+	size := FormatParamSize(h.ParamCount())
+	if c.QuantMethod != "" && slices.Contains(packedDTypes, h.DominantDType(quantizedDTypes...)) {
+		size = ""
 	}
 	return Info{
 		Architecture:  arch,
 		Name:          name,
-		SizeLabel:     FormatParamSize(h.ParamCount()),
+		SizeLabel:     size,
 		Precision:     prec,
+		Quantization:  c.QuantMethod,
 		ContextLength: c.MaxPositionEmbeddings,
 		Format:        FormatSafetensors,
 	}
 }
+
+// packedDTypes are the integer types quantized weights are packed into, such
+// as AWQ and GPTQ's int32 words and the bytes 4-bit schemes use. int8 holds
+// one parameter to an element, and is not among them.
+var packedDTypes = []string{"U8", "I16", "U16", "I32", "U32", "I64", "U64"}
+
+// quantizedDTypes are the types quantized weights are stored in, packed or
+// not. Whichever holds the most elements says which the weights are.
+var quantizedDTypes = append([]string{"I8", "F8_E4M3", "F8_E5M2"}, packedDTypes...)
 
 // magnitudes are the units a parameter count is rendered in, smallest first.
 var magnitudes = []struct {

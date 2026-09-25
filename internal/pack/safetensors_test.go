@@ -13,6 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content"
+
 	"github.com/aimd54/palan/internal/safetensors"
 	"github.com/aimd54/palan/internal/safetensors/safetensorstest"
 	"github.com/aimd54/palan/internal/store"
@@ -418,5 +421,136 @@ func TestModelDirectoryLicenceTravels(t *testing.T) {
 		if kind != modelspec.LayerKindDoc {
 			t.Errorf("%s packed as kind %v, want a documentation layer", want, kind)
 		}
+	}
+}
+
+// TestAModelSavedByARecentReleasePacksWhole: an index stating its size with a
+// fraction, values under text_config, and a chat template and processor
+// config in files of their own, all of which a server needs.
+func TestAModelSavedByARecentReleasePacksWhole(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeShardedModel(t, dir, 2)
+	cfg := `{"model_type":"vlm","text_config":{"dtype":"bfloat16","max_position_embeddings":262144}}`
+	if err := os.WriteFile(filepath.Join(dir, safetensors.ConfigName), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(dir, safetensors.IndexName)
+	ix, err := os.ReadFile(indexPath) // #nosec G304 -- test fixture under a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := fmt.Sprintf(`"total_size":%d`, 2*fixtureTensorBytes)
+	if !strings.Contains(string(ix), whole) {
+		t.Fatalf("the fixture index does not state its size as expected: %s", ix)
+	}
+	ix = []byte(strings.Replace(string(ix), whole, whole+".0", 1))
+	if err := os.WriteFile(indexPath, ix, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	companions := map[string][]byte{
+		"chat_template.jinja":      []byte("{% for m in messages %}{{ m.content }}{% endfor %}"),
+		"preprocessor_config.json": []byte(`{"image_processor_type":"example"}`),
+	}
+	for name, body := range companions {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st := openTestStore(t)
+	desc, err := Model(ctx, st, []File{{Path: dir}}, "registry.example/llm/recent:v1", Options{})
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range companions {
+		var layer *ocispec.Descriptor
+		for i := range manifest.Layers {
+			if manifest.Layers[i].Annotations[modelspec.AnnotationFilepath] == name {
+				layer = &manifest.Layers[i]
+			}
+		}
+		if layer == nil {
+			t.Errorf("%s was left behind", name)
+			continue
+		}
+		if layer.MediaType != modelspec.MediaTypeModelWeightConfigRaw {
+			t.Errorf("%s packed as %s, want a weight config layer", name, layer.MediaType)
+		}
+		got, err := content.FetchAll(ctx, st.OCI(), *layer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(body) {
+			t.Errorf("%s carries %q, want the file's own bytes", name, got)
+		}
+	}
+	model, err := store.FetchJSON[modelspec.Model](ctx, st.OCI(), manifest.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Config.Precision != "bfloat16" {
+		t.Errorf("precision = %q, want bfloat16 from text_config", model.Config.Precision)
+	}
+	if got := manifest.Annotations[modelspec.AnnotationContextLength]; got != "262144" {
+		t.Errorf("context length = %q, want 262144 from text_config", got)
+	}
+}
+
+// TestAModelOptCheckpointPacksWithItsQuantization: an NVIDIA ModelOpt
+// checkpoint states its scheme in hf_quant_config.json, which a server reads
+// to load the weights quantized, so the file travels and the scheme is
+// recorded beside the dtype the model computes in. config.json names no
+// scheme or only the toolkit, which is kept when nothing names more.
+func TestAModelOptCheckpointPacksWithItsQuantization(t *testing.T) {
+	ctx := context.Background()
+	const fp8 = `{"producer":{"name":"modelopt"},"quantization":{"quant_algo":"FP8"}}`
+	for _, c := range []struct{ name, config, quant, want string }{
+		{"toolkit named", `{"model_type":"llama","torch_dtype":"bfloat16","quantization_config":{"quant_method":"modelopt"}}`, fp8, "fp8"},
+		{"nothing named", `{"model_type":"llama","torch_dtype":"bfloat16"}`, fp8, "fp8"},
+		{"no scheme file", `{"model_type":"llama","torch_dtype":"bfloat16","quantization_config":{"quant_method":"modelopt"}}`, "", "modelopt"},
+		{"a variant of the toolkit", `{"model_type":"llama","torch_dtype":"bfloat16","quantization_config":{"quant_method":"modelopt_fp4"}}`, fp8, "fp8"},
+		{"another scheme named", `{"model_type":"llama","torch_dtype":"bfloat16","quantization_config":{"quant_method":"awq"}}`, fp8, "awq"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeShardedModel(t, dir, 2)
+			if err := os.WriteFile(filepath.Join(dir, safetensors.ConfigName), []byte(c.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if c.quant != "" {
+				if err := os.WriteFile(filepath.Join(dir, safetensors.QuantConfigName), []byte(c.quant), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := openTestStore(t)
+			desc, err := Model(ctx, st, []File{{Path: dir}}, "registry.example/llm/modelopt:fp8", Options{})
+			if err != nil {
+				t.Fatalf("pack: %v", err)
+			}
+			manifest, err := store.FetchManifest(ctx, st.OCI(), desc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			carried := false
+			for _, l := range manifest.Layers {
+				carried = carried || l.Annotations[modelspec.AnnotationFilepath] == safetensors.QuantConfigName
+			}
+			if carried != (c.quant != "") {
+				t.Errorf("%s carried: %v, want %v", safetensors.QuantConfigName, carried, c.quant != "")
+			}
+			model, err := store.FetchJSON[modelspec.Model](ctx, st.OCI(), manifest.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if model.Config.Quantization != c.want || model.Config.Precision != "bfloat16" {
+				t.Errorf("recorded quantization %q and precision %q, want %s and bfloat16",
+					model.Config.Quantization, model.Config.Precision, c.want)
+			}
+		})
 	}
 }

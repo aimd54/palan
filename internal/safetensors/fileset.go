@@ -4,11 +4,16 @@
 package safetensors
 
 // CompanionNames are the files a served safetensors model wants beside its
-// weights. They travel when present; a model without them is still a valid
-// artifact, so their absence is not an error.
+// weights: its tokenizer, its chat template, which may exist only in
+// chat_template.jinja, the processor configs a model that reads images or
+// video needs, and a ModelOpt checkpoint's quantization config. They travel
+// when present, and their absence is no error.
 var CompanionNames = []string{
 	"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
-	"generation_config.json", "tokenizer.model", "vocab.json", "merges.txt",
+	"generation_config.json", "tokenizer.model", "tiktoken.model", "vocab.json", "merges.txt",
+	"added_tokens.json", "chat_template.jinja", "chat_template.json",
+	"preprocessor_config.json", "processor_config.json", "video_preprocessor_config.json",
+	QuantConfigName,
 }
 
 // DocNames are the files stating the terms the weights were released under,

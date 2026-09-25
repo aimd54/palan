@@ -154,10 +154,6 @@ within reach.
   unload and the automatic budget probe are all measured; what is untested is
   the arithmetic when a wrong estimate would surface as an allocation failure
   instead of an eviction.
-- **`precision` is recorded and not shown.** A safetensors model's dtype goes
-  into the model config's `precision` field, since `quantization` names a scheme
-  such as awq or gptq rather than a numeric type. Neither `ls`, `describe` nor
-  their JSON output reads that field yet, so the value is currently invisible.
 - **`/v1/models` lists references that cannot be served.** A safetensors
   artifact appears in the listing and is then refused on use, as an unsigned
   model already is under the verification policy. Filtering the listing to what

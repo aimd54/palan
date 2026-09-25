@@ -150,10 +150,9 @@ func lsCells(r modelRow) []string {
 	}
 }
 
-// encoding is how the weights are stored: a quantization scheme when the model
-// names one, the numeric type otherwise. A model states one or the other, so a
-// single column reports both without losing anything, and a listing of GGUF
-// models is not left with a column that is always empty.
+// encoding is the quantization scheme when the model names one and the
+// precision otherwise, so a listing of GGUF models is not left with a column
+// that is always empty. describe shows both.
 func encoding(r modelRow) string {
 	if r.Quant != "" {
 		return r.Quant

@@ -388,6 +388,13 @@ func TestPackRefusesARepositoryWhoseSignatureOmitsAFile(t *testing.T) {
 	if !strings.Contains(err.Error(), "config.json") {
 		t.Errorf("the refusal does not name the uncovered file: %v", err)
 	}
+	// Whether a file is listed needs no bytes, so the refusal comes before
+	// the weights are transferred.
+	for _, p := range hub.FetchedPaths {
+		if p == "model.safetensors" {
+			t.Error("the weights were downloaded before a file the signature does not list was refused")
+		}
+	}
 }
 
 // TestPackCommandRefusesAnUncoveredFileWhenOMSKeyIsSetThroughTheFlag runs the

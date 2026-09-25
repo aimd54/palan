@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 )
 
@@ -77,7 +78,8 @@ func ReadHeader(path string) (*Header, error) {
 	return h, nil
 }
 
-// ParamCount sums the element count of every tensor.
+// ParamCount sums the element count of every tensor, which is the parameter
+// count unless the weights are packed several to an element.
 func (h *Header) ParamCount() int64 {
 	var total int64
 	for _, ti := range h.Tensors {
@@ -90,12 +92,15 @@ func (h *Header) ParamCount() int64 {
 	return total
 }
 
-// DominantDType is the dtype holding the most elements, which is what a reader
-// means by the precision of the model. Ties break alphabetically so the answer
-// is deterministic.
-func (h *Header) DominantDType() string {
+// DominantDType is the dtype holding the most elements, among the given ones
+// when any are given. Ties break alphabetically so the answer is
+// deterministic, and nothing is returned when no tensor qualifies.
+func (h *Header) DominantDType(among ...string) string {
 	byType := map[string]int64{}
 	for _, ti := range h.Tensors {
+		if len(among) > 0 && !slices.Contains(among, ti.DType) {
+			continue
+		}
 		n := int64(1)
 		for _, d := range ti.Shape {
 			n *= d
@@ -114,4 +119,22 @@ func (h *Header) DominantDType() string {
 		}
 	}
 	return best
+}
+
+// dtypeNames maps a shard header's dtype to the name the ModelPack spec
+// gives it, which is also the name a config states it under.
+var dtypeNames = map[string]string{
+	"BOOL": "bool", "U8": "uint8", "I8": "int8", "I16": "int16", "U16": "uint16",
+	"F16": "float16", "BF16": "bfloat16", "I32": "int32", "U32": "uint32",
+	"F32": "float32", "F64": "float64", "I64": "int64", "U64": "uint64",
+	"F8_E4M3": "float8_e4m3", "F8_E5M2": "float8_e5m2", "C64": "complex64",
+}
+
+// DTypeName returns the spec's name for a header dtype, or the header's own
+// spelling for a type the spec does not name.
+func DTypeName(headerDType string) string {
+	if n, ok := dtypeNames[headerDType]; ok {
+		return n
+	}
+	return headerDType
 }

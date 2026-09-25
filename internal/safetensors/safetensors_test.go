@@ -82,3 +82,18 @@ func TestReadHeaderRejectsATruncatedHeader(t *testing.T) {
 		t.Fatal("ReadHeader accepted a file whose header is shorter than its length prefix")
 	}
 }
+
+// TestDTypeNameSpellsAHeaderDTypeAsTheSpecDoes: a precision taken from the
+// shard headers is written with the ModelPack spec's name, which is also how
+// a config writes it.
+func TestDTypeNameSpellsAHeaderDTypeAsTheSpecDoes(t *testing.T) {
+	for header, want := range map[string]string{
+		"BF16": "bfloat16", "F16": "float16", "F32": "float32",
+		"F8_E4M3": "float8_e4m3", "F8_E5M2": "float8_e5m2", "I32": "int32", "C64": "complex64",
+		"F4": "F4", // no name in the spec, so the header's own
+	} {
+		if got := DTypeName(header); got != want {
+			t.Errorf("DTypeName(%q) = %q, want %q", header, got, want)
+		}
+	}
+}

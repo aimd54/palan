@@ -31,9 +31,9 @@ type modelRow struct {
 	Kind   string `json:"kind"`
 	Family string `json:"family,omitempty"`
 	Params string `json:"params,omitempty"`
-	// Quant names a quantization scheme such as awq or gptq, Precision the
-	// numeric type the weights are stored in. A model states one or the other,
-	// so listings show whichever is set under a single heading.
+	// Quant names a quantization scheme such as awq or fp8, Precision the
+	// numeric type the model computes in. A quantized safetensors model
+	// states both, and listings show the scheme.
 	Quant     string `json:"quantization,omitempty"`
 	Precision string `json:"precision,omitempty"`
 	Format    string `json:"format,omitempty"`
