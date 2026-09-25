@@ -17,6 +17,9 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
+
+	"github.com/aimd54/palan/internal/signing"
+	"github.com/aimd54/palan/pkg/modelspec"
 )
 
 // pushUntaggedReferrer plants a manifest carrying subject and never tags it,
@@ -24,18 +27,38 @@ import (
 // listing of tags cannot show.
 func pushUntaggedReferrer(t *testing.T, s *Store, subject ocispec.Descriptor, payload string) ocispec.Descriptor {
 	t.Helper()
+	return pushReferrerOfType(t, s, subject, payload, "application/vnd.dev.cosign.simplesigning.v1+json")
+}
+
+// pushReferrerOfType plants an untagged manifest of artifactType carrying
+// subject.
+func pushReferrerOfType(t *testing.T, s *Store, subject ocispec.Descriptor, payload, artifactType string) ocispec.Descriptor {
+	t.Helper()
+	return pushReferrer(t, s, subject, payload, artifactType, "application/octet-stream")
+}
+
+// pushReferrer plants an untagged manifest carrying subject, typed by
+// artifactType and by its config's media type. A writer that predates the
+// artifactType field leaves it empty and says what the artifact is through
+// the config alone.
+func pushReferrer(t *testing.T, s *Store, subject ocispec.Descriptor, payload, artifactType, configType string) ocispec.Descriptor {
+	t.Helper()
 	ctx := context.Background()
-	for _, d := range [][]byte{[]byte("{}"), []byte(payload)} {
-		desc := content.NewDescriptorFromBytes("application/octet-stream", d)
-		if err := s.OCI().Push(ctx, desc, bytes.NewReader(d)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+	cfg := content.NewDescriptorFromBytes(configType, []byte("{}"))
+	layer := content.NewDescriptorFromBytes("application/octet-stream", []byte(payload))
+	for _, b := range []struct {
+		desc ocispec.Descriptor
+		raw  []byte
+	}{{cfg, []byte("{}")}, {layer, []byte(payload)}} {
+		if err := s.OCI().Push(ctx, b.desc, bytes.NewReader(b.raw)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
 			t.Fatalf("push blob: %v", err)
 		}
 	}
 	referrer := ocispec.Manifest{
 		MediaType:    ocispec.MediaTypeImageManifest,
-		ArtifactType: "application/vnd.dev.cosign.simplesigning.v1+json",
-		Config:       content.NewDescriptorFromBytes("application/octet-stream", []byte("{}")),
-		Layers:       []ocispec.Descriptor{content.NewDescriptorFromBytes("application/octet-stream", []byte(payload))},
+		ArtifactType: artifactType,
+		Config:       cfg,
+		Layers:       []ocispec.Descriptor{layer},
 		Subject:      &subject,
 	}
 	raw, err := json.Marshal(referrer)
@@ -339,12 +362,55 @@ func TestGCKeepsAReferrerOnATaggedReferrer(t *testing.T) {
 	}
 }
 
+// pushModelOver tags a model in its own right, with a config and a weight
+// layer of its own, whose manifest records subject as the model it was
+// derived from. OCI 1.1 lets any artifact name another this way.
+func pushModelOver(t *testing.T, s *Store, subject ocispec.Descriptor, weights []byte, ref string) ocispec.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+	push := func(mediaType string, data []byte) ocispec.Descriptor {
+		desc := content.NewDescriptorFromBytes(mediaType, data)
+		if err := s.OCI().Push(ctx, desc, bytes.NewReader(data)); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+			t.Fatalf("push %s: %v", mediaType, err)
+		}
+		return desc
+	}
+	manifest := ocispec.Manifest{
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: modelspec.ArtifactTypeModelManifest,
+		Config:       push(modelspec.MediaTypeModelConfig, []byte(`{"descriptor":{"name":"derived"},"modelfs":{"type":"layers","diffIds":[]},"config":{}}`)),
+		Layers:       []ocispec.Descriptor{push(modelspec.MediaTypeModelWeightRaw, weights)},
+		Subject:      &subject,
+	}
+	manifest.SchemaVersion = 2
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, raw)
+	desc.ArtifactType = manifest.ArtifactType
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Tag(ctx, desc, ref); err != nil {
+		t.Fatal(err)
+	}
+	return desc
+}
+
 // pushIndexOver tags an index naming children, so a store can hold a
 // manifest that only a tagged index reaches.
 func pushIndexOver(t *testing.T, s *Store, children []ocispec.Descriptor, tag string) ocispec.Descriptor {
 	t.Helper()
+	return pushIndexWithSubject(t, s, children, nil, tag)
+}
+
+// pushIndexWithSubject is pushIndexOver for an index that also records a
+// subject.
+func pushIndexWithSubject(t *testing.T, s *Store, children []ocispec.Descriptor, subject *ocispec.Descriptor, tag string) ocispec.Descriptor {
+	t.Helper()
 	ctx := context.Background()
-	raw, err := json.Marshal(ocispec.Index{MediaType: ocispec.MediaTypeImageIndex, Manifests: children})
+	raw, err := json.Marshal(ocispec.Index{MediaType: ocispec.MediaTypeImageIndex, Manifests: children, Subject: subject})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,5 +701,250 @@ func TestGCRepairsAnIndexLeftNamingAMissingManifest(t *testing.T) {
 	}
 	if err := again.GC(ctx); err != nil {
 		t.Fatalf("collection still fails after the repair: %v", err)
+	}
+}
+
+// TestGCKeepsWhatOnlyRecordsASubject: a tagged model derived from a base, and
+// a tagged index, may each name a subject, and both are content in their own
+// right. Each keeps what the layout's own collector keeps: itself, all that
+// it names, and its subject, so the base stays while something tagged names it.
+func TestGCKeepsWhatOnlyRecordsASubject(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const baseRef = "registry.internal/llm/base:v1"
+	baseWeights := []byte("the base model's weights")
+	base := pushTestModel(t, s, baseRef, baseWeights)
+
+	derivedWeights := []byte("the derived model's own weights")
+	const derivedRef = "registry.internal/llm/derived:v1"
+	derived := pushModelOver(t, s, base, derivedWeights, derivedRef)
+	// The derived model is signed, and its signature has to stay with it.
+	// Reached only through a model that records a subject, it would be
+	// counted as orphaned if such a model were not a root in its own right.
+	sig := pushReferrerOfType(t, s, derived, "a signature over the derived model", signing.ArtifactTypeSignature)
+	const sigRef = "registry.internal/llm/derived:sha256-d.sig"
+	if err := s.Tag(ctx, sig, sigRef); err != nil {
+		t.Fatal(err)
+	}
+
+	child := pushTestModel(t, s, "registry.internal/llm/child:tmp", []byte("a child with nothing to do with the base"))
+	if err := s.OCI().Untag(ctx, "registry.internal/llm/child:tmp"); err != nil {
+		t.Fatal(err)
+	}
+	const indexRef = "registry.internal/llm/grouped:v1"
+	index := pushIndexWithSubject(t, s, []ocispec.Descriptor{child}, &base, indexRef)
+
+	if err := s.OCI().Untag(ctx, baseRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+
+	for ref, want := range map[string]ocispec.Descriptor{derivedRef: derived, indexRef: index, sigRef: sig} {
+		got, err := s.Resolve(ctx, ref)
+		if err != nil {
+			t.Errorf("collection unlinked %s: %v", ref, err)
+			continue
+		}
+		if got.Digest != want.Digest {
+			t.Errorf("%s resolves to %s, want %s", ref, got.Digest, want.Digest)
+		}
+	}
+	for name, d := range map[string]ocispec.Descriptor{
+		"the derived model's weights": content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, derivedWeights),
+		"the index's child":           child,
+		"the base it names":           base,
+		"the base's weights":          content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, baseWeights),
+	} {
+		if _, err := s.BlobPath(d.Digest); err != nil {
+			t.Errorf("collection removed %s: %v", name, err)
+		}
+	}
+}
+
+// TestGCUnlinksEveryKindOfDescriptionOnceItsModelIsGone is the other half.
+// Reclaiming depends on recognising what only describes a model, so a type
+// missing from that list is a signature that holds its removed model's
+// weights on disk forever while collection reports success. Every type palan
+// writes or carries is checked against what it writes, not a copy of the
+// strings.
+func TestGCUnlinksEveryKindOfDescriptionOnceItsModelIsGone(t *testing.T) {
+	for name, typ := range map[string]struct{ artifact, config string }{
+		"signature":          {signing.ArtifactTypeSignature, ocispec.MediaTypeImageConfig},
+		"attestation":        {signing.ArtifactTypeAttestation, ocispec.MediaTypeImageConfig},
+		"sigstore bundle":    {signing.MediaTypeBundlePrefix + ".v0.3+json", ocispec.MediaTypeEmptyJSON},
+		"signature payload":  {signing.MediaTypeSimpleSigning, ocispec.MediaTypeImageConfig},
+		"notation signature": {"application/vnd.cncf.notary.signature", ocispec.MediaTypeEmptyJSON},
+		"in-toto statement":  {"application/vnd.in-toto+json", ocispec.MediaTypeEmptyJSON},
+		"spdx bill":          {"application/spdx+json", ocispec.MediaTypeEmptyJSON},
+		"cyclonedx bill":     {"application/vnd.cyclonedx+json", ocispec.MediaTypeEmptyJSON},
+		// Typed through its config alone, the way a manifest written
+		// before the artifactType field says what it is.
+		"notation signature typed by its config": {"", "application/vnd.cncf.notary.signature"},
+		"cosign signature typed by its config":   {"", "application/vnd.dev.cosign.artifact.sig.v1+json"},
+		"cosign bill typed by its config":        {"", "application/vnd.dev.cosign.artifact.sbom.v1+json"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openTestStore(t)
+			const ref = "registry.internal/llm/described:v1"
+			weights := []byte("weights held by a " + name)
+			model := pushTestModel(t, s, ref, weights)
+			desc := pushReferrer(t, s, model, name+" payload", typ.artifact, typ.config)
+			const descRef = "registry.internal/llm/described:sha256-x.desc"
+			if err := s.Tag(ctx, desc, descRef); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := s.Remove(ctx, ref); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.GC(ctx); err != nil {
+				t.Fatalf("gc: %v", err)
+			}
+			if _, err := s.Resolve(ctx, descRef); err == nil {
+				t.Errorf("a %s whose model was removed is still tagged", name)
+			}
+			if _, err := s.BlobPath(content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, weights).Digest); err == nil {
+				t.Errorf("the removed model's weights survived collection, held by its %s", name)
+			}
+		})
+	}
+}
+
+// TestGCKeepsAnUntaggedDerivedModelWhileItsBaseLives: a version its tag moved
+// away from and a model attached without a tag look alike in the layout, so
+// both are kept, as the collector keeps them, while the base they name is
+// reachable. Once nothing reaches the base, the old version goes with its
+// weights and its signature.
+func TestGCKeepsAnUntaggedDerivedModelWhileItsBaseLives(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const baseRef = "registry.internal/llm/base:v1"
+	base := pushTestModel(t, s, baseRef, []byte("the base both versions name"))
+	const ref = "registry.internal/llm/derived:v1"
+	oldWeights := content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, []byte("the first version's own weights"))
+	old := pushModelOver(t, s, base, []byte("the first version's own weights"), ref)
+	sig := pushReferrerOfType(t, s, old, "a signature over the first version", signing.ArtifactTypeSignature)
+	const sigRef = "registry.internal/llm/derived:sha256-old.sig"
+	if err := s.Tag(ctx, sig, sigRef); err != nil {
+		t.Fatal(err)
+	}
+	pushModelOver(t, s, base, []byte("the second version's own weights"), ref)
+
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	for name, d := range map[string]ocispec.Descriptor{
+		"the first version": old, "its weights": oldWeights, "its signature": sig, "the base": base,
+	} {
+		if _, err := s.BlobPath(d.Digest); err != nil {
+			t.Errorf("collection removed %s while the base is reachable: %v", name, err)
+		}
+	}
+	if _, err := s.Resolve(ctx, sigRef); err != nil {
+		t.Errorf("the first version's signature lost its tag while the version stays: %v", err)
+	}
+
+	for _, r := range []string{ref, baseRef} {
+		if err := s.Remove(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.GC(ctx); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	for name, d := range map[string]ocispec.Descriptor{"the first version": old, "its weights": oldWeights, "its signature": sig} {
+		if _, err := s.BlobPath(d.Digest); err == nil {
+			t.Errorf("%s survived collection once nothing reached the base", name)
+		}
+	}
+}
+
+// TestRemoveUntagsWhatIsNotADescription: removing one tag of a model that
+// records a subject leaves its other tags and its manifest. Deleting a
+// manifest removes every tag on it, which is right for a signature and
+// wrong for a model.
+func TestRemoveUntagsWhatIsNotADescription(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	base := pushTestModel(t, s, "registry.internal/llm/base:v1", []byte("a base"))
+	derived := pushModelOver(t, s, base, []byte("a derived model's own weights"), "registry.internal/llm/derived:v1")
+	if err := s.Tag(ctx, derived, "registry.internal/llm/derived:latest"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Remove(ctx, "registry.internal/llm/derived:v1"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := s.Resolve(ctx, "registry.internal/llm/derived:v1"); err == nil {
+		t.Error("the removed tag still resolves")
+	}
+	got, err := s.Resolve(ctx, "registry.internal/llm/derived:latest")
+	if err != nil || got.Digest != derived.Digest {
+		t.Fatalf("removing one tag took the model's other tag with it: %v", err)
+	}
+	if _, err := s.BlobPath(derived.Digest); err != nil {
+		t.Errorf("removing one tag deleted the model's manifest: %v", err)
+	}
+}
+
+// TestGCKeepsWhatATaggedManifestNamesWhenItsSubjectIsOutOfReach: a derived
+// model that a tagged index or manifest still names, whose base is gone or
+// untagged, is content that stays. Deleting it breaks what names it, and
+// leaving it listed as a referrer the collector cannot place hangs collection.
+func TestGCKeepsWhatATaggedManifestNamesWhenItsSubjectIsOutOfReach(t *testing.T) {
+	for _, shape := range []string{"index child, base gone", "named as a layer, base untagged"} {
+		t.Run(shape, func(t *testing.T) {
+			ctx := context.Background()
+			s := openTestStore(t)
+			base := pushTestModel(t, s, "registry.internal/llm/base:v1", []byte("a base for "+shape))
+			weights := []byte("the derived model's own weights, " + shape)
+			derived := pushModelOver(t, s, base, weights, "registry.internal/llm/derived:tmp")
+			if err := s.OCI().Untag(ctx, "registry.internal/llm/derived:tmp"); err != nil {
+				t.Fatal(err)
+			}
+			const holderRef = "registry.internal/llm/holder:v1"
+			if shape == "index child, base gone" {
+				pushIndexOver(t, s, []ocispec.Descriptor{derived}, holderRef)
+			} else {
+				asLayer := derived
+				asLayer.MediaType = "application/octet-stream"
+				pushManifestOver(t, s, asLayer, holderRef)
+			}
+			if err := s.OCI().Untag(ctx, "registry.internal/llm/base:v1"); err != nil {
+				t.Fatal(err)
+			}
+			if shape == "index child, base gone" {
+				path, err := s.BlobPath(base.Digest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			for round := 1; round <= 2; round++ {
+				if !returnsWithin(t, s, 30*time.Second) {
+					t.Fatalf("collection round %d did not return", round)
+				}
+			}
+			if _, err := s.Resolve(ctx, holderRef); err != nil {
+				t.Errorf("what names the derived model was unlinked: %v", err)
+			}
+			named := map[string]ocispec.Descriptor{"the derived model": derived}
+			// An index names its child as a manifest, so what the child names
+			// is reachable too; a manifest named as a layer is opaque bytes.
+			if shape == "index child, base gone" {
+				named["the derived model's weights"] = content.NewDescriptorFromBytes(modelspec.MediaTypeModelWeightRaw, weights)
+			}
+			for name, d := range named {
+				if _, err := s.BlobPath(d.Digest); err != nil {
+					t.Errorf("collection removed %s, which a tagged manifest names: %v", name, err)
+				}
+			}
+		})
 	}
 }

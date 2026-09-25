@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -271,10 +272,9 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 	return s.oci.Tag(ctx, desc, ref)
 }
 
-// Remove unlinks a reference. Content stays until GC reclaims it
-// (`palan rm` unlinks, `palan gc` reclaims). A referrer's manifest is
-// deleted rather than merely untagged, for the reason given below, but its
-// blobs go the same way as everything else: at the next collection.
+// Remove unlinks a reference, and content stays until GC reclaims it. The
+// manifest of a signature, attestation, Sigstore bundle or bill of materials
+// is deleted as well, and its blobs go at the next collection.
 func (s *Store) Remove(ctx context.Context, ref string) error {
 	// Read before untagging: a referrer is addressed by the tag about to
 	// go, and what it is can only be answered while the tag still answers.
@@ -282,7 +282,7 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 	// is not the place to insist on interpreting content.
 	var referrer *ocispec.Descriptor
 	if desc, err := s.oci.Resolve(ctx, ref); err == nil {
-		if subject, serr := s.subjectOf(ctx, desc); serr == nil && subject != nil {
+		if h, herr := s.readHead(ctx, desc); herr == nil && h.subject != nil && describesOnly(h.artifactType) {
 			referrer = &desc
 		}
 	}
@@ -295,14 +295,9 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 	if referrer == nil {
 		return nil
 	}
-	// A referrer is deleted rather than left untagged. It stays in the
-	// referrers index either way, where it still names its subject and so
-	// still holds that subject's blobs on disk, and nothing can reach it by
-	// name to remove it later: untagging a signature is how one is meant to
-	// go away, so leaving the manifest behind removes the handle and keeps
-	// the object. It also strands collection outright, because oras-go
-	// v2.6.2 walks the subject chain of an untagged manifest without
-	// advancing and never returns.
+	// Left untagged, a description would stay as long as its subject, with
+	// nothing to name it by. Anything else is only untagged, since deleting
+	// a manifest removes every other tag on it.
 	if err := s.oci.Delete(ctx, *referrer); err != nil && !errors.Is(err, errdef.ErrNotFound) {
 		return fmt.Errorf("removing referrer %q: %w", ref, err)
 	}
@@ -313,10 +308,10 @@ func (s *Store) Remove(ctx context.Context, ref string) error {
 // leftover partial downloads in the ingest directory. GC callers hold the
 // exclusive lock, so no in-flight pull can lose its partials to GC.
 //
-// Orphaned referrers are unlinked first. A referrer names its subject, so it
-// keeps that subject and everything under it reachable; a signature left
-// behind by a removed model would hold the whole model on disk and GC would
-// report success having reclaimed nothing.
+// Signatures and attestations whose model is gone are unlinked first. Each
+// names its model as its subject, which keeps the model reachable, so one
+// left behind would hold the whole model on disk and GC would report
+// success having reclaimed nothing.
 func (s *Store) GC(ctx context.Context) error {
 	if err := s.dropIndexEntriesWithoutBlobs(ctx); err != nil {
 		return err
@@ -384,18 +379,9 @@ func (s *Store) dropIndexEntriesWithoutBlobs(ctx context.Context) error {
 	return nil
 }
 
-// unlinkOrphanedReferrers untags every referrer whose subject is no longer a
-// tagged artifact in its own right.
-//
-// A referrer is any tagged manifest carrying a subject, which in this store
-// means a signature. Because the subject is a successor, the referrer's tag
-// keeps the artifact it describes alive, so removing a model without removing
-// its signature leaves the model's weights pinned. Sweeping here rather than
-// in `rm` covers the cases `rm` cannot reach: a signature imported without its
-// model, and a model unlinked by any path that did not know to look for one.
-//
-// A manifest that cannot be read is left alone. GC reclaims storage; it is not
-// the place to act on content it cannot interpret.
+// unlinkOrphanedReferrers removes each description no tagged artifact
+// reaches, and removes or forgets each untagged entry whose subject the
+// collector cannot place. A manifest that cannot be read is left alone.
 func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
 	// Two passes, because two different questions are being asked and only
 	// one of them is the collector's.
@@ -405,32 +391,28 @@ func (s *Store) unlinkOrphanedReferrers(ctx context.Context) error {
 	// the model's blobs on disk, so collection would report success having
 	// reclaimed nothing. The collector would keep it, because it is tagged.
 	// Reachability here is therefore measured from tagged artifacts only,
-	// meaning tagged manifests that describe something rather than
-	// describing another manifest.
+	// meaning every tagged manifest except those whose type says they only
+	// describe another.
 	if err := s.unlinkOrphanedTagged(ctx); err != nil {
 		return err
 	}
-	// The second is the collector's question, asked of what is left. It
-	// tests one hop, against a graph built from every tagged descriptor,
-	// referrers included, and a subject it cannot place makes it read the
-	// same manifest forever rather than drop it. So anything untagged whose
-	// subject is outside that graph has to go, and anything inside it has
-	// to stay: deleting one the collector would have kept is silent content
-	// loss, and keeping one it cannot place is the hang.
+	// The second is the collector's question, asked of what is left, since a
+	// subject it cannot place makes it read the same manifest forever.
 	return s.deleteUnreachableUntagged(ctx)
 }
 
 // entry is one manifest the layout records, with what it is named and what
-// it describes.
+// it describes. describes is set for an entry whose subject is its only
+// reason to exist, a signature or an attestation.
 type entry struct {
-	desc    ocispec.Descriptor
-	ref     string
-	subject *ocispec.Descriptor
+	desc      ocispec.Descriptor
+	ref       string
+	subject   *ocispec.Descriptor
+	describes bool
 }
 
 // readIndex classifies every manifest the layout records. A manifest whose
-// subject cannot be read is left out: nothing was established about it, and
-// the collector reading it will fail rather than loop.
+// subject cannot be read is recorded as naming none.
 func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 	all, err := s.indexManifests()
 	if err != nil {
@@ -438,7 +420,7 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 	}
 	entries := make([]entry, 0, len(all))
 	for _, desc := range all {
-		subject, serr := s.subjectOf(ctx, desc)
+		h, serr := s.readHead(ctx, desc)
 		if serr != nil {
 			// Recorded with no subject rather than dropped. Both passes
 			// only ever remove an entry that names one, so this is never
@@ -446,8 +428,9 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 			// anything: a tagged artifact whose manifest would not read
 			// ceased to be a root, and everything attached to it looked
 			// orphaned.
-			subject = nil
+			h = head{}
 		}
+		subject := h.subject
 		// A reference equal to the digest is how the layout records a
 		// manifest with no tag, and it is the collector's own test for
 		// one. Reading the annotation as a tag instead treated such an
@@ -459,13 +442,21 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 		if ref == desc.Digest.String() {
 			ref = ""
 		}
-		entries = append(entries, entry{desc: desc, ref: ref, subject: subject})
+		entries = append(entries, entry{
+			desc:      desc,
+			ref:       ref,
+			subject:   subject,
+			describes: subject != nil && describesOnly(h.artifactType),
+		})
 	}
 	return entries, nil
 }
 
-// unlinkOrphanedTagged removes a tagged referrer that no tagged artifact
-// reaches, so the blobs it was holding can be collected.
+// unlinkOrphanedTagged removes a tagged signature or attestation that no
+// tagged artifact reaches, so the blobs it was holding can be collected.
+//
+// Every other tagged entry is a root, including one that records a subject,
+// such as a model derived from another.
 func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	entries, err := s.readIndex(ctx)
 	if err != nil {
@@ -473,7 +464,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	}
 	var roots []ocispec.Descriptor
 	for _, e := range entries {
-		if e.ref != "" && e.subject == nil {
+		if e.ref != "" && !e.describes {
 			roots = append(roots, e.desc)
 		}
 	}
@@ -521,7 +512,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 		}
 	}
 	for _, e := range entries {
-		if e.ref == "" || e.subject == nil || admitted[e.desc.Digest] {
+		if e.ref == "" || !e.describes || admitted[e.desc.Digest] {
 			continue
 		}
 		switch err := s.oci.Untag(ctx, e.ref); {
@@ -577,9 +568,9 @@ func (s *Store) staysFor(ctx context.Context, e entry, reachable map[digest.Dige
 	return err == nil && !present
 }
 
-// deleteUnreachableUntagged removes an untagged manifest whose subject is
-// outside the graph the collector builds, which is the input it spins on.
-// The index is read again, because the pass before this one changed it.
+// deleteUnreachableUntagged removes each untagged entry whose subject is out
+// of the tagged graph, the collector's own test, unless something kept names
+// it; then only its index entry goes, so the collector does not spin on it.
 func (s *Store) deleteUnreachableUntagged(ctx context.Context) error {
 	entries, err := s.readIndex(ctx)
 	if err != nil {
@@ -595,15 +586,104 @@ func (s *Store) deleteUnreachableUntagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// What the collector keeps: the tagged graph, and untagged referrers of
+	// it with what they name.
+	kept := make(map[digest.Digest]bool, len(reachable))
+	for d := range reachable {
+		kept[d] = true
+	}
 	for _, e := range entries {
-		if e.ref != "" || e.subject == nil || reachable[e.subject.Digest] {
+		if e.ref != "" || e.subject == nil || !reachable[e.subject.Digest] {
+			continue
+		}
+		under, cerr := s.successorClosure(ctx, []ocispec.Descriptor{e.desc})
+		if cerr != nil {
+			return cerr
+		}
+		for d := range under {
+			kept[d] = true
+		}
+	}
+	var forget []digest.Digest
+	for _, e := range entries {
+		if e.ref != "" || e.subject == nil {
+			continue
+		}
+		switch {
+		case reachable[e.subject.Digest]:
+			continue
+		case kept[e.desc.Digest]:
+			forget = append(forget, e.desc.Digest)
 			continue
 		}
 		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
 			return fmt.Errorf("removing unreachable referrer %s: %w", e.desc.Digest, err)
 		}
 	}
-	return nil
+	return s.forgetUntagged(ctx, forget)
+}
+
+// forgetUntagged removes the untagged index entries naming ds and keeps their
+// blobs, then reads the layout again.
+func (s *Store) forgetUntagged(ctx context.Context, ds []digest.Digest) error {
+	if len(ds) == 0 {
+		return nil
+	}
+	drop := make(map[digest.Digest]bool, len(ds))
+	for _, d := range ds {
+		drop[d] = true
+	}
+	path := filepath.Join(s.root, "index.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- the store's own layout file
+	if err != nil {
+		return fmt.Errorf("reading the store index: %w", err)
+	}
+	var index ocispec.Index
+	if err := json.Unmarshal(raw, &index); err != nil {
+		return fmt.Errorf("decoding the store index: %w", err)
+	}
+	kept := index.Manifests[:0]
+	for _, m := range index.Manifests {
+		name := m.Annotations[ocispec.AnnotationRefName]
+		if drop[m.Digest] && (name == "" || name == m.Digest.String()) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	index.Manifests = kept
+	out, err := json.Marshal(index)
+	if err != nil {
+		return err
+	}
+	// Written beside the index and renamed over it, so a reader holding no
+	// lock sees one index or the other.
+	if err := replaceFile(path, out); err != nil {
+		return fmt.Errorf("saving the store index: %w", err)
+	}
+	return s.reload(ctx)
+}
+
+// replaceFile writes data to path through a synced file renamed over it.
+func replaceFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) // #nosec G302 G304 -- the layout's index is world-readable, as oras-go writes it
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }
 
 // successorClosure returns every digest reachable from roots by following
@@ -624,15 +704,23 @@ func (s *Store) successorClosure(
 	ctx context.Context, roots []ocispec.Descriptor,
 ) (map[digest.Digest]bool, error) {
 	reachable := make(map[digest.Digest]bool, len(roots))
-	visited := make(map[digest.Digest]bool, len(roots))
+	// Keyed as the collector keys its walk, so a digest named once as a
+	// blob and once as a manifest is still read as the manifest.
+	type visit struct {
+		mediaType string
+		digest    digest.Digest
+		size      int64
+	}
+	visited := make(map[visit]bool, len(roots))
 	queue := append([]ocispec.Descriptor(nil), roots...)
 	for len(queue) > 0 {
 		node := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
-		if visited[node.Digest] {
+		key := visit{node.MediaType, node.Digest, node.Size}
+		if visited[key] {
 			continue
 		}
-		visited[node.Digest] = true
+		visited[key] = true
 		// Read before recording, and record only on success. The collector
 		// builds its graph the same way round: it asks for a node's
 		// successors first and returns without adding the node when that
@@ -669,38 +757,77 @@ func (s *Store) successorClosure(
 	return reachable, nil
 }
 
-// subjectOf reads the subject a manifest names, and nothing else.
-//
-// Deciding what is still attached to a live artifact is not the same as
-// parsing a manifest in order to act on its contents, so this does not
-// share the bound that protects the latter, and it carries no bound of its
-// own either. The collector reads the same manifest with no limit, so any
-// size this refused would be a manifest it still reads and this cannot
-// see, which is the referrer it then spins on. Refusing to look is not
-// caution here; it is the defect.
-//
-// Otherwise it answers exactly as the collector's own reader does: the same
-// media types carry a subject, the bytes are verified against the digest
-// before they are decoded, and trailing data after the document is an error
-// rather than something to read past. Disagreeing on any of those would
-// mean deciding to keep a manifest the collector will then refuse.
-func (s *Store) subjectOf(ctx context.Context, desc ocispec.Descriptor) (*ocispec.Descriptor, error) {
+// head is what collection needs from a manifest: the subject it names, and
+// the type of artifact it is.
+type head struct {
+	subject      *ocispec.Descriptor
+	artifactType string
+}
+
+// readHead reads a manifest's subject and artifact type, the latter from the
+// config's media type when the manifest states none. It reads as the
+// collector does, with no size bound, the same media types and the digest
+// checked first, so the two never disagree about which manifests name a
+// subject.
+func (s *Store) readHead(ctx context.Context, desc ocispec.Descriptor) (head, error) {
 	switch desc.MediaType {
 	case ocispec.MediaTypeImageManifest, ocispec.MediaTypeImageIndex, mediaTypeArtifactManifest:
 	default:
-		return nil, nil
+		return head{}, nil
 	}
 	raw, err := content.FetchAll(ctx, s.oci, desc)
 	if err != nil {
-		return nil, err
+		return head{}, err
 	}
 	var manifest struct {
-		Subject *ocispec.Descriptor `json:"subject,omitempty"`
+		ArtifactType string              `json:"artifactType,omitempty"`
+		Config       *ocispec.Descriptor `json:"config,omitempty"`
+		Subject      *ocispec.Descriptor `json:"subject,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return nil, fmt.Errorf("reading the subject of %s: %w", desc.Digest, err)
+		return head{}, fmt.Errorf("reading the subject of %s: %w", desc.Digest, err)
 	}
-	return manifest.Subject, nil
+	h := head{subject: manifest.Subject, artifactType: manifest.ArtifactType}
+	if h.artifactType == "" && manifest.Config != nil {
+		h.artifactType = manifest.Config.MediaType
+	}
+	return h, nil
+}
+
+// describingTypes are the artifact types of manifests that exist only to say
+// something about their subject: signatures, attestations and bills of
+// materials. Two families are matched by prefix below.
+var describingTypes = map[string]bool{
+	"application/vnd.dev.cosign.simplesigning.v1+json": true, // the signature payload's own type
+	"application/vnd.cncf.notary.signature":            true, // Notation signatures
+	"application/vnd.dsse.envelope.v1+json":            true, // cosign and palan attestations
+	"application/vnd.in-toto+json":                     true, // in-toto statements
+	"application/spdx+json":                            true,
+	"application/vnd.cyclonedx+json":                   true,
+}
+
+// describingPrefixes begin families of describing types: every version of
+// the Sigstore bundle, and cosign's signatures, attestations and bills of
+// materials, which palan's signatures share.
+var describingPrefixes = []string{
+	"application/vnd.dev.sigstore.bundle",
+	"application/vnd.dev.cosign.artifact.",
+}
+
+// describesOnly reports whether an artifact of this type exists only to
+// describe its subject. A type not listed is taken for content, since keeping
+// an unfamiliar signature costs the space it holds and deleting an
+// unfamiliar model costs the model.
+func describesOnly(artifactType string) bool {
+	if describingTypes[artifactType] {
+		return true
+	}
+	for _, p := range describingPrefixes {
+		if strings.HasPrefix(artifactType, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // indexManifests reads the manifests the OCI layout records, tagged or not.
