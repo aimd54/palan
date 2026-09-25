@@ -365,6 +365,14 @@ func collectorShapes() []shape {
 			tag(t, s, sig, "registry.internal/llm/shape:sha256-a.sig")
 			return map[string]ocispec.Descriptor{"model": m, "sig": sig}
 		}, nil},
+		{"a signature tagged in two repositories over a model tagged in both", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("sig-two-names"))
+			tag(t, s, m, "registry.internal/mirror/shape:v1")
+			sig := pushUntaggedReferrer(t, s, m, "sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-n.sig")
+			tag(t, s, sig, "registry.internal/mirror/shape:sha256-n.sig")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig}
+		}, nil},
 		{"an untagged signature whose model was removed", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
 			m := tagged(t, s, ref, []byte("removed-untagged"))
 			sig := pushUntaggedReferrer(t, s, m, "sig")
@@ -728,7 +736,168 @@ func collectorShapes() []shape {
 			untag(t, s, ref)
 			return map[string]ocispec.Descriptor{"derived": derived, "carrier": carrier}
 		}, nil},
+		{"a tagged index listing a tagged model and its tagged signature", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("bundle-model"))
+			sig := pushUntaggedReferrer(t, s, m, "bundle sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-o.sig")
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{m, sig}, "registry.internal/llm/shape:bundle")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "index": idx}
+		}, nil},
+		{"a tagged index listing an attestation over a tagged signature", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("listed-att-model"))
+			sig := pushUntaggedReferrer(t, s, m, "listed-att sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-p.sig")
+			att := pushReferrerOfType(t, s, sig, "listed att", "application/vnd.dsse.envelope.v1+json")
+			idx := pushIndexOver(t, s, []ocispec.Descriptor{att}, "registry.internal/llm/shape:att-index")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "index": idx}
+		}, nil},
+		{"a tagged attestation over a tagged signature, listed by an untagged index over the signature", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("att-in-sig-index-model"))
+			sig := pushUntaggedReferrer(t, s, m, "att-in-sig-index sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-v.sig")
+			att := pushReferrerOfType(t, s, sig, "att-in-sig-index att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-v.att")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{att}, &sig, "")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "index": idx}
+		}, nil},
+		{"the same over a model whose blob is gone", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("att-in-sig-index-gone-model"))
+			sig := pushUntaggedReferrer(t, s, m, "att-in-sig-index-gone sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-w.sig")
+			att := pushReferrerOfType(t, s, sig, "att-in-sig-index-gone att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-w.att")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{att}, &sig, "")
+			untag(t, s, ref)
+			dropBlob(t, s, m)
+			return map[string]ocispec.Descriptor{"sig": sig, "att": att, "index": idx}
+		}, nil},
+		{"a signed and attested model, an untagged index over it listing the attestation", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("att-in-model-index-model"))
+			sig := pushUntaggedReferrer(t, s, m, "att-in-model-index sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-x.sig")
+			att := pushReferrerOfType(t, s, m, "att-in-model-index att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-x.att")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{att}, &m, "")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "index": idx}
+		}, nil},
+		{"a tagged signature an untagged index over its model lists, beside an unrelated tagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			other := tagged(t, s, "registry.internal/aaa/unrelated:v1", []byte("unrelated-model"))
+			m := tagged(t, s, ref, []byte("beside-unrelated-model"))
+			sig := pushUntaggedReferrer(t, s, m, "beside-unrelated sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-y.sig")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{sig}, &m, "")
+			return map[string]ocispec.Descriptor{"other": other, "model": m, "sig": sig, "index": idx}
+		}, nil},
+		{"a signed and attested model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("signed-attested-model"))
+			sig := pushUntaggedReferrer(t, s, m, "signed-attested sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-aa.sig")
+			att := pushReferrerOfType(t, s, m, "signed-attested att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-aa.att")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att}
+		}, nil},
+		{"a tagged model derived from an attestation over a tagged signature", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("derived-from-att-model"))
+			sig := pushUntaggedReferrer(t, s, m, "derived-from-att sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-ab.sig")
+			att := pushReferrerOfType(t, s, sig, "derived-from-att att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-ab.att")
+			derived := pushModelOver(t, s, att, []byte("derived-from-att weights"), "registry.internal/llm/derived:v1")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "derived": derived}
+		}, nil},
+		{"an attestation over a signature, tagged in two repositories", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("att-two-repos-model"))
+			sig := pushUntaggedReferrer(t, s, m, "att-two-repos sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-ac.sig")
+			att := pushReferrerOfType(t, s, sig, "att-two-repos att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-ac.sig.att")
+			tag(t, s, att, "registry.internal/mirror/shape:sha256-ac.sig.att")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att}
+		}, nil},
+		{"a tagged attestation over a tagged signature, carried as a layer by a tagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("carried-att-model"))
+			sig := pushUntaggedReferrer(t, s, m, "carried-att sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-z.sig")
+			att := pushReferrerOfType(t, s, sig, "carried att", "application/vnd.dsse.envelope.v1+json")
+			tag(t, s, att, "registry.internal/llm/shape:sha256-z.att")
+			asLayer := att
+			asLayer.MediaType = "application/octet-stream"
+			carrier := pushManifestOver(t, s, asLayer, "registry.internal/llm/shape:att-carrier")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "carrier": carrier}
+		}, nil},
+		{"a tagged signature an untagged index lists, the index over a tagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("attached-index-model"))
+			sig := pushUntaggedReferrer(t, s, m, "attached-index sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-t.sig")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{sig}, &m, "")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "index": idx}
+		}, nil},
+		{"a tagged signature an untagged index lists, the index over an untagged card over a tagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("carded-model"))
+			card := pushReferrerOfType(t, s, m, "card", "application/vnd.example.model-card+json")
+			sig := pushUntaggedReferrer(t, s, m, "carded sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-q.sig")
+			idx := pushIndexWithSubject(t, s, []ocispec.Descriptor{sig}, &card, "")
+			return map[string]ocispec.Descriptor{"model": m, "card": card, "sig": sig, "index": idx}
+		}, map[string]string{
+			"index": "its subject is itself untagged, which the collector places only if it reaches the card first and spins forever otherwise; removing it is the deterministic half of that coin",
+		}},
+		{"a tagged attestation over a tagged signature, carrying the signature as a layer", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("att-carries-sig-model"))
+			sig := pushUntaggedReferrer(t, s, m, "att-carries-sig sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-u.sig")
+			asLayer := sig
+			asLayer.MediaType = "application/octet-stream"
+			att := pushManifestWith(t, s, "application/vnd.dsse.envelope.v1+json", &sig,
+				[]ocispec.Descriptor{asLayer}, "registry.internal/llm/shape:sha256-u.att")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att}
+		}, nil},
+		{"a tagged signature carried as a layer by a tagged signature over an unreached model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("carried-sig-model"))
+			sig := pushUntaggedReferrer(t, s, m, "carried sig")
+			tag(t, s, sig, "registry.internal/llm/shape:sha256-r.sig")
+			other := tagged(t, s, "registry.internal/llm/shape:unreached", []byte("unreached model"))
+			untag(t, s, "registry.internal/llm/shape:unreached")
+			asLayer := sig
+			asLayer.MediaType = "application/octet-stream"
+			carrier := pushManifestWith(t, s, "application/vnd.dev.cosign.simplesigning.v1+json", &other,
+				[]ocispec.Descriptor{asLayer}, "registry.internal/llm/shape:sha256-s.sig")
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "other": other, "carrier": carrier}
+		}, map[string]string{
+			"carrier": "a signature that outlived its model is unlinked, or its tag holds the model's blobs forever and collection reclaims nothing",
+			"other":   "and once the signature is gone, nothing reaches the model either",
+		}},
 	}
+}
+
+// pushManifestWith tags a manifest of artifactType carrying layers the store
+// already holds, naming subject when one is given.
+func pushManifestWith(t *testing.T, s *Store, artifactType string, subject *ocispec.Descriptor, layers []ocispec.Descriptor, tagRef string) ocispec.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+	cfg := content.NewDescriptorFromBytes(ocispec.MediaTypeEmptyJSON, []byte("{}"))
+	if err := s.OCI().Push(ctx, cfg, bytes.NewReader([]byte("{}"))); err != nil && !errors.Is(err, errdef.ErrAlreadyExists) {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(ocispec.Manifest{
+		Versioned:    specs.Versioned{SchemaVersion: 2},
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: artifactType,
+		Config:       cfg,
+		Layers:       layers,
+		Subject:      subject,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageManifest, raw)
+	if err := s.OCI().Push(ctx, desc, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Tag(ctx, desc, tagRef); err != nil {
+		t.Fatal(err)
+	}
+	return desc
 }
 
 // pushTaggedTyped tags a manifest of artifactType, naming subject when one

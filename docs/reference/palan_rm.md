@@ -6,6 +6,18 @@ Unlink model references from the local store
 
 rm removes references; blob content stays on disk until `palan gc` reclaims it.
 
+A model's signature and attestation go with it unless the store still
+holds the model: while another tag names it, while an index or other
+tagged content holds it, or while the store keeps the model it was derived
+from.
+
+A signature, attestation or other description removed by its own
+reference loses only that reference when another names it too. Otherwise
+it is deleted together with every tagged description of it under every
+name, and theirs in turn, such as an attestation over a signature, and
+each is listed. The removal is refused while other content in the store
+refers to any of them.
+
 ```
 palan rm REF... [flags]
 ```

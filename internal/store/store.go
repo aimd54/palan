@@ -17,8 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -307,36 +309,247 @@ func (s *Store) Tag(ctx context.Context, desc ocispec.Descriptor, ref string) er
 	return s.oci.Tag(ctx, desc, ref)
 }
 
-// Remove unlinks a reference, and content stays until GC reclaims it. The
-// manifest of a signature, attestation, Sigstore bundle or bill of materials
-// is deleted as well, and its blobs go at the next collection.
+// Remove unlinks a reference, and content stays until GC reclaims it. A
+// description is deleted too, with every tagged description of it, unless
+// another tag names it or other content refers to one of them: then only
+// ref goes, or the removal is refused with a *HeldError.
 func (s *Store) Remove(ctx context.Context, ref string) error {
-	// Read before untagging: a referrer is addressed by the tag about to
-	// go, and what it is can only be answered while the tag still answers.
+	_, err := s.RemoveReporting(ctx, ref)
+	return err
+}
+
+// RemoveReporting is Remove, returning the other references that went with
+// ref: those of the tagged descriptions deleted along with it.
+func (s *Store) RemoveReporting(ctx context.Context, ref string) ([]string, error) {
+	// Decided before untagging, so a refusal leaves the store as it was.
 	// A reference that cannot be read is untagged anyway, because removal
 	// is not the place to insist on interpreting content.
-	var referrer *ocispec.Descriptor
+	var deleteAfter *ocispec.Descriptor
+	var along []entry
 	if desc, err := s.oci.Resolve(ctx, ref); err == nil {
 		if h, herr := s.readHead(ctx, desc); herr == nil && h.subject != nil && describesOnly(h.artifactType) {
-			referrer = &desc
+			del, taken, err := s.deletable(ctx, desc, ref)
+			if err != nil {
+				return nil, err
+			}
+			if del {
+				deleteAfter, along = &desc, taken
+			}
 		}
+	}
+	// Deepest first, so a removal that stops partway never leaves a
+	// description whose subject is gone; what went is still reported.
+	var order []ocispec.Descriptor
+	names := map[digest.Digest][]string{}
+	for _, e := range along {
+		if _, seen := names[e.desc.Digest]; !seen {
+			order = append(order, e.desc)
+			names[e.desc.Digest] = nil
+		}
+		if e.ref != "" {
+			names[e.desc.Digest] = append(names[e.desc.Digest], e.ref)
+		}
+	}
+	var refs []string
+	for _, d := range order {
+		if err := s.deleteManifest(ctx, d); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return refs, fmt.Errorf("removing %s with %q: %w", d.Digest, ref, err)
+		}
+		refs = append(refs, names[d.Digest]...)
 	}
 	if err := s.oci.Untag(ctx, ref); err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("reference %q not found in local store: %w", ref, err)
+			return refs, fmt.Errorf("reference %q not found in local store: %w", ref, err)
 		}
-		return err
+		return refs, err
 	}
-	if referrer == nil {
-		return nil
+	if deleteAfter == nil {
+		return refs, nil
 	}
-	// Left untagged, a description would stay as long as its subject, with
-	// nothing to name it by. Anything else is only untagged, since deleting
-	// a manifest removes every other tag on it.
-	if err := s.oci.Delete(ctx, *referrer); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-		return fmt.Errorf("removing referrer %q: %w", ref, err)
+	if err := s.deleteManifest(ctx, *deleteAfter); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+		return refs, fmt.Errorf("removing referrer %q: %w", ref, err)
 	}
-	return nil
+	return refs, nil
+}
+
+// beforeDelete, when a test sets it, sees each manifest removal deletes and
+// can fail it.
+var beforeDelete func(digest.Digest) error
+
+func (s *Store) deleteManifest(ctx context.Context, desc ocispec.Descriptor) error {
+	if beforeDelete != nil {
+		if err := beforeDelete(desc.Digest); err != nil {
+			return err
+		}
+	}
+	return s.oci.Delete(ctx, desc)
+}
+
+// HeldError refuses a removal. Holder is a reference to remove first, and
+// Attached says it keeps an untagged artifact that does the referring.
+// Through names a description it would take, when only that is held.
+type HeldError struct {
+	Ref      string
+	Holder   string
+	Attached bool
+	Through  string
+}
+
+func (e *HeldError) Error() string {
+	held := e.Ref + " is"
+	if e.Through != "" {
+		held = e.Ref + " would take " + e.Through + " with it, which is"
+	}
+	if e.Attached {
+		return fmt.Sprintf("%s still referred to by an untagged artifact attached to %s; remove that first", held, e.Holder)
+	}
+	return fmt.Sprintf("%s still referred to by %s; remove that first", held, e.Holder)
+}
+
+// deletable reports whether removing ref may delete the description desc,
+// returning the tagged descriptions of it, recursively and deepest first,
+// that go with it. Nothing goes while other content refers to any of them.
+func (s *Store) deletable(ctx context.Context, desc ocispec.Descriptor, ref string) (bool, []entry, error) {
+	entries, err := s.readIndex(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	for _, e := range entries {
+		if e.desc.Digest == desc.Digest && e.ref != "" && e.ref != ref {
+			return false, nil, nil
+		}
+	}
+	depth := map[digest.Digest]int{desc.Digest: 0}
+	for grew := true; grew; {
+		grew = false
+		for _, e := range entries {
+			if e.ref == "" || !e.describes {
+				continue
+			}
+			d, over := depth[e.subject.Digest]
+			if _, in := depth[e.desc.Digest]; !over || in {
+				continue
+			}
+			depth[e.desc.Digest] = d + 1
+			grew = true
+		}
+	}
+	var others, along []entry
+	for _, e := range entries {
+		switch _, going := depth[e.desc.Digest]; {
+		case !going:
+			others = append(others, e)
+		case e.desc.Digest != desc.Digest:
+			along = append(along, e)
+		}
+	}
+	slices.SortStableFunc(along, func(a, b entry) int { return depth[b.desc.Digest] - depth[a.desc.Digest] })
+	kept, holders, err := s.keeps(ctx, others)
+	if err != nil {
+		return false, nil, err
+	}
+	if kept[desc.Digest] {
+		holder, attached := s.holderOf(ctx, holders, desc.Digest)
+		return false, nil, &HeldError{Ref: ref, Holder: holder, Attached: attached}
+	}
+	for _, e := range along {
+		if kept[e.desc.Digest] && e.ref != "" {
+			holder, attached := s.holderOf(ctx, holders, e.desc.Digest)
+			return false, nil, &HeldError{Ref: ref, Holder: holder, Attached: attached, Through: e.ref}
+		}
+	}
+	return true, along, nil
+}
+
+// Held reports whether collection keeps desc: as a tagged artifact it
+// leaves tagged, as an untagged referrer of something kept, or as part of
+// something kept.
+func (s *Store) Held(ctx context.Context, desc ocispec.Descriptor) (bool, error) {
+	entries, err := s.readIndex(ctx)
+	if err != nil {
+		return false, err
+	}
+	kept, _, err := s.keeps(ctx, entries)
+	if err != nil {
+		return false, err
+	}
+	return kept[desc.Digest], nil
+}
+
+// keeps returns what collection keeps of entries, and the entries that keep
+// it: each tagged one collection leaves tagged, and each untagged referrer
+// of what those reach.
+func (s *Store) keeps(ctx context.Context, entries []entry) (map[digest.Digest]bool, []entry, error) {
+	admitted, err := s.admit(ctx, entries)
+	if err != nil {
+		return nil, nil, err
+	}
+	var holders []entry
+	var roots []ocispec.Descriptor
+	for _, e := range entries {
+		if e.ref != "" && (!e.describes || admitted[e.desc.Digest]) {
+			holders = append(holders, e)
+			roots = append(roots, e.desc)
+		}
+	}
+	reachable, err := s.successorClosure(ctx, roots)
+	if err != nil {
+		return nil, nil, err
+	}
+	kept, referrers, err := s.withReferrersOf(ctx, entries, reachable)
+	if err != nil {
+		return nil, nil, err
+	}
+	return kept, append(holders, referrers...), nil
+}
+
+// holderOf names a reference to remove before d can go: a tagged holder
+// reaching d, or else one reaching the subject of an untagged holder that
+// reaches d, which it reports as attached.
+func (s *Store) holderOf(ctx context.Context, holders []entry, d digest.Digest) (string, bool) {
+	// Content before descriptions, then by name: removing a signature that
+	// merely reaches its own subject frees nothing.
+	holders = slices.Clone(holders)
+	slices.SortStableFunc(holders, func(a, b entry) int {
+		if a.describes != b.describes {
+			if a.describes {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a.ref, b.ref)
+	})
+	reaching := func(target digest.Digest) int {
+		for i, h := range holders {
+			if h.ref == "" {
+				continue
+			}
+			if under, err := s.successorClosure(ctx, []ocispec.Descriptor{h.desc}); err == nil && under[target] {
+				return i
+			}
+		}
+		return -1
+	}
+	if i := reaching(d); i >= 0 {
+		return holders[i].ref, false
+	}
+	best := -1
+	for _, h := range holders {
+		if h.ref != "" || h.subject == nil {
+			continue
+		}
+		under, err := s.successorClosure(ctx, []ocispec.Descriptor{h.desc})
+		if err != nil || !under[d] {
+			continue
+		}
+		if i := reaching(h.subject.Digest); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	if best >= 0 {
+		return holders[best].ref, true
+	}
+	return "other content in the store", false
 }
 
 // GC removes all blobs not reachable from a tagged manifest, plus any
@@ -497,6 +710,30 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	admitted, err := s.admit(ctx, entries)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.ref == "" || !e.describes || admitted[e.desc.Digest] {
+			continue
+		}
+		switch err := s.oci.Untag(ctx, e.ref); {
+		case err == nil, errors.Is(err, errdef.ErrNotFound), errors.Is(err, errdef.ErrInvalidReference):
+		default:
+			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.ref, err)
+		}
+		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+			return fmt.Errorf("removing orphaned referrer %q: %w", e.ref, err)
+		}
+	}
+	return nil
+}
+
+// admit returns the referrers among entries that keep their place beside
+// the tagged artifacts. Tagged descriptions are not roots: each is admitted
+// only for a reason staysFor accepts.
+func (s *Store) admit(ctx context.Context, entries []entry) (map[digest.Digest]bool, error) {
 	var roots []ocispec.Descriptor
 	for _, e := range entries {
 		if e.ref != "" && !e.describes {
@@ -505,7 +742,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	}
 	reachable, err := s.successorClosure(ctx, roots)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// A referrer whose subject is alive is alive itself, and so is anything
 	// describing it in turn. An attestation over a signature over a model
@@ -513,12 +750,12 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 	// have called it orphaned and deleted it while nothing beneath it had
 	// gone anywhere.
 	//
-	// Untagged referrers take part in this even though only tagged ones are
-	// ever removed here. A signature that carries no tag still survives
-	// collection when its subject is reachable, so it is a live link in the
-	// chain, and skipping it broke the chain there: a tagged attestation
-	// over an untagged signature over a tagged model was deleted while the
-	// signature under it was kept.
+	// Untagged referrers take part in this even though collection only
+	// ever unlinks tagged ones by it. A signature that carries no tag still
+	// survives collection when its subject is reachable, so it is a live
+	// link in the chain, and skipping it broke the chain there: a tagged
+	// attestation over an untagged signature over a tagged model was
+	// deleted while the signature under it was kept.
 	//
 	// Repeated until nothing more is admitted, which is at most once per
 	// referrer.
@@ -536,7 +773,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 			grew = true
 			under, cerr := s.successorClosure(ctx, []ocispec.Descriptor{e.desc})
 			if cerr != nil {
-				return cerr
+				return nil, cerr
 			}
 			for d := range under {
 				reachable[d] = true
@@ -546,20 +783,7 @@ func (s *Store) unlinkOrphanedTagged(ctx context.Context) error {
 			break
 		}
 	}
-	for _, e := range entries {
-		if e.ref == "" || !e.describes || admitted[e.desc.Digest] {
-			continue
-		}
-		switch err := s.oci.Untag(ctx, e.ref); {
-		case err == nil, errors.Is(err, errdef.ErrNotFound), errors.Is(err, errdef.ErrInvalidReference):
-		default:
-			return fmt.Errorf("unlinking orphaned referrer %q: %w", e.ref, err)
-		}
-		if err := s.oci.Delete(ctx, e.desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
-			return fmt.Errorf("removing orphaned referrer %q: %w", e.ref, err)
-		}
-	}
-	return nil
+	return admitted, nil
 }
 
 // staysFor reports whether a referrer keeps its place, which is what the
@@ -621,23 +845,9 @@ func (s *Store) deleteUnreachableUntagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// What the collector keeps: the tagged graph, and untagged referrers of
-	// it with what they name.
-	kept := make(map[digest.Digest]bool, len(reachable))
-	for d := range reachable {
-		kept[d] = true
-	}
-	for _, e := range entries {
-		if e.ref != "" || e.subject == nil || !reachable[e.subject.Digest] {
-			continue
-		}
-		under, cerr := s.successorClosure(ctx, []ocispec.Descriptor{e.desc})
-		if cerr != nil {
-			return cerr
-		}
-		for d := range under {
-			kept[d] = true
-		}
+	kept, _, err := s.withReferrersOf(ctx, entries, reachable)
+	if err != nil {
+		return err
 	}
 	var forget []digest.Digest
 	for _, e := range entries {
@@ -656,6 +866,30 @@ func (s *Store) deleteUnreachableUntagged(ctx context.Context) error {
 		}
 	}
 	return s.forgetUntagged(ctx, forget)
+}
+
+// withReferrersOf returns what the collector keeps beside reachable: each
+// untagged referrer whose subject it reaches, with what that names. The
+// referrers are returned too.
+func (s *Store) withReferrersOf(
+	ctx context.Context, entries []entry, reachable map[digest.Digest]bool,
+) (map[digest.Digest]bool, []entry, error) {
+	kept := maps.Clone(reachable)
+	var referrers []entry
+	for _, e := range entries {
+		if e.ref != "" || e.subject == nil || !reachable[e.subject.Digest] {
+			continue
+		}
+		under, err := s.successorClosure(ctx, []ocispec.Descriptor{e.desc})
+		if err != nil {
+			return nil, nil, err
+		}
+		for d := range under {
+			kept[d] = true
+		}
+		referrers = append(referrers, e)
+	}
+	return kept, referrers, nil
 }
 
 // forgetUntagged removes the untagged index entries naming ds and keeps their
