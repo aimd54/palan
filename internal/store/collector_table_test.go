@@ -35,7 +35,7 @@ import (
 // dropping anything. Rules derived from reading it have to be checked
 // against it.
 //
-// Four properties are asserted for every row, so adding a shape costs one
+// Five properties are asserted for every row, so adding a shape costs one
 // builder and nothing else:
 //
 //   - collection returns. That is the defect this all started from, and a
@@ -47,6 +47,9 @@ import (
 //     kept is kept whole.
 //   - the store still works afterwards. Collection that succeeds once and
 //     then refuses forever is worse than collection that never ran.
+//   - every reference still resolves as it did, unless the row lets its
+//     object go or its manifest is missing, even where the collector on its
+//     own hangs and gives nothing to compare against.
 //
 // What each shape *should* lose is deliberately not in the table. That is a
 // per-shape judgement and it belongs in a test that says so out loud; these
@@ -171,7 +174,7 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 	// nothing either. Both are legitimate and both are silent, so the
 	// count is reported and floored: a change that quietly turns the table
 	// into a list of shapes nobody checks fails here instead of passing.
-	compared := 0
+	compared, heldRefs := 0, 0
 	for _, sh := range collectorShapes() {
 		t.Run(sh.name, func(t *testing.T) {
 			// The reference: what the collector does on its own, on a
@@ -191,6 +194,19 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 			if err != nil {
 				t.Fatalf("opening the store: %v", err)
 			}
+			// Every reference resolves as it did, unless the row lets its
+			// object go or its manifest is already missing.
+			mayGo := map[digest.Digest]bool{}
+			for name := range sh.mayRemove {
+				mayGo[named[name].Digest] = true
+			}
+			resolvedBefore := map[string]digest.Digest{}
+			for _, r := range tagsIn(t, s) {
+				if d, err := s.Resolve(context.Background(), r); err == nil && !mayGo[d.Digest] && blobPresent(dir, d.Digest) {
+					resolvedBefore[r] = d.Digest
+				}
+			}
+			heldRefs += len(resolvedBefore)
 			done := make(chan error, 1)
 			go func() { done <- s.GC(context.Background()) }()
 			select {
@@ -226,6 +242,11 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the store cannot be opened after collection: %v", err)
 			}
+			for r, want := range resolvedBefore {
+				if got, err := again.Resolve(context.Background(), r); err != nil || got.Digest != want {
+					t.Errorf("collection took %s, which the row does not let go: %v", r, err)
+				}
+			}
 			for _, lost := range lostFromKept(t, again, before) {
 				t.Errorf("collection removed %s, which a manifest it kept still names", lost)
 			}
@@ -247,7 +268,11 @@ func TestCollectionAgainstEveryShapeAStoreCanHold(t *testing.T) {
 		t.Errorf("the table held only %d names to the collector's answer across %d shapes; "+
 			"below one apiece it is a list of stores nobody is checking", compared, min)
 	}
-	t.Logf("held %d names to the collector's answer across %d shapes", compared, len(collectorShapes()))
+	if heldRefs < len(collectorShapes()) {
+		t.Errorf("only %d references were held to resolving as before across %d shapes", heldRefs, len(collectorShapes()))
+	}
+	t.Logf("held %d names to the collector's answer and %d references to resolving as before across %d shapes",
+		compared, heldRefs, len(collectorShapes()))
 }
 
 // pushManifestOver stores a manifest carrying one layer and tags it, so a
@@ -275,6 +300,32 @@ func pushManifestOver(t *testing.T, s *Store, layer ocispec.Descriptor, tagRef s
 		t.Fatal(err)
 	}
 	return desc
+}
+
+// shadowUnderName lists d under name ahead of the entry already named so,
+// as go-containerregistry's layout.AppendImage can leave it. The layout
+// resolves a name to its last entry, so d's entry is shadowed.
+func shadowUnderName(t *testing.T, root string, d ocispec.Descriptor, name string) {
+	t.Helper()
+	path := filepath.Join(root, "index.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- the store's own layout file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx ocispec.Index
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		t.Fatal(err)
+	}
+	shadowed := d
+	shadowed.Annotations = map[string]string{ocispec.AnnotationRefName: name}
+	idx.Manifests = append([]ocispec.Descriptor{shadowed}, idx.Manifests...)
+	out, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // nameEntryAfterItsOwnDigest gives one index entry a reference name equal
@@ -824,6 +875,61 @@ func collectorShapes() []shape {
 			asLayer.MediaType = "application/octet-stream"
 			carrier := pushManifestOver(t, s, asLayer, "registry.internal/llm/shape:att-carrier")
 			return map[string]ocispec.Descriptor{"model": m, "sig": sig, "att": att, "carrier": carrier}
+		}, nil},
+		{"a signature over an untagged model, shadowed under a tagged model's name", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("shadowing-model"))
+			gone := tagged(t, s, "registry.internal/llm/shape:gone", []byte("shadowed-sig-subject"))
+			untag(t, s, "registry.internal/llm/shape:gone")
+			sig := pushUntaggedReferrer(t, s, gone, "shadowed sig")
+			shadowUnderName(t, s.Root(), sig, ref)
+			return map[string]ocispec.Descriptor{"model": m, "gone": gone, "sig": sig}
+		}, nil},
+		{"a derived model over an untagged base, shadowed under a tagged model's name", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("shadowing-model-2"))
+			base := tagged(t, s, "registry.internal/llm/shape:base", []byte("shadowed-derived-base"))
+			untag(t, s, "registry.internal/llm/shape:base")
+			derived := pushModelOver(t, s, base, []byte("shadowed derived weights"), "registry.internal/llm/shape:derived")
+			untag(t, s, "registry.internal/llm/shape:derived")
+			shadowUnderName(t, s.Root(), derived, ref)
+			return map[string]ocispec.Descriptor{"model": m, "base": base, "derived": derived}
+		}, nil},
+		{"a derived model over an untagged base, shadowed under a tagged model's name and carried as a layer", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("shadowing-model-3"))
+			base := tagged(t, s, "registry.internal/llm/shape:base3", []byte("shadowed-carried-base"))
+			untag(t, s, "registry.internal/llm/shape:base3")
+			derived := pushModelOver(t, s, base, []byte("shadowed carried derived weights"), "registry.internal/llm/shape:derived3")
+			untag(t, s, "registry.internal/llm/shape:derived3")
+			asLayer := derived
+			asLayer.MediaType = "application/octet-stream"
+			carrier := pushManifestOver(t, s, asLayer, "registry.internal/llm/shape:derived3-carrier")
+			shadowUnderName(t, s.Root(), derived, ref)
+			return map[string]ocispec.Descriptor{"model": m, "base": base, "derived": derived, "carrier": carrier}
+		}, nil},
+		{"a model shadowed under the name of a tagged signature over it", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, "registry.internal/llm/shape:self-shadowed", []byte("self-shadowed-model"))
+			untag(t, s, "registry.internal/llm/shape:self-shadowed")
+			sig := pushUntaggedReferrer(t, s, m, "self-shadowing sig")
+			tag(t, s, sig, ref)
+			shadowUnderName(t, s.Root(), m, ref)
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig}
+		}, map[string]string{
+			"sig":   "the layout gives the name to the signature, so the model is untagged and this is a signature that outlived its model",
+			"model": "and once the signature is gone, nothing reaches the model either",
+		}},
+		{"a derived model over an untagged base, named after the digest of a later entry", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("digest-named-model"))
+			base := tagged(t, s, "registry.internal/llm/shape:base4", []byte("digest-named-base"))
+			untag(t, s, "registry.internal/llm/shape:base4")
+			derived := pushModelOver(t, s, base, []byte("digest-named derived weights"), "registry.internal/llm/shape:derived4")
+			untag(t, s, "registry.internal/llm/shape:derived4")
+			shadowUnderName(t, s.Root(), derived, m.Digest.String())
+			return map[string]ocispec.Descriptor{"model": m, "base": base, "derived": derived}
+		}, nil},
+		{"a signature over a tagged model, shadowed under that model's name", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
+			m := tagged(t, s, ref, []byte("shadowed-over-itself-model"))
+			sig := pushUntaggedReferrer(t, s, m, "shadowed-over-itself sig")
+			shadowUnderName(t, s.Root(), sig, ref)
+			return map[string]ocispec.Descriptor{"model": m, "sig": sig}
 		}, nil},
 		{"a tagged signature an untagged index lists, the index over a tagged model", func(t *testing.T, s *Store) map[string]ocispec.Descriptor {
 			m := tagged(t, s, ref, []byte("attached-index-model"))

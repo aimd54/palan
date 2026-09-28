@@ -666,8 +666,9 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	named := namedEntries(all)
 	entries := make([]entry, 0, len(all))
-	for _, desc := range all {
+	for i, desc := range all {
 		h, serr := s.readHead(ctx, desc)
 		if serr != nil {
 			// Recorded with no subject rather than dropped. Both passes
@@ -687,7 +688,7 @@ func (s *Store) readIndex(ctx context.Context) ([]entry, error) {
 		// forever on a store the collector merely hung on: the command
 		// that exists to rescue the state refused to run at all.
 		ref := desc.Annotations[ocispec.AnnotationRefName]
-		if ref == desc.Digest.String() {
+		if ref == desc.Digest.String() || !named[i] {
 			ref = ""
 		}
 		entries = append(entries, entry{
@@ -911,10 +912,11 @@ func (s *Store) forgetUntagged(ctx context.Context, ds []digest.Digest) error {
 	if err := json.Unmarshal(raw, &index); err != nil {
 		return fmt.Errorf("decoding the store index: %w", err)
 	}
+	named := namedEntries(index.Manifests)
 	kept := index.Manifests[:0]
-	for _, m := range index.Manifests {
+	for i, m := range index.Manifests {
 		name := m.Annotations[ocispec.AnnotationRefName]
-		if drop[m.Digest] && (name == "" || name == m.Digest.String()) {
+		if drop[m.Digest] && (name == "" || name == m.Digest.String() || !named[i]) {
 			continue
 		}
 		kept = append(kept, m)
@@ -930,6 +932,24 @@ func (s *Store) forgetUntagged(ctx context.Context, ds []digest.Digest) error {
 		return fmt.Errorf("saving the store index: %w", err)
 	}
 	return s.reload(ctx)
+}
+
+// namedEntries reports which entries hold their name. The layout resolves a
+// name to the last entry claiming it, and each entry also claims its digest.
+func namedEntries(all []ocispec.Descriptor) []bool {
+	last := map[string]int{}
+	for i, d := range all {
+		last[d.Digest.String()] = -1
+		if name := d.Annotations[ocispec.AnnotationRefName]; name != "" {
+			last[name] = i
+		}
+	}
+	named := make([]bool, len(all))
+	for i, d := range all {
+		name := d.Annotations[ocispec.AnnotationRefName]
+		named[i] = name != "" && last[name] == i
+	}
+	return named
 }
 
 // replaceFile writes data to path through a synced file renamed over it.
