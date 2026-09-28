@@ -24,8 +24,8 @@ import (
 // builds, and hold each refusal or deletion of a description to what
 // palan's collection keeps naming it once it is deleted.
 
-// tagsIn lists the references a store's layout records, leaving out the
-// entries named by their own digest, which the layout uses for untagged ones.
+// tagsIn lists the references a store's layout records, leaving out names
+// that are digests, which the layout uses for untagged entries.
 func tagsIn(t *testing.T, s *Store) []string {
 	t.Helper()
 	all, err := s.indexManifests()
@@ -34,7 +34,8 @@ func tagsIn(t *testing.T, s *Store) []string {
 	}
 	var refs []string
 	for _, d := range all {
-		if ref := d.Annotations[ocispec.AnnotationRefName]; ref != "" && ref != d.Digest.String() {
+		ref := d.Annotations[ocispec.AnnotationRefName]
+		if _, err := digest.Parse(ref); ref != "" && err != nil {
 			refs = append(refs, ref)
 		}
 	}
