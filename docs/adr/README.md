@@ -27,5 +27,6 @@ decisions and the reasoning behind them.
 | [ADR-0014](0014-source-attestation-binds-layers-to-upstream-files.md) | A source attestation binds layers to the upstream files they came from | accepted |
 | [ADR-0015](0015-keyless-verification-from-carried-material.md) | Keyless signatures are verified from material carried with the artifact | accepted |
 | [ADR-0016](0016-a-verification-result-is-a-chain.md) | A verification result is a chain, and its gaps are named (extends ADR-0008) | accepted |
+| [ADR-0017](0017-verification-required-by-default.md) | Verification is required by default, and local trust is by digest | proposed |
 
 Use [`template.md`](template.md) for new ADRs.
