@@ -1,0 +1,87 @@
+# What happens to a model between a request arriving and memory being
+# returned, and which refusal a client sees at each point.
+#
+# Source for docs/assets/router-lifecycle.svg. Regenerate with
+# `make diagrams`; the Docs workflow fails when the rendered file no longer
+# matches this source.
+
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    theme-id: 0
+  }
+}
+
+classes: {
+  gate: {
+    style: {
+      stroke: "#b3261e"
+      stroke-width: 2
+      font-color: "#b3261e"
+      fill: "#fdf3f2"
+    }
+  }
+  state: {
+    style: {
+      fill: "#eef4fb"
+      stroke: "#5b7fa6"
+    }
+  }
+  reclaim: {
+    style: {
+      fill: "#f3f7f0"
+      stroke: "#4c7a34"
+    }
+  }
+}
+
+request: "A request names a model" {
+  class: state
+}
+
+flight: "One load at a time per model\nconcurrent requests wait on the first" {
+  class: state
+}
+
+gate_verify: "Checked before loading\nrefused: 403\nnot resolvable: 404" {
+  class: gate
+}
+
+gate_budget: "Does it fit the memory budget\n\nlarger than the whole budget: 507\nnothing evictable, everything\n  busy or pinned: 503" {
+  class: gate
+}
+
+evict: "Evict the least recently used\nskipping pinned and busy models" {
+  class: reclaim
+}
+
+serving: "Loaded and serving\nllama-server on its own port" {
+  class: state
+}
+
+idle: "Idle past the timeout\nswept, pinned and busy models kept" {
+  class: reclaim
+}
+
+exited: "Child exited on its own" {
+  class: reclaim
+}
+
+stopped: "Stopped, memory returned" {
+  class: state
+}
+
+request -> flight
+flight -> gate_verify
+gate_verify -> gate_budget: passes
+gate_budget -> evict: over budget
+evict -> gate_budget: retry
+gate_budget -> serving: fits
+serving -> idle
+serving -> exited
+serving -> evict: another model needs room
+idle -> stopped
+exited -> stopped
+evict -> stopped: the evicted one

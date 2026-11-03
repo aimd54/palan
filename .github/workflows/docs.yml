@@ -36,3 +36,73 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: "**/*.md"
+
+  # Rendering the diagrams means building the renderer from source, which is
+  # worth doing only when a diagram or its source could have moved. The job
+  # reports either way, so it stays requirable.
+  diagram-changes:
+    name: Detect diagram changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      drawn: ${{ steps.filter.outputs.drawn }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: List what changed and decide whether a diagram could have moved
+        id: filter
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base to compare against, rendering anyway"
+            echo "drawn=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "${{ github.sha }}")
+          echo "changed files:"
+          printf '%s\n' "$files" | sed 's/^/  /'
+          drawn=$(printf '%s\n' "$files" | grep -E '^docs/(diagrams|assets)/|^Makefile$|^\.github/workflows/docs\.yml$' || true)
+          if [ -n "$drawn" ]; then
+            echo "decision: render, because of:"
+            printf '%s\n' "$drawn" | sed 's/^/  /'
+            echo "drawn=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "decision: no diagram source touched"
+            echo "drawn=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  diagrams:
+    name: Diagrams match their sources
+    needs: diagram-changes
+    if: needs.diagram-changes.outputs.drawn == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # A rendered diagram is committed so that it displays without a
+      # toolchain. The version is pinned because the renderer decides the
+      # bytes, so an unpinned one would report drift that is not there.
+      - name: Install the diagram renderer
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          version=$(make -s print-d2-version)
+          GOBIN="$HOME/.local/bin" go install "github.com/d2lang/d2@$version"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Confirm the renderer is callable
+        run: d2 --version
+      - name: Check the rendered diagrams
+        run: make diagrams-check
