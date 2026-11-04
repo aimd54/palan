@@ -92,14 +92,15 @@ jobs:
     env:
       # Part of the binary cache key below. Dependabot does not watch this,
       # so bump it by hand.
-      GOLANGCI_LINT_VERSION: v2.13.1
+      GOLANGCI_LINT_VERSION: v2.14.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: .go-version
+          check-latest: true
       - name: Resolve the toolchain for the cache key
         id: toolchain
         run: echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
@@ -141,7 +142,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: .go-version
+          check-latest: true
       # notice-check runs here rather than in a job of its own: it needs the
       # module cache this job already has, and a dependency bump is the event
       # that makes NOTICE incomplete.
@@ -187,7 +189,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: .go-version
+          check-latest: true
       # setup-go's cache is keyed on our own go.sum, which says nothing about
       # these tools, so without a cache of their own every run re-downloads
       # ~360 modules and recompiles cosign's dependency tree from scratch.
@@ -202,7 +205,7 @@ jobs:
       - name: Install interop tools (oras, modctl, cosign)
         if: steps.interop-tools.outputs.cache-hit != 'true'
         env:
-          # setup-go pins GOTOOLCHAIN=local to our go.mod minimum; these
+          # setup-go pins GOTOOLCHAIN=local to the Go it installed; these
           # tools may require newer patch releases; let go auto-fetch them.
           GOTOOLCHAIN: auto
         run: |

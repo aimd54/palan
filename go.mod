@@ -1,7 +1,7 @@
 module github.com/aimd54/palan
 
-// Minor only, no patch: setup-go installs exactly what this names, so a
-// pinned patch builds every release on that patch until someone notices.
+// The minimum Go version. CI and releases build on the newest patch of the
+// minor named in .go-version.
 go 1.27.0
 
 require (

@@ -32,16 +32,17 @@ Keep commits small and self-contained; every commit must build and pass tests.
 ## Development setup
 
 Requirements: Go ≥ 1.27, `make`, [golangci-lint](https://golangci-lint.run/)
-v2.13.1, and Docker (end-to-end tests only).
+v2.14.0, and Docker (end-to-end tests only).
 
 golangci-lint refuses a module targeting a Go version newer than the one it
 was built with, so a copy from a distribution package or a release download
 can be too old even when its own version number is current. Installing it
 builds it with the toolchain you have, which is why the version here and the
-one CI pins move together with `go.mod`:
+one CI pins move together with the Go minor in `.go-version`, the file that
+decides which Go CI and releases build with:
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 golangci-lint version   # reports the Go it was built with
 ```
 
