@@ -6,7 +6,7 @@ go 1.27.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/fang v1.0.0
@@ -17,14 +17,14 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1
 	github.com/sigstore/protobuf-specs v0.5.2
-	github.com/sigstore/sigstore v1.11.1
+	github.com/sigstore/sigstore v1.11.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/vbauerster/mpb/v8 v8.16.2
+	github.com/vbauerster/mpb/v8 v8.16.3
 	golang.org/x/sync v0.24.0
 	golang.org/x/term v0.47.0
 	google.golang.org/protobuf v1.36.12
-	oras.land/oras-go/v2 v2.6.3
+	oras.land/oras-go/v2 v2.7.0
 )
 
 require (
@@ -53,7 +53,7 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
-	github.com/mattn/go-runewidth v0.0.30 // indirect
+	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/mango v0.1.0 // indirect
