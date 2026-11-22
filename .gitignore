@@ -22,4 +22,4 @@ coverage.html
 .claude/settings.local.json*
 
 # Private working notes (never committed)
-*.private.md
+*.private.*
